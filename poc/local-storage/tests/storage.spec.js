@@ -243,8 +243,8 @@ test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', 
   expect(result.relationQueryMs.p95).toBeGreaterThan(0);
 });
 
-test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async ({ page, browserName }) => {
-  test.skip(browserName !== 'chromium', 'SQLite OPFS 100k 性能基准仅在 Chromium 主测');
+test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'SQLite OPFS 100k 性能基准仅在 Playwright Chromium 主测，稳定版 Chrome/Edge 只执行 1k 兼容验证');
   test.setTimeout(300_000);
   await page.goto('/');
   const capability = await page.evaluate(async () => {
