@@ -10,7 +10,9 @@
 ## 文档导航
 - [产品原则与功能边界](docs/product-principles.md)
 - [技术架构与关键设计](docs/architecture.md)
-- [核心数据模型与 API 契约草案](docs/core-data-model.md)
+- [核心数据模型概览](docs/core-data-model.md)
+- [核心数据字典（字段与约束权威来源）](docs/data-dictionary.md)
+- [OpenAPI 3.1 接口契约（API 路径权威来源）](docs/api-contract.yaml)
 - [全书知识库与管理员加工工作台](docs/book-knowledge-base.md)
 - [阅读 Agent 交互与主线机制](docs/reading-agent.md)
 - [用户认知记忆与读书笔记](docs/user-memory.md)
