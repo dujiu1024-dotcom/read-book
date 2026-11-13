@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>知行 · 阅读原型</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="知行首页">知行</a>
+      <div class="topbar-book">
+        <span class="eyebrow">正在阅读</span>
+        <strong>协同系统设计</strong>
+      </div>
+      <button class="icon-button" id="menuButton" type="button" aria-label="演示：切换当前单元讨论状态" title="演示状态切换">···</button>
+    </header>
+
+    <main class="reader" id="reader">
+      <section class="book-meta" aria-labelledby="bookTitle">
+        <div class="book-cover" aria-hidden="true">知</div>
+        <div class="book-details">
+          <h1 id="bookTitle">协同系统设计</h1>
+          <p>林间 · 示例作者</p>
+          <div class="meta-line"><span class="status-dot"></span><span>第一轮阅读</span><span class="meta-separator">·</span><span id="chapterPath">第一章 / 协同的基础</span></div>
+        </div>
+      </section>
+
+      <section class="source-card" id="sourceCard" aria-labelledby="sourceHeading">
+        <div class="source-head">
+          <div>
+            <div class="eyebrow" id="sourceMode">当前主线原文</div>
+            <h2 id="sourceHeading">协同效率与沟通</h2>
+          </div>
+          <button class="text-button" id="toggleSource" type="button" aria-expanded="true">收起原文</button>
+        </div>
+        <div id="sourceBody" class="source-body">
+          <p id="sourceText">协同效率并不等于沟通次数增加。它取决于参与者是否围绕同一目标行动，以及关键交接是否清楚。沟通频繁但目标不一致，只会更快放大分歧。</p>
+          <div class="source-foot"><span id="sourceLocator">第一章 · 论述单元 01</span><span class="source-tag">原书内容</span></div>
+        </div>
+      </section>
+
+      <section class="context-tools" aria-label="阅读上下文操作">
+        <button class="soft-button" id="reviewButton" type="button">复习上一单元</button>
+        <button class="soft-button" id="temporaryButton" type="button">临时查看其他章节</button>
+        <button class="soft-button primary-soft" id="continueButton" type="button">继续下一单元 <span aria-hidden="true">→</span></button>
+      </section>
+      <div id="viewNotice" class="view-notice" hidden>
+        <span id="viewNoticeText"></span>
+        <button class="text-button" id="returnMainline" type="button">回到当前主线</button>
+      </div>
+
+      <section class="conversation" aria-labelledby="conversationHeading">
+        <div class="conversation-heading">
+          <div>
+            <div class="eyebrow">持续讨论</div>
+            <h2 id="conversationHeading">和 Agent 讨论</h2>
+          </div>
+          <span class="conversation-count" id="messageCount">2 条消息</span>
+        </div>
+        <div class="message-list" id="messageList" aria-live="polite" aria-relevant="additions">
+          <article class="message user-message">
+            <div class="message-avatar">我</div>
+            <div class="message-content">
+              <div class="message-meta"><strong>我</strong><time>09:32</time><span class="saved-label">本地已保存</span></div>
+              <p>我觉得沟通频率高不一定代表协同好，关键还是目标是不是一致。</p>
+            </div>
+          </article>
+          <article class="message agent-message">
+            <div class="message-avatar agent-avatar">知</div>
+            <div class="message-content">
+              <div class="message-meta"><strong>知行</strong><time>09:33</time></div>
+              <p>你的判断和作者这里的区分是一致的：沟通只是动作，协同结果取决于共同目标和交接是否清楚。可以进一步区分“信息同步充分”和“行动方向一致”，两者并不等同。</p>
+              <div class="citation-card">
+                <div class="citation-label">引用 · 第一章 / 协同的基础</div>
+                <p>“协同效率并不等于沟通次数增加。它取决于参与者是否围绕同一目标行动……”</p>
+                <button class="text-button citation-link" type="button" data-citation="unit-1">查看原文位置 ↗</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="composer" aria-label="发送讨论">
+        <label class="sr-only" for="messageInput">输入你的想法</label>
+        <textarea id="messageInput" rows="3" placeholder="写下你的理解、疑问或反驳……"></textarea>
+        <div class="composer-footer">
+          <span id="composerHint">Enter 换行 · Ctrl / ⌘ + Enter 发送</span>
+          <div class="composer-actions">
+            <button class="soft-button danger-soft" id="simulateFailure" type="button">模拟失败</button>
+            <button class="send-button" id="sendButton" type="button">发送</button>
+            <button class="stop-button" id="stopButton" type="button" hidden>停止生成</button>
+          </div>
+        </div>
+        <div id="generationStatus" class="generation-status" role="status" aria-live="polite"></div>
+      </section>
+
+      <footer class="reader-footer">
+        <span><span class="status-dot"></span>本地数据 · 演示状态</span>
+        <button class="text-button" id="backupButton" type="button" title="查看备份状态">备份：已检查</button>
+      </footer>
+    </main>
+  </div>
+
+  <dialog id="temporaryDialog" class="dialog">
+    <form method="dialog">
+      <div class="dialog-head"><div><div class="eyebrow">临时查看</div><h2>选择一个章节</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
+      <p class="dialog-description">临时查看不会改变当前主线位置。</p>
+      <div class="chapter-options">
+        <button class="chapter-option" type="button" data-unit="unit-2"><strong>第二章 · 接口与交接</strong><span>接口契约、异常闭环</span></button>
+        <button class="chapter-option" type="button" data-unit="unit-3"><strong>第三章 · 反馈与改进</strong><span>反馈回路、持续修正</span></button>
+      </div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="./app.js" defer></script>
+</body>
+</html>
