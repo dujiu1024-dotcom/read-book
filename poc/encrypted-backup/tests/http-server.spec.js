@@ -232,7 +232,7 @@ test('清除墓碑先持久化，再撤销票据、下载 URL、会话和密文�
 
   const oldBackup = await request(env.base, '/v1/backups/' + encrypted.manifest.backupId, { token: ticket.token });
   assert.equal(oldBackup.status, 410);
-  const oldDownload = await fetch(env.base + download.body.downloadUrl);
+  const oldDownload = await fetch(env.base + download.body.downloadUrl.replace(/^\\/api/, ''));
   assert.equal(oldDownload.status, 410);
   const oldSession = await request(env.base, '/v1/backups/' + pending.manifest.backupId + '/missing', { token: ticket.token });
   assert.equal(oldSession.status, 410);
