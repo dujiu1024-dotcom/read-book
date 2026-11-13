@@ -135,20 +135,22 @@ test('数据集密钥材料不能跨数据集复用', async ({ page }) => {
 test('增量备份拒绝缺失父备份、跨数据集父备份和错误序号', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {
-    const { createEncryptedBackup } = await import('/src/crypto.js');
+    const { createDatasetKeyMaterial, createEncryptedBackup } = await import('/src/crypto.js');
     const { MockBackupServer } = await import('/src/mock-server.js');
     const server = new MockBackupServer();
-    const full = await createEncryptedBackup({ datasetId: 'parent-dataset', sequence: 1, payload: { v: 1 } });
+    const keyMaterial = createDatasetKeyMaterial('parent-dataset');
+    const full = await createEncryptedBackup({ datasetId: 'parent-dataset', sequence: 1, payload: { v: 1 }, keyMaterial });
     server.init(full.manifest, 'parent-key');
     for (const chunk of full.chunks) server.putPart(full.manifest.backupId, chunk);
     await server.complete(full.manifest.backupId);
-    const missing = await createEncryptedBackup({ datasetId: 'parent-dataset', sequence: 2, parentBackupId: 'not-found', payload: { v: 2 } });
+    const missing = await createEncryptedBackup({ datasetId: 'parent-dataset', sequence: 2, parentBackupId: 'not-found', payload: { v: 2 }, keyMaterial });
     let missingRejected = false;
     try { server.init(missing.manifest, 'missing-key'); } catch { missingRejected = true; }
-    const crossDataset = await createEncryptedBackup({ datasetId: 'other-dataset', sequence: 2, parentBackupId: full.manifest.backupId, payload: { v: 2 } });
+    const otherKeyMaterial = createDatasetKeyMaterial('other-dataset');
+    const crossDataset = await createEncryptedBackup({ datasetId: 'other-dataset', sequence: 2, parentBackupId: full.manifest.backupId, payload: { v: 2 }, keyMaterial: otherKeyMaterial });
     let crossRejected = false;
     try { server.init(crossDataset.manifest, 'cross-key'); } catch { crossRejected = true; }
-    const wrongSequence = await createEncryptedBackup({ datasetId: 'parent-dataset', sequence: 3, parentBackupId: full.manifest.backupId, payload: { v: 3 } });
+    const wrongSequence = await createEncryptedBackup({ datasetId: 'parent-dataset', sequence: 3, parentBackupId: full.manifest.backupId, payload: { v: 3 }, keyMaterial });
     let sequenceRejected = false;
     try { server.init(wrongSequence.manifest, 'sequence-key'); } catch { sequenceRejected = true; }
     return { missingRejected, crossRejected, sequenceRejected };
@@ -159,9 +161,10 @@ test('增量备份拒绝缺失父备份、跨数据集父备份和错误序号',
 test('增量父链元数据被篡改时 AEAD 校验失败', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {
-    const { createEncryptedBackup, decryptBackup } = await import('/src/crypto.js');
-    const full = await createEncryptedBackup({ datasetId: 'aad-chain', sequence: 1, payload: { v: 1 } });
-    const incremental = await createEncryptedBackup({ datasetId: 'aad-chain', sequence: 2, parentBackupId: full.manifest.backupId, payload: { v: 2 } });
+    const { createDatasetKeyMaterial, createEncryptedBackup, decryptBackup } = await import('/src/crypto.js');
+    const keyMaterial = createDatasetKeyMaterial('aad-chain');
+    const full = await createEncryptedBackup({ datasetId: 'aad-chain', sequence: 1, payload: { v: 1 }, keyMaterial });
+    const incremental = await createEncryptedBackup({ datasetId: 'aad-chain', sequence: 2, parentBackupId: full.manifest.backupId, payload: { v: 2 }, keyMaterial });
     const altered = structuredClone(incremental.manifest);
     altered.parentBackupId = 'tampered-parent';
     try {
