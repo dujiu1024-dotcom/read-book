@@ -165,11 +165,14 @@ def evaluate(corpus_rows: list[dict[str, Any]], question_rows: list[dict[str, An
         bucket["citation_total"] += len(citations)
 
     mean = lambda values: round(statistics.mean(values), 4) if values else None
+    citation_generation_enabled = not run_metadata_values or any(
+        metadata.get("citation_generation") != "none" for metadata in run_metadata_values
+    )
     metrics = {
         f"recall_at_{k}": mean(recall_values),
-        "citation_precision": round(citation_hits / citation_total, 4) if citation_total else None,
-        "citation_coverage": round(citation_covered / answerable_count, 4) if answerable_count else None,
-        "locator_accuracy": round(locator_hits / locator_total, 4) if locator_total else None,
+        "citation_precision": round(citation_hits / citation_total, 4) if citation_total and citation_generation_enabled else None,
+        "citation_coverage": round(citation_covered / answerable_count, 4) if answerable_count and citation_generation_enabled else None,
+        "locator_accuracy": round(locator_hits / locator_total, 4) if locator_total and citation_generation_enabled else None,
         "human_adjudicated_groundedness": round(grounded_author_claims / author_claim_total, 4) if author_claim_total else None,
         "unanswerable_abstention_accuracy": round(correct_abstentions / unanswerable_total, 4) if unanswerable_total else None,
         "answerable_abstention_rate": round(answerable_abstentions / answerable_count, 4) if answerable_count else None,
@@ -187,8 +190,8 @@ def evaluate(corpus_rows: list[dict[str, Any]], question_rows: list[dict[str, An
         type_metrics[name] = {
             "questions": bucket["questions"],
             f"recall_at_{k}": mean(bucket["recall_values"]),
-            "citation_precision": round(bucket["citation_hits"] / bucket["citation_total"], 4) if bucket["citation_total"] else None,
-            "citation_coverage": round(bucket["citation_covered"] / bucket["answerable"], 4) if bucket["answerable"] else None,
+            "citation_precision": round(bucket["citation_hits"] / bucket["citation_total"], 4) if bucket["citation_total"] and citation_generation_enabled else None,
+            "citation_coverage": round(bucket["citation_covered"] / bucket["answerable"], 4) if bucket["answerable"] and citation_generation_enabled else None,
         }
     return {
         "report_version": "1.0.0",
@@ -196,9 +199,9 @@ def evaluate(corpus_rows: list[dict[str, Any]], question_rows: list[dict[str, An
         "dataset_provenance": "synthetic_fixture_not_real_book_baseline",
         "prediction_provenance": run_metadata_values,
         "metric_notes": {
-            "citation_precision": "Gold evidence chunk membership; semantic support still needs human review.",
+            "citation_precision": "Gold evidence chunk membership; semantic support still needs human review. Null when the adapter declares citation_generation=none.",
             "citation_coverage": "Share of answerable questions with at least one gold evidence citation.",
-            "locator_accuracy": "Exact structured locator equality for locator questions.",
+            "locator_accuracy": "Exact structured locator equality for locator questions. Null when the adapter declares citation_generation=none.",
             "human_adjudicated_groundedness": "Uses reviewer-supplied human_adjudicated_supported; not inferred by the script.",
             "agent_policy": "Counts prohibited actions only when the adapter records them in agent_actions.",
             "thresholds": "No pass threshold is set by this first baseline; values are measurements, not release gates."
