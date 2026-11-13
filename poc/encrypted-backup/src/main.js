@@ -29,28 +29,43 @@ async function api(path, { method = 'GET', body, token = ticketToken } = {}) {
 }
 
 async function initializeTicket() {
-  const ticket = await api('/__poc/tickets', {
-    method: 'POST',
-    token: undefined,
-    body: {
-      datasetId,
-      scopes: ['backup:read', 'backup:write', 'backup:clear', 'ticket:revoke'],
-      ttlSeconds: 1800
+  let lastError;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      const ticket = await api('/__poc/tickets', {
+        method: 'POST',
+        token: undefined,
+        body: {
+          datasetId,
+          scopes: ['backup:read', 'backup:write', 'backup:clear', 'ticket:revoke'],
+          ttlSeconds: 1800
+        }
+      });
+      ticketToken = ticket.token;
+      ticketId = ticket.ticketId;
+      $('status').textContent = 'HTTP 备份服务已连接；授权票据仅保存在当前页面内存。';
+      return true;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 150));
     }
-  });
-  ticketToken = ticket.token;
-  ticketId = ticket.ticketId;
-  $('status').textContent = 'HTTP 备份服务已连接；授权票据仅保存在当前页面内存。';
+  }
+  throw lastError;
 }
+let ticketError;
 const ticketReady = initializeTicket().catch((error) => {
+  ticketError = error;
   $('status').textContent = '备份服务连接失败';
   show({ error: error.message });
-  throw error;
+  return false;
 });
+async function ensureTicket() {
+  if (!(await ticketReady)) throw ticketError || new Error('备份服务未连接');
+}
 
 $('backup').addEventListener('click', async () => {
   try {
-    await ticketReady;
+    await ensureTicket();
     const payload = JSON.parse($('payload').value);
     const encrypted = await createEncryptedBackup({ datasetId, sequence: 1, payload });
     const session = await api('/v1/backups/init', {
@@ -86,7 +101,7 @@ $('backup').addEventListener('click', async () => {
 $('restore').addEventListener('click', async () => {
   if (!lastBackup) { $('status').textContent = '请先创建备份'; return; }
   try {
-    await ticketReady;
+    await ensureTicket();
     const remote = await api('/v1/backups/' + lastBackup.manifest.backupId);
     const restored = await decryptBackup({ ...remote, recoveryKey: lastBackup.recoveryKey });
     localRestoredData = restored;
@@ -98,7 +113,7 @@ $('restore').addEventListener('click', async () => {
 $('tamper').addEventListener('click', async () => {
   if (!lastBackup) { $('status').textContent = '请先创建备份'; return; }
   try {
-    await ticketReady;
+    await ensureTicket();
     const remote = await api('/v1/backups/' + lastBackup.manifest.backupId);
     const first = remote.chunks[0];
     const bytes = Uint8Array.from(atob(first.ciphertext), (char) => char.charCodeAt(0));
@@ -115,7 +130,7 @@ $('tamper').addEventListener('click', async () => {
 $('clear').addEventListener('click', async () => {
   if (!lastBackup) { $('status').textContent = '请先创建备份'; return; }
   try {
-    await ticketReady;
+    await ensureTicket();
     const download = await api('/v1/backups/' + lastBackup.manifest.backupId + '/download-ticket', { method: 'POST', body: {} });
     lastDownloadUrl = download.downloadUrl;
     const result = await api('/v1/datasets/' + datasetId + '/clear', { method: 'POST', body: {} });
