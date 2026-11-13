@@ -69,8 +69,9 @@ test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async 
   await page.locator('#adapter').selectOption('sqlite');
   await page.locator('#count').selectOption('100000');
   await page.getByRole('button', { name: '执行写入与查询测试' }).click();
-  await expect(page.locator('#status')).toContainText('完成', { timeout: 280_000 });
+  await expect(page.locator('#status')).toContainText(/完成|执行失败/, { timeout: 280_000 });
   const result = JSON.parse(await page.locator('#output').textContent());
+  expect(result.error, JSON.stringify(result)).toBeUndefined();
   expect(result.count).toBe(100000);
   expect(result.integrity).toBe(true);
   expect(result.runs).toBe(5);
