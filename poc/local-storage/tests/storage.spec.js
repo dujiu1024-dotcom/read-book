@@ -36,3 +36,22 @@ test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失�
     await expect(page.locator('#status')).toContainText('完整性检查通过', { timeout: 60_000 });
   }
 });
+
+test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', '100k 性能基准仅在 Chromium 主测，避免兼容矩阵重复压测');
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await page.locator('#adapter').selectOption('indexeddb');
+  await page.locator('#count').selectOption('100000');
+  await page.getByRole('button', { name: '执行写入与查询测试' }).click();
+  await expect(page.locator('#status')).toContainText('完成', { timeout: 110_000 });
+  const result = JSON.parse(await page.locator('#output').textContent());
+  expect(result.count).toBe(100000);
+  expect(result.integrity).toBe(true);
+  expect(result.runs).toBe(5);
+  expect(result.writeMs.samples).toHaveLength(5);
+  expect(result.queryMs.p50).toBeGreaterThan(0);
+  expect(result.queryMs.p95).toBeGreaterThanOrEqual(result.queryMs.p50);
+  expect(result.relationCount).toBe(10000);
+  expect(result.relationQueryMs.p95).toBeGreaterThan(0);
+});
