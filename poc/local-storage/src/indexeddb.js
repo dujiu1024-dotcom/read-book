@@ -128,6 +128,9 @@ async function queryDataset(db, datasetId, count) {
     request.onerror = () => reject(request.error);
   });
   const queryMs = performance.now() - start;
+  const longTextIntegrity = rows.some((message) =>
+    message.id === datasetId + ':0' && message.content === LONG_TEXT
+  );
   const joinStart = performance.now();
   const relation = await new Promise((resolve, reject) => {
     const tx = db.transaction(STORES, 'readonly');
@@ -162,12 +165,12 @@ async function queryDataset(db, datasetId, count) {
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error('关联查询事务中止'));
   });
-  return { rows, queryMs, relationQueryMs: performance.now() - joinStart, relationCount: relation.relationCount, relatedThreadCount: relation.relatedThreadCount };
+  return { rows, queryMs, relationQueryMs: performance.now() - joinStart, relationCount: relation.relationCount, relatedThreadCount: relation.relatedThreadCount, longTextIntegrity };
 }
 async function runIndexedDbUnlocked(count, datasetId, failureInjection) {
   const db = await openDb();
   const writeSamples = [], querySamples = [], relationSamples = [];
-  let finalCount = 0, relationCount = 0, relatedThreadCount = 0;
+  let finalCount = 0, relationCount = 0, relatedThreadCount = 0, longTextIntegrity = false;
   try {
     for (let run = 0; run < RUNS; run++) {
       writeSamples.push(await writeBatch(db, count, datasetId, failureInjection));
@@ -176,11 +179,11 @@ async function runIndexedDbUnlocked(count, datasetId, failureInjection) {
       relationSamples.push(query.relationQueryMs);
       finalCount = query.rows.length;
       relationCount = query.relationCount;
-      relatedThreadCount = query.relatedThreadCount;
+      relatedThreadCount = query.relatedThreadCount;\n      longTextIntegrity = query.longTextIntegrity;
     }
     return {
       adapter: 'IndexedDB', datasetId, count: finalCount, relationCount,
-      runs: RUNS, integrity: finalCount === count && relationCount === Math.ceil(count / 10) && relatedThreadCount === 10, relatedThreadCount,
+      runs: RUNS, integrity: finalCount === count && relationCount === Math.ceil(count / 10) && relatedThreadCount === 10 && longTextIntegrity, relatedThreadCount, longTextIntegrity,
       writeMs: { p50: percentile(writeSamples, 0.5), p95: percentile(writeSamples, 0.95), samples: writeSamples },
       queryMs: { p50: percentile(querySamples, 0.5), p95: percentile(querySamples, 0.95), samples: querySamples },
       relationQueryMs: { p50: percentile(relationSamples, 0.5), p95: percentile(relationSamples, 0.95), samples: relationSamples },
