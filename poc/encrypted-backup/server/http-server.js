@@ -316,11 +316,13 @@ export async function createBackupHttpServer({ dataDir }) {
     const missingMatch = /^\/v1\/backups\/([A-Za-z0-9._-]+)\/missing$/.exec(url.pathname);
     if (method === 'GET' && missingMatch) {
       const backupId = safeId(missingMatch[1], 'backupId');
-      const session = getSession(backupId);
-      requireTicket(req, session.datasetId, 'backup:write');
-      const missing = Array.from({ length: session.manifest.chunkCount }, (_, index) => index)
-        .filter((index) => !session.parts[String(index)]);
-      return json(res, 200, { backupId, missing });
+      return withMutationLock(async () => {
+        const session = getSession(backupId);
+        requireTicket(req, session.datasetId, 'backup:write');
+        const missing = Array.from({ length: session.manifest.chunkCount }, (_, index) => index)
+          .filter((index) => !session.parts[String(index)]);
+        return json(res, 200, { backupId, missing });
+      });
     }
 
     const completeMatch = /^\/v1\/backups\/([A-Za-z0-9._-]+)\/complete$/.exec(url.pathname);
