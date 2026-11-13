@@ -77,8 +77,12 @@ function validateManifest(manifest) {
   if (!['full', 'incremental'].includes(manifest.backupType)) fail(400, '备份类型非法');
   if (manifest.backupType === 'full' && manifest.parentBackupId) fail(400, '全量备份不能指定父备份');
   if (manifest.backupType === 'incremental' && !manifest.parentBackupId) fail(400, '增量备份必须指定父备份');
+  if (manifest.parentBackupId) safeId(manifest.parentBackupId, 'parentBackupId');
   if (typeof manifest.wrappedDek !== 'string' || typeof manifest.wrapNonce !== 'string') fail(400, 'DEK 包装信息缺失');
-  if (!Number.isSafeInteger(manifest.chunkCount) || manifest.chunkCount < 1 ||
+  if (decodeBase64(manifest.wrapNonce).length !== 12 || decodeBase64(manifest.wrappedDek).length !== 48) {
+    fail(400, 'DEK 包装 nonce 或密文长度非法');
+  }
+  if (!Number.isSafeInteger(manifest.chunkCount) || manifest.chunkCount < 1 || manifest.chunkCount > 1000 ||
       !Array.isArray(manifest.chunks) || manifest.chunks.length !== manifest.chunkCount) {
     fail(400, 'Manifest 分块数量与清单不一致');
   }
@@ -89,8 +93,9 @@ function validateManifest(manifest) {
     fail(400, '同一备份内分块 nonce 必须唯一');
   }
   for (const chunk of manifest.chunks) {
-    if (typeof chunk.ciphertextHash !== 'string' || !Number.isSafeInteger(chunk.plaintextSize) ||
-        !Number.isSafeInteger(chunk.ciphertextSize) || chunk.plaintextSize < 0 || chunk.ciphertextSize < 16) {
+    if (decodeBase64(chunk.nonce).length !== 12 || decodeBase64(chunk.ciphertextHash).length !== 32 ||
+        !Number.isSafeInteger(chunk.plaintextSize) || !Number.isSafeInteger(chunk.ciphertextSize) ||
+        chunk.plaintextSize < 0 || chunk.ciphertextSize !== chunk.plaintextSize + 16) {
       fail(400, 'Manifest 分块元数据非法');
     }
   }
