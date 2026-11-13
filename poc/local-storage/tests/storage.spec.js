@@ -4,7 +4,7 @@ test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ p
   await page.goto('/');
   const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
   test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
-  await expect(page.getByRole('heading', { name: '本地数据存储与浏览器可靠性' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '本地数据存储与浏览器可靠性' })).toBeVisible();\n  console.log('Browser compatibility:', await page.evaluate(() => navigator.userAgent));
   await page.locator('#adapter').selectOption('indexeddb');
   await page.locator('#count').selectOption('1000');
   await page.getByRole('button', { name: '执行写入与查询测试' }).click();
@@ -80,11 +80,31 @@ test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失�
   }
 });
 
-test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', async ({ page, browserName }) => {
+test('IndexedDB 10k 消息基准输出 P50/P95 与完整关系校验', async ({ page, browserName }, testInfo) => {
   await page.goto('/');
   const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
   test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
-  test.skip(browserName !== 'chromium', '100k 性能基准仅在 Chromium 主测，避免兼容矩阵重复压测');
+  test.skip(testInfo.project.name !== 'chromium', '10k 性能基准仅在 Playwright Chromium 主测');
+  test.setTimeout(180_000);
+  await page.locator('#adapter').selectOption('indexeddb');
+  await page.locator('#count').selectOption('10000');
+  await page.getByRole('button', { name: '执行写入与查询测试' }).click();
+  await expect(page.locator('#status')).toContainText('完成', { timeout: 160_000 });
+  const result = JSON.parse(await page.locator('#output').textContent());
+  console.log('IndexedDB 10k benchmark:', JSON.stringify({
+    writeMs: result.writeMs, queryMs: result.queryMs, relationQueryMs: result.relationQueryMs
+  }));
+  expect(result.count).toBe(10000);
+  expect(result.integrity).toBe(true);
+  expect(result.runs).toBe(5);
+  expect(result.relatedThreadCount).toBe(10);
+});
+
+test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', async ({ page, browserName }, testInfo) => {
+  await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+  test.skip(testInfo.project.name !== 'chromium', '100k 性能基准仅在 Playwright Chromium 主测，避免 Chrome/Edge 稳定版重复压测');
   test.setTimeout(300_000);
   await page.locator('#adapter').selectOption('indexeddb');
   await page.locator('#count').selectOption('100000');
