@@ -14,6 +14,18 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
     console.log('fixture SHA-256:', fixture, result.id);
     expect(result.id).toBe(fixtureHashes[fixture]);
     expect(result.citationCount).toBeGreaterThan(0);
+    if (result.parsed.format === 'EPUB') {
+      expect(result.parsed.chapterCount).toBeGreaterThan(0);
+      expect(result.parsed.chapters.some((chapter) => chapter.text.length > 0)).toBe(true);
+    }
+    if (result.parsed.format === 'PDF') {
+      expect(result.parsed.pageCount).toBeGreaterThan(0);
+      expect(result.parsed.pages.every((pdfPage) => pdfPage.text.length > 0)).toBe(true);
+    }
+    if (result.parsed.format === 'TXT') {
+      expect(result.parsed.paragraphCount).toBeGreaterThan(0);
+      expect(result.parsed.paragraphs.every((paragraph) => paragraph.endOffset > paragraph.startOffset)).toBe(true);
+    }
     if (fixture === 'epub-3') {
       expect(result.parsed.chapters[0].sampleCfi).toContain('epubcfi(');
       expect(result.parsed.chapters[0].images[0].alt).toBe('示意图片');
@@ -41,6 +53,13 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
     await expect(page.locator('#source')).toContainText('locator');
     await page.reload();
     await expect(page.locator('#saved-books')).toContainText(fixture);
+    await page.getByRole('button', { name: new RegExp(fixture) }).click();
+    await expect(page.locator('#status')).toContainText('已从 IndexedDB 恢复');
+    const restored = JSON.parse(await page.locator('#output').textContent());
+    expect(restored.restoredFromIndexedDB).toBe(true);
+    expect(restored.citationCount).toBe(result.citationCount);
+    await page.getByRole('button', { name: '定位到原文' }).click();
+    await expect(page.locator('#source')).toContainText('locator');
   });
 }
 
