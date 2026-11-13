@@ -148,3 +148,111 @@
 - BookLore: https://github.com/booklore-app/booklore
 - RAGFlow: https://github.com/infiniflow/ragflow
 - ChatPDF: https://github.com/shibing624/ChatPDF
+
+
+---
+
+# 源码级补充审查（2026-11-13）
+
+以下结论来自对关键源码文件的抽查，不等于完整安全审计或完整许可证合规审查。
+
+## ReadAny：已检查关键实现
+
+抽查文件：
+- `packages/app-expo/package.json`
+- `packages/core/src/types/chat.ts`
+- `packages/core/src/stores/chat-store.ts`
+- `packages/core/src/ai/chat-memory.ts`
+- `packages/core/src/rag/vectorize-trigger.ts`
+- `packages/core/src/rag/chunker.ts`
+
+观察：
+1. Expo 应用已经是较完整的移动端工程，使用 React Native、React Navigation、Expo SQLite、Zustand；同时依赖 LangChain 生态和多家模型 SDK。其移动端依赖体量和原生模块数量不算轻，不能简单理解为一个极简 Expo 示例。
+2. Chat 类型包含 Thread、Message、Citation、Thread.memorySummary 等结构；Thread 通过 bookId 关联书籍。
+3. Chat Store 明确按 bookId 区分书籍会话，并将线程和消息持久化到本地 SQLite。代码允许一本书存在多个 thread，并维护 bookActiveThreadIds；知行应进一步收敛为一本书唯一长期对话，不能照搬其多线程产品行为。
+4. Chat memory 会将较旧消息压缩为 memorySummary，同时保留消息存储路径；但其摘要规则较宽泛，知行必须强化“用户观点、AI观点、原文事实分离”，并保证原始消息不可被摘要替代。
+5. RAG 向量化流程包含切片、Embedding、批量入库、索引来源记录和进度回调；同时支持本地 Transformers.js 与远程 Embedding API。
+6. 切片器基于 TextSegment 聚合，保留 CFI 起止位置及段落级 CFI，默认目标约 300 tokens、最小 50 tokens、重叠比例 0.2。这种“切片与原文定位绑定”的设计值得借鉴。
+7. 类型中的 ReadingContext 包含当前章节、阅读位置百分比、选区、周边文本和操作类型。知行不应把阅读位置管理作为核心交互；可保留必要的原文定位元数据，但不要将其暴露为进度管理。
+
+许可证：
+- 仓库 LICENSE 文件明确为 GNU GPL v3。
+- 初步策略：不直接复制其核心代码进入闭源产品。可研究架构和算法思想；如需复用具体代码，必须先做法律合规评估，或联系作者获取其他授权。
+
+## TextSage：已检查处理流水线
+
+抽查文件：
+- `main.py`
+- `src/pipeline.py`
+- `api_server.py`
+- README 与依赖配置（部分文件路径仍需进一步确认）
+
+观察：
+1. 主流程把处理拆成可独立执行的阶段：PDF 提取、manifest 校验、页面向量化、章节对齐、切片、写入 PostgreSQL、切片向量化和归档。
+2. PDF 会先拆成逐页文件；抽取预览页后识别学科，再按配置选择 MinerU 或 PyMuPDF。
+3. 章节目录解析、章节页码对齐、内容切片和向量写入相互独立，可按单本书重跑。这与知行“本地初加工 + 云端完整处理、失败可恢复”的方向高度相关。
+4. API 侧使用 Qdrant 做向量召回，并回 PostgreSQL 取回完整 chunk；还根据 chunk 中的图号查找图片。
+5. 当前 API 示例绑定 Ollama 本地模型，检索使用学科/年级过滤；这是教材 Tutor 的单场景实现，不是知行需要的通用多租户服务。
+6. 项目 README 声明 MIT，但本次通过 GitHub Contents API 获取根目录 LICENSE 返回 404。许可证尚未完成核实，不能仅凭 README 声明就认定可直接复用。应进一步检查是否有其他授权文件、依赖许可证及仓库作者说明。
+
+初步策略：
+- 最值得借鉴其处理阶段拆分、manifest、可恢复流水线、章节页码对齐和图文关联。
+- 不照搬其 Qdrant + Ollama 的部署组合；知行先验证 PostgreSQL + pgvector 是否够用。
+- 在许可证核实前，只做技术研究，不复制代码。
+
+## BookLore：已检查实体与导入队列
+
+抽查文件：
+- `BookEntity.java`
+- `BookdropEventHandlerService.java`
+- README、LICENSE
+
+观察：
+1. BookEntity 将书籍、元数据、文件、书架、用户阅读进度等关系分开建模；书籍可关联多个文件，并根据格式优先级选择主文件。
+2. BookDrop 通过文件系统事件监听，将新文件放入阻塞队列，由后台线程异步处理。
+3. 入队后先检查文件类型、重复路径和文件稳定性，再记录待审核状态，提取初始元数据并按配置补充在线元数据。
+4. 这套“文件到达—稳定性检查—队列处理—待审核—元数据补全”的导入工作流值得借鉴。
+5. 它是自托管数字图书馆，模型和用户体验都偏书库管理，不是对话优先产品。
+
+许可证：
+- LICENSE 文件明确为 GNU AGPL v3。
+- 闭源商业产品如直接修改并通过网络向用户提供服务，可能触发 AGPL 对对应源码提供的义务。知行不应直接 Fork 作为底座，具体复用前需法律评估。
+
+## ChatPDF：已检查 RAG 核心
+
+抽查文件：
+- `rag.py`
+- README、LICENSE
+
+观察：
+1. 代码实现中文与英文不同切片路径，中文使用 jieba 分词及句末标点控制切分。
+2. 支持 BM25 与句向量的混合召回，并提供 reranker 对候选结果重排。
+3. 提供命中 chunk 的邻近上下文扩展，避免只把孤立片段交给模型。
+4. RAG 类包含 chunk_size、chunk_overlap、similarity_top_k、rerank_top_k 等可调参数，可作为知行检索评测基线。
+5. 代码较偏模型实验与本地推理，缺少完整 SaaS、多租户和长期对话产品结构。
+
+许可证：
+- LICENSE 文件明确为 Apache License 2.0。
+- 若后续复用代码，仍需保留许可证和 NOTICE（如适用），并审查依赖许可证。
+
+## RAGFlow：初步部署结构检查
+
+抽查：
+- `docker/docker-compose.yml`
+- LICENSE
+
+观察：
+1. Docker Compose 组合包含多个服务和独立依赖，不是一个简单的 FastAPI + PostgreSQL 服务。
+2. 仓库面向通用文档理解、RAG 和 Agent 基础设施，能力范围明显大于知行第一阶段。
+3. LICENSE 为 Apache 2.0。
+4. 不建议整体部署作为知行底座；应先针对复杂 PDF、版面解析、表格/图片理解和检索重排做对照测试。
+
+## 更新后的判断
+
+- **最优先深入拆解：TextSage 的处理流水线**，但许可证需要先核实。
+- **最值得研究移动端与书籍对话：ReadAny**，重点看 Expo 工程、原文 CFI 定位、切片和向量化；GPL-3.0 阻止我们未经评估直接复制代码。
+- **最值得研究书籍导入管理：BookLore**，重点看 BookDrop、待审核状态和实体关系；AGPL-3.0 下只做设计参考为主。
+- **最值得研究中文 RAG 召回：ChatPDF**，可作为 Apache-2.0 候选代码样本，但需要评估依赖与工程质量。
+- **RAGFlow 作为能力对照**，不作为早期系统底座。
+
+下一步需要把 TextSage 的目录、关键阶段函数、数据表结构和实际部署依赖查完整；同时对 ReadAny 的会话、记忆和向量数据库实现补充单元测试与边界分析。
