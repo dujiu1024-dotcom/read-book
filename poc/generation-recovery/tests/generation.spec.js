@@ -6,7 +6,7 @@ test('用户消息先落本地，最终结果确认后才写入 Assistant Messag
   await expect(page.locator('#status')).toContainText('生成完成', { timeout: 20_000 });
   await expect(page.locator('#messages')).toContainText('user');
   await expect(page.locator('#messages')).toContainText('assistant');
-  await expect(page.locator('#messages')).toContainText('这是 一条 模拟 生成 结果。');
+  await expect(page.locator('#messages')).toContainText('这是一条模拟生成结果。');
 });
 
 test('客户端断线并刷新后，可恢复服务端最终结果', async ({ page }) => {
