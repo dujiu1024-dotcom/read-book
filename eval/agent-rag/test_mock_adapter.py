@@ -19,6 +19,9 @@ class MockAdapterTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["total_questions"], 30)
         self.assertEqual(report["prediction_provenance"][0]["adapter"], "lexical-mock")
         self.assertIsNone(report["metrics"]["human_adjudicated_groundedness"])
+        self.assertIsNone(report["metrics"]["citation_precision"])
+        self.assertIsNone(report["metrics"]["citation_coverage"])
+        self.assertIsNone(report["metrics"]["locator_accuracy"])
 
 
 if __name__ == "__main__":
