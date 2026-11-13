@@ -126,8 +126,8 @@ function queryBatch(count, datasetId) {
      FROM message m
      INNER JOIN thread t ON t.id = m.thread_id AND t.dataset_id = m.dataset_id
      INNER JOIN reading_round rr ON rr.thread_id = t.id AND rr.dataset_id = t.dataset_id
-     INNER JOIN note n ON n.reading_round_id = rr.id AND n.dataset_id = rr.dataset_id AND n.thread_id = t.id AND n.thread_id = t.id
-     INNER JOIN memory mm ON mm.note_id = n.id AND mm.dataset_id = n.dataset_id AND mm.thread_id = t.id AND mm.source_id = n.source_id AND mm.thread_id = t.id AND mm.source_id = n.source_id
+     INNER JOIN note n ON n.reading_round_id = rr.id AND n.dataset_id = rr.dataset_id AND n.thread_id = t.id
+     INNER JOIN memory mm ON mm.note_id = n.id AND mm.dataset_id = n.dataset_id AND mm.thread_id = t.id AND mm.source_id = n.source_id
      INNER JOIN source s ON s.id = n.source_id AND s.dataset_id = n.dataset_id
      WHERE m.dataset_id = ? AND t.id = ?`,
     [datasetId, datasetId + ':thread:0']
@@ -172,17 +172,26 @@ function check(datasetId) {
   const count = execute('SELECT COUNT(*) AS count FROM message WHERE dataset_id = ?', [datasetId]);
   const relations = execute(`
     SELECT COUNT(*) AS count FROM message m
-    JOIN thread t ON t.id = m.thread_id
+    JOIN thread t ON t.id = m.thread_id AND t.dataset_id = m.dataset_id
     JOIN reading_round rr ON rr.thread_id = t.id AND rr.dataset_id = t.dataset_id
     JOIN note n ON n.reading_round_id = rr.id AND n.dataset_id = rr.dataset_id AND n.thread_id = t.id
     JOIN memory mm ON mm.note_id = n.id AND mm.dataset_id = n.dataset_id AND mm.thread_id = t.id AND mm.source_id = n.source_id
     JOIN source s ON s.id = n.source_id AND s.dataset_id = n.dataset_id
     WHERE m.dataset_id = ?
   `, [datasetId]);
+  const graph = execute(`
+    SELECT COUNT(*) AS count FROM thread t
+    JOIN reading_round rr ON rr.thread_id = t.id AND rr.dataset_id = t.dataset_id
+    JOIN note n ON n.reading_round_id = rr.id AND n.dataset_id = rr.dataset_id AND n.thread_id = t.id
+    JOIN memory mm ON mm.note_id = n.id AND mm.dataset_id = n.dataset_id AND mm.thread_id = t.id AND mm.source_id = n.source_id
+    JOIN source s ON s.id = n.source_id AND s.dataset_id = n.dataset_id
+    WHERE t.dataset_id = ?
+  `, [datasetId]);
   return {
     adapter: 'SQLite WASM + OPFS', datasetId, count: Number(count[0].count),
-    relationCount: Number(relations[0].count),
-    integrity: integrity[0]?.integrity_check === 'ok' && Number(relations[0].count) === Number(count[0].count),
+    relationCount: Number(relations[0].count), relatedThreadCount: Number(graph[0].count),
+    integrity: integrity[0]?.integrity_check === 'ok' &&
+      Number(relations[0].count) === Number(count[0].count) && Number(graph[0].count) === 10,
     integrityDetail: integrity[0]?.integrity_check
   };
 }
