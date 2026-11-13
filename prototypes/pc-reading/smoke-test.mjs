@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { chromium } from "playwright";
+import { chromium, devices } from "playwright";
 
 const server = spawn("python", ["-m", "http.server", "4173", "--bind", "127.0.0.1", "--directory", "prototypes/pc-reading"], {
   stdio: "ignore"
@@ -104,10 +104,59 @@ try {
   const zoomOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   if (zoomOverflow) throw new Error("horizontal overflow at simulated 200% zoom");
   await page.evaluate(() => { document.body.style.zoom = "0.8"; });
-
   await page.getByRole("button", { name: "备份：已检查" }).click();
+
+  // Device-profile emulation exercises touch input and narrow mobile viewports.
+  // It is not a substitute for testing on physical iOS/Android hardware.
+  for (const [profileName, profile] of [
+    ["iPhone 13", devices["iPhone 13"]],
+    ["Pixel 7", devices["Pixel 7"]]
+  ]) {
+    const context = await browser.newContext({ ...profile });
+    const mobilePage = await context.newPage();
+    const mobileErrors = [];
+    mobilePage.on("pageerror", error => mobileErrors.push(error.message));
+    await mobilePage.goto("http://127.0.0.1:4173/", { waitUntil: "networkidle" });
+
+    const deviceFacts = await mobilePage.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+      touchPoints: navigator.maxTouchPoints,
+      horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      inputFontSize: Number.parseFloat(getComputedStyle(document.querySelector("#messageInput")).fontSize)
+    }));
+    if (!deviceFacts.touchPoints) throw new Error(`${profileName}: touch input is not enabled in device profile`);
+    if (deviceFacts.horizontalOverflow) throw new Error(`${profileName}: horizontal overflow at initial viewport`);
+    if (deviceFacts.inputFontSize < 16) throw new Error(`${profileName}: composer font size may trigger iOS focus zoom`);
+
+    const undersized = await mobilePage.locator("button:visible").evaluateAll(buttons =>
+      buttons.map(button => {
+        const rect = button.getBoundingClientRect();
+        return { label: (button.innerText || button.getAttribute("aria-label") || "").trim(), width: rect.width, height: rect.height };
+      }).filter(item => item.width < 44 || item.height < 44)
+    );
+    if (undersized.length) throw new Error(`${profileName}: touch targets below 44 CSS px: ${JSON.stringify(undersized)}`);
+
+    await mobilePage.getByRole("button", { name: "收起原文" }).tap();
+    if (await mobilePage.locator("#sourceBody").isVisible()) throw new Error(`${profileName}: touch collapse failed`);
+    await mobilePage.getByRole("button", { name: "展开原文" }).tap();
+    await mobilePage.getByRole("button", { name: "临时查看其他章节" }).tap();
+    await mobilePage.locator('[data-unit="unit-3"]').tap();
+    if (!(await mobilePage.locator("#sourceHeading").textContent()).includes("接口契约")) throw new Error(`${profileName}: touch chapter selection failed`);
+    await mobilePage.getByRole("button", { name: "回到当前主线" }).tap();
+
+    await mobilePage.locator("#messageInput").tap();
+    await mobilePage.locator("#messageInput").fill("移动设备触控发送测试。");
+    await mobilePage.getByRole("button", { name: "发送" }).tap();
+    await mobilePage.getByRole("button", { name: "停止生成" }).waitFor({ state: "visible" });
+    await mobilePage.getByRole("button", { name: "停止生成" }).tap();
+    if (mobileErrors.length) throw new Error(`${profileName}: browser runtime errors: ${mobileErrors.join("; ")}`);
+    await context.close();
+    console.log(`${profileName} touch-emulation passed: viewport ${deviceFacts.width}x${deviceFacts.height}, touch points ${deviceFacts.touchPoints}, 44px targets, fold, chapter selection, composer send and stop.`);
+  }
+
   if (errors.length) throw new Error("browser runtime errors: " + errors.join("; "));
-  console.log("PC reading prototype browser smoke tests passed: source, fold, temporary view, review, local-save state, stop, failure/retry, mainline confirmation, no forced scroll, responsive widths and simulated zoom.");
+  console.log("PC reading prototype browser smoke tests passed: source, fold, temporary view, review, local-save state, stop, failure/retry, mainline confirmation, no forced scroll, responsive widths, simulated zoom and mobile touch profiles.");
 } finally {
   if (browser) await browser.close();
   server.kill("SIGTERM");
