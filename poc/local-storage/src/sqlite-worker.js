@@ -2,6 +2,7 @@ import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 
 let db;
 let sqlite3;
+const RUNS = 5;
 
 async function initialize() {
   sqlite3 = await sqlite3InitModule();
@@ -32,11 +33,16 @@ function execute(sql, bind = []) {
   db.exec({ sql, bind, rowMode: 'object', resultRows: rows });
   return rows;
 }
-
-async function run(count, datasetId) {
-  const writeStart = performance.now();
+function percentile(values, p) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)];
+}
+function writeBatch(count, datasetId) {
   db.exec({ sql: 'BEGIN IMMEDIATE' });
+  const start = performance.now();
   try {
+    execute('DELETE FROM message WHERE dataset_id = ?', [datasetId]);
+    execute('DELETE FROM thread WHERE dataset_id = ?', [datasetId]);
     for (let i = 0; i < count; i++) {
       const threadId = datasetId + ':thread:' + (i % 10);
       execute('INSERT OR IGNORE INTO thread(id,dataset_id) VALUES (?,?)', [threadId, datasetId]);
@@ -50,11 +56,38 @@ async function run(count, datasetId) {
     db.exec({ sql: 'ROLLBACK' });
     throw error;
   }
-  const writeMs = performance.now() - writeStart;
+  return performance.now() - start;
+}
+function queryBatch(count, datasetId) {
   const queryStart = performance.now();
   const rows = execute('SELECT COUNT(*) AS count FROM message WHERE dataset_id = ?', [datasetId]);
   const queryMs = performance.now() - queryStart;
-  return { adapter: 'SQLite WASM + OPFS', datasetId, count: Number(rows[0].count), writeMs, queryMs, integrity: Number(rows[0].count) === count };
+  const relationStart = performance.now();
+  const relation = execute(
+    'SELECT COUNT(*) AS count FROM message m INNER JOIN thread t ON t.id = m.thread_id AND t.dataset_id = m.dataset_id WHERE m.dataset_id = ? AND t.id = ?',
+    [datasetId, datasetId + ':thread:0']
+  );
+  const relationQueryMs = performance.now() - relationStart;
+  return { count: Number(rows[0].count), relationCount: Number(relation[0].count), queryMs, relationQueryMs };
+}
+async function run(count, datasetId) {
+  const writeSamples = [], querySamples = [], relationSamples = [];
+  let finalCount = 0, relationCount = 0;
+  for (let run = 0; run < RUNS; run++) {
+    writeSamples.push(writeBatch(count, datasetId));
+    const result = queryBatch(count, datasetId);
+    querySamples.push(result.queryMs);
+    relationSamples.push(result.relationQueryMs);
+    finalCount = result.count;
+    relationCount = result.relationCount;
+  }
+  return {
+    adapter: 'SQLite WASM + OPFS', datasetId, count: finalCount, relationCount,
+    runs: RUNS, integrity: finalCount === count && relationCount === Math.ceil(count / 10),
+    writeMs: { p50: percentile(writeSamples, 0.5), p95: percentile(writeSamples, 0.95), samples: writeSamples },
+    queryMs: { p50: percentile(querySamples, 0.5), p95: percentile(querySamples, 0.95), samples: querySamples },
+    relationQueryMs: { p50: percentile(relationSamples, 0.5), p95: percentile(relationSamples, 0.95), samples: relationSamples }
+  };
 }
 
 function check(datasetId) {
