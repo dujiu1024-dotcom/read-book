@@ -7,7 +7,7 @@ const RUNS = 5;
 async function initialize() {
   sqlite3 = await sqlite3InitModule();
   if (!('opfs' in sqlite3)) throw new Error('当前浏览器/上下文不支持 SQLite OPFS VFS；为避免双主库，不降级到内存库');
-  db = new sqlite3.oo1.OpfsDb('/read-book-poc-a.sqlite3');
+  db = new sqlite3.oo1.OpfsDb('/read-book-poc-a-v2.sqlite3');
   db.exec({ sql: `
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
