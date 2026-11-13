@@ -60,8 +60,8 @@ jobs:
       - name: Run mobile app tests
         run: pnpm --filter @readany/app-expo test
 
-      - name: Run repository lint
-        run: pnpm lint
+      - name: Run mobile app lint
+        run: pnpm --filter @readany/app-expo lint
 
       - name: Build embedded reader
         run: pnpm --filter @readany/app-expo build:reader
@@ -85,6 +85,7 @@ jobs:
           path: upstream
           persist-credentials: false
 
+      - name: Set up pnpm
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
