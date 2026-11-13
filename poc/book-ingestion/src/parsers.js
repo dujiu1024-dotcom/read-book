@@ -1,6 +1,9 @@
 import ePub from 'epubjs';
 
 async function parseEpub(bytes) {
+  if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 0x03 || bytes[3] !== 0x04) {
+    throw new Error('EPUB 文件不是有效的 ZIP 容器');
+  }
   const book = ePub(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   await book.ready;
   const metadata = await book.loaded.metadata;
@@ -44,6 +47,9 @@ async function parseEpub(bytes) {
 }
 
 async function parsePdf(bytes) {
+  if (bytes.length < 5 || new TextDecoder().decode(bytes.slice(0, 5)) !== '%PDF-') {
+    throw new Error('PDF 文件头无效');
+  }
   const [pdfjsLib, pdfWorker] = await Promise.all([
     import('pdfjs-dist'),
     import('pdfjs-dist/build/pdf.worker.min.mjs?url')
