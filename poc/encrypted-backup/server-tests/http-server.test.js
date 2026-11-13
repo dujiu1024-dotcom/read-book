@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createEncryptedBackup, decryptBackup } from '../src/crypto.js';
+import { createDatasetKeyMaterial, createEncryptedBackup, decryptBackup } from '../src/crypto.js';
 import { listenBackupHttpServer } from '../server/http-server.js';
 
 async function closeServer(app) {
@@ -123,7 +123,8 @@ test('HTTP 父链验证、幂等键和全量到多级增量备份', async (t) =>
   const env = await fixture(t);
   const datasetId = 'http-chain-dataset';
   const ticket = await issueTicket(env.base, datasetId);
-  const full = await createEncryptedBackup({ datasetId, sequence: 1, payload: { value: 'full' } });
+  const keyMaterial = createDatasetKeyMaterial(datasetId);
+  const full = await createEncryptedBackup({ datasetId, sequence: 1, payload: { value: 'full' }, keyMaterial });
   await uploadBackup(env.base, ticket, full, 'same-idempotency-key');
 
   const repeated = await request(env.base, '/v1/backups/init', {
@@ -142,13 +143,19 @@ test('HTTP 父链验证、幂等键和全量到多级增量备份', async (t) =>
   assert.equal(reusedKey.status, 409);
 
   const incremental = await createEncryptedBackup({
-    datasetId, sequence: 2, parentBackupId: full.manifest.backupId, payload: { value: 'incremental-2' }
+    datasetId, sequence: 2, parentBackupId: full.manifest.backupId, payload: { value: 'incremental-2' }, keyMaterial
   });
   await uploadBackup(env.base, ticket, incremental);
   const incremental2 = await createEncryptedBackup({
-    datasetId, sequence: 3, parentBackupId: incremental.manifest.backupId, payload: { value: 'incremental-3' }
+    datasetId, sequence: 3, parentBackupId: incremental.manifest.backupId, payload: { value: 'incremental-3' }, keyMaterial
   });
   await uploadBackup(env.base, ticket, incremental2);
+  const restoredFull = await request(env.base, '/v1/backups/' + full.manifest.backupId, { token: ticket.token });
+  const restoredIncremental2 = await request(env.base, '/v1/backups/' + incremental2.manifest.backupId, { token: ticket.token });
+  assert.deepEqual(await decryptBackup({ ...restoredFull.body, recoveryKey: keyMaterial.recoveryKey }), { value: 'full' });
+  assert.deepEqual(await decryptBackup({ ...restoredIncremental2.body, recoveryKey: keyMaterial.recoveryKey }), { value: 'incremental-3' });
+  assert.equal(full.recoveryKey, incremental.recoveryKey);
+  assert.equal(incremental.recoveryKey, incremental2.recoveryKey);
 
   const missingParent = await createEncryptedBackup({
     datasetId, sequence: 2, parentBackupId: 'missing-parent', payload: { value: 'bad-parent' }
