@@ -247,3 +247,54 @@
 - 浏览器网络断开、流式输出中断、生成任务恢复与最终结果查询。
 
 该调整只改变入口平台和验证环境，不改变个人数据本地优先、服务器仅保存加密备份、同设备账号数据集隔离、清除数据和恢复凭证等已确认原则。
+
+
+## 9. PC Web 详细设计与技术资料复核（2026-11-13）
+
+### 9.1 复核范围
+- 第一阶段入口：PC 浏览器 Web，窄屏居中单列。
+- 本地数据：IndexedDB 与 SQLite WASM + OPFS。
+- 持久化：浏览器配额、StorageManager.persist()、站点数据清理。
+- 安全：Web Crypto、独立恢复凭证、端侧加密备份。
+- 可靠性：备份父链、断点续传、清除墓碑、生成任务断线恢复。
+- 阅读交互：原文区、讨论区、滚动、折叠、引用回跳。
+
+### 9.2 公开技术资料核查结论
+
+1. **浏览器存储不是永久存储。** MDN 说明 IndexedDB、Cache 和 OPFS 使用浏览器存储配额；默认 best-effort 存储可能在存储压力下被清理。StorageManager.persist() 可申请持久化，但浏览器可能批准或拒绝。项目必须将配额和清理作为一级风险。
+2. **SQLite WASM + OPFS 有明确实现路径，但不是零成本。** SQLite 官方文档说明 OPFS 只能在 Worker 中使用；不同 VFS 对并发、文件锁、浏览器版本和 COOP/COEP 有不同要求。opfs-sahpool 的性能和并发取舍明显，不宜未经测试直接采用。
+3. **IndexedDB 是可靠对照组。** 原生事务和版本升级能力成熟，但复杂关系查询、来源追溯和备份快照需更多应用层组织。
+4. **Web Crypto 可提供浏览器端加密原语。** API 在安全上下文中可用，但项目仍需设计密钥生命周期、nonce、恢复凭证和威胁模型；调用 API 本身不等于安全设计通过。
+5. **流式输出不能成为消息正确性的基础。** 客户端断线后必须能通过 generation_id 查询最终结果；服务端任务独立运行，最终 Assistant Message 由客户端持久化到本地。
+
+参考：
+- MDN Storage quotas and eviction criteria：https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria
+- MDN StorageManager.persist()：https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist
+- MDN Web Crypto API：https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API
+- MDN Using IndexedDB：https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB
+- SQLite WASM OPFS：https://sqlite.org/wasm/doc/tip/persistence.md
+- SQLite WASM VFS trade-offs：https://www.sqlite.org/wasm/doc/trunk/persistence.md
+
+### 9.3 设计结论与证据等级
+| 项目 | 当前结论 | 证据等级 |
+|---|---|---|
+| PC Web 窄屏单列路线 | 已由用户确认 | 产品决策 |
+| SQLite WASM + OPFS | 首选 PoC 候选，尚未最终选型 | 技术设计判断 |
+| IndexedDB | 对照/回退候选 | 技术设计判断 |
+| Chrome/Edge | 第一阶段主测浏览器建议 | 技术设计建议 |
+| 浏览器持久化与配额 | 存在配额和清理风险，必须处理 | 官方资料核查 |
+| Web Crypto 端侧加密 | 有 API 能力，项目方案未验证 | 官方资料核查 + 待 PoC |
+| 增量备份和恢复 | 已形成协议设计，尚无实现 | 设计草案 |
+| 文件导入与阅读 | 未执行 | 无可运行 PoC |
+| 流式断线恢复 | 已形成协议设计，尚无实现 | 设计草案 |
+| 窄屏交互 | 已形成规范，尚未进行可用性测试 | 设计草案 |
+
+### 9.4 本轮新增交付
+- docs/pc-web-detailed-design.md
+- docs/pc-web-poc-plan.md
+- docs/pc-web-interaction-spec.md
+
+### 9.5 当前阻塞与下一步
+当前 read-book 仓库仍以产品、架构、协议和验证文档为主，没有可供运行的知行前端、本地数据库、备份服务或 GenerationJob 实现。因此本轮完成的是公开技术资料核查、架构详细设计和可执行 PoC 计划，不是运行时验证通过。
+
+下一步需要单独批准建立独立技术 PoC 工程（不包含知行业务功能），再按 PoC 计划执行并提交真实日志、数据库完整性结果、浏览器版本和性能数据。
