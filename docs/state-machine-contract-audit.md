@@ -7,7 +7,7 @@
 
 ## 1. 审查结论
 
-第一轮字段核对发现 6 类契约缺口，已在本分支修订：
+第一轮字段核对发现 7 类契约缺口，另在 OpenAPI 机器校验中发现 1 处既有引用错误，均已在本分支修订：
 
 1. GenerationJob 的 API 已出现 cancel_requested，但数据字典和 GenerationStatus 终态查询 Schema 未完整表达。
 2. BackupUploadSession 在状态机中有生命周期，但 API 响应没有 status，也没有按 backup_id 查询上传会话/已接收分块的接口。
@@ -15,6 +15,7 @@
 4. BackupUploadSession 和 BackupManifest 只有枚举映射，缺少完整状态转换、终态和并发规则。
 5. BackupManifest.inaccessible 在数据字典中存在，但状态机缺少 committed → inaccessible 转换。
 6. AccountDataSetBinding 的“同一数据集最多一个 active 绑定”缺少明确的部分唯一索引规格。
+7. OpenAPI 多处引用 components.responses.ApiError，但原契约只定义了 components.schemas.ApiError，Response Object 引用目标不存在；已补充 components.responses.ApiError 并引用既有 ApiError Schema。
 
 以上已修订并增加 SM-025 至 SM-030 行为测试规格。当前仍有明确未决项，故文档继续保持 draft，不关闭 Issue #7。
 
@@ -28,6 +29,7 @@
 | BackupUploadSession | open/completing/completed/expired/rejected 缺少完整迁移表 | 增加状态转换、幂等分块、过期、完成和墓碑竞态规则 |
 | BackupManifest | inaccessible 枚举无转换定义 | 补充 committed → inaccessible；仅失效化访问，不物理删除密文和密钥材料 |
 | AccountDataSetBinding | 同一数据集最多一个 active 绑定，但无数据库约束规格 | 增加 local_dataset_id 的 active 部分唯一索引规格 |
+| OpenAPI ApiError | $ref 指向不存在的 components.responses.ApiError | 新增标准 Response Object，并复用 components.schemas.ApiError |
 
 ## 3. 交叉核对结果
 
@@ -54,6 +56,7 @@
 - BackupUploadSession 过期/拒绝不等于 BackupManifest 已提交；只有 committed 清单进入可恢复列表。
 - DataSetLifecycle.cleared 墓碑优先于上传完成、下载、恢复、授权签发和重新关联。
 - 旧 API 路径历史草案在 core-data-model.md 中标为废止；当前 API 唯一权威来源为 api-contract.yaml。
+- 首轮 OpenAPI 机器校验在 ApiError Response 引用处失败，定位为契约组件缺失；修复后由同一 CI 复跑确认，不将首次失败记为通过。
 
 ## 4. 尚未关闭的契约问题
 
