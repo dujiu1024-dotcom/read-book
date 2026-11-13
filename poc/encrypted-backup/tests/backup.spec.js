@@ -82,3 +82,83 @@ test('Mock 服务端在提交前拒绝被篡改的密文块', async ({ page }) =
   expect(result.rejected).toBe(true);
   expect(result.message).toContain('哈希校验失败');
 });
+
+test('全量后可创建有序增量备份并验证父链', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup, decryptBackup } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    const server = new MockBackupServer();
+    const full = await createEncryptedBackup({ datasetId: 'chain-dataset', sequence: 1, payload: { version: 1, records: ['a'] } });
+    server.init(full.manifest, 'full-key');
+    for (const chunk of full.chunks) server.putPart(full.manifest.backupId, chunk);
+    await server.complete(full.manifest.backupId);
+    const incremental = await createEncryptedBackup({ datasetId: 'chain-dataset', sequence: 2, parentBackupId: full.manifest.backupId, payload: { changes: [{ id: 'b', op: 'insert' }] } });
+    server.init(incremental.manifest, 'incremental-key');
+    for (const chunk of incremental.chunks) server.putPart(incremental.manifest.backupId, chunk);
+    await server.complete(incremental.manifest.backupId);
+    const remote = server.get(incremental.manifest.backupId);
+    const restored = await decryptBackup({ ...remote, recoveryKey: incremental.recoveryKey });
+    return { type: remote.manifest.backupType, parent: remote.manifest.parentBackupId, restored };
+  });
+  expect(result.type).toBe('incremental');
+  expect(result.parent).toBeTruthy();
+  expect(result.restored.changes[0].id).toBe('b');
+});
+
+test('增量备份拒绝缺失父备份、跨数据集父备份和错误序号', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    const server = new MockBackupServer();
+    const full = await createEncryptedBackup({ datasetId: 'parent-dataset', sequence: 1, payload: { v: 1 } });
+    server.init(full.manifest, 'parent-key');
+    for (const chunk of full.chunks) server.putPart(full.manifest.backupId, chunk);
+    await server.complete(full.manifest.backupId);
+    const missing = await createEncryptedBackup({ datasetId: 'parent-dataset', sequence: 2, parentBackupId: 'not-found', payload: { v: 2 } });
+    let missingRejected = false;
+    try { server.init(missing.manifest, 'missing-key'); } catch { missingRejected = true; }
+    const crossDataset = await createEncryptedBackup({ datasetId: 'other-dataset', sequence: 2, parentBackupId: full.manifest.backupId, payload: { v: 2 } });
+    let crossRejected = false;
+    try { server.init(crossDataset.manifest, 'cross-key'); } catch { crossRejected = true; }
+    const wrongSequence = await createEncryptedBackup({ datasetId: 'parent-dataset', sequence: 3, parentBackupId: full.manifest.backupId, payload: { v: 3 } });
+    let sequenceRejected = false;
+    try { server.init(wrongSequence.manifest, 'sequence-key'); } catch { sequenceRejected = true; }
+    return { missingRejected, crossRejected, sequenceRejected };
+  });
+  expect(result).toEqual({ missingRejected: true, crossRejected: true, sequenceRejected: true });
+});
+
+test('增量父链元数据被篡改时 AEAD 校验失败', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup, decryptBackup } = await import('/src/crypto.js');
+    const full = await createEncryptedBackup({ datasetId: 'aad-chain', sequence: 1, payload: { v: 1 } });
+    const incremental = await createEncryptedBackup({ datasetId: 'aad-chain', sequence: 2, parentBackupId: full.manifest.backupId, payload: { v: 2 } });
+    const altered = structuredClone(incremental.manifest);
+    altered.parentBackupId = 'tampered-parent';
+    try {
+      await decryptBackup({ manifest: altered, chunks: incremental.chunks, recoveryKey: incremental.recoveryKey });
+      return false;
+    } catch { return true; }
+  });
+  expect(result).toBe(true);
+});
+
+test('清除墓碑与正在进行的上传完成竞争时墓碑优先', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    const backup = await createEncryptedBackup({ datasetId: 'clear-race', sequence: 1, payload: { v: 1 } });
+    const server = new MockBackupServer();
+    server.init(backup.manifest, 'clear-race-key');
+    for (const chunk of backup.chunks) server.putPart(backup.manifest.backupId, chunk);
+    const completing = server.complete(backup.manifest.backupId);
+    server.clearDataset('clear-race');
+    try { await completing; return { rejected: false, cleared: server.isCleared('clear-race') }; }
+    catch { return { rejected: true, cleared: server.isCleared('clear-race') }; }
+  });
+  expect(result).toEqual({ rejected: true, cleared: true });
+});
