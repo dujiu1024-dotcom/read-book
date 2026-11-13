@@ -116,7 +116,7 @@ const server = http.createServer(async (req, res) => {
       schedule(task);
       return;
     }
-    const match = url.pathname.match(/^\\/api\\/generations\\/([^/]+)(?:\\/(events|cancel))?$/);
+    const match = url.pathname.match(/^\/api\/generations\/([^/]+)(?:\/(events|cancel))?$/);
     if (match) {
       const task = tasks.get(match[1]);
       if (!task) return json(res, 404, { error: 'generation not found' });
