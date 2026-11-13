@@ -1,7 +1,7 @@
 # 知行核心状态机
 
-> 版本：0.1.0-draft  
-> 状态：设计草案；产品语义边界已按已确认原则约束，讨论完成判定细则仍待确认。  
+> 版本：0.2.0-draft  
+> 状态：设计草案；产品语义边界已按已确认原则约束，讨论完成判定、消息持久化边界及恢复流程仍有待确认。  
 > 权威范围：定义阅读主线、阅读轮次、生成任务、消息、备份和数据集的状态及转换。字段定义见 [核心数据字典](data-dictionary.md)，API 定义见 [OpenAPI 契约](api-contract.yaml)。
 
 ## 1. 状态机总原则
@@ -41,7 +41,7 @@ presented 与 awaiting_user 可以在同一事务中连续发生，但保留两�
 | awaiting_user | 用户确认已理解并选择略读 | skipped | 记录用户确认事件 |
 | awaiting_user | 用户选择继续讨论 | discussion_active | 留在当前单元 |
 | discussion_active | 用户发出继续阅读/推进指令 | discussed | 记录本轮结束事件；不额外要求用户点击“结束讨论” |
-| discussed / skipped | 用户要求重新讨论当前单元 | discussion_active | 若当前轮仍活动，允许重新打开；保留既有事件 |
+| discussed / skipped | 用户要求重新查看或深入讨论该单元 | 不变 | 创建 review PresentedSource 并关联新讨论；不得回退 ReadingUnitProgress 终态。若用户要重新走完整主线，应由用户主动开启新 ReadingRound |
 | 任意状态 | 临时查看其他章节 | 不变 | 创建 temporary PresentedSource，不改主线状态 |
 | 任意状态 | 复习已读单元 | 不变 | 创建 review PresentedSource，不改主线状态 |
 
@@ -195,7 +195,136 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 
 本地 LocalDataSet 生命周期与服务端 DataSetLifecycle 分离。账号切换不得自动改变本地数据集；用户必须显式选择当前账号下可用的数据集。跨账号恢复必须走独立恢复凭证流程，且清除墓碑不可绕过。
 
-## 9. 事件与审计最低要求
+
+## 9. 账号身份、数据集与绑定状态机
+
+本节区分账号身份、外部登录身份、本地数据集、账号绑定和服务端数据集墓碑。它们不是同一个生命周期。
+
+### 9.1 Account
+
+状态：`active`、`suspended`、`deleted`。
+
+| 当前状态 | 事件/条件 | 下一状态 | 处理规则 |
+|---|---|---|---|
+| 不存在 | 完成账号注册 | active | 创建身份主体，不创建或接管私人数据集 |
+| active | 风控/管理冻结 | suspended | 禁止新认证及受限在线操作；不得删除本地数据或备份 |
+| suspended | 解冻 | active | 恢复允许的认证能力 |
+| active / suspended | 用户完成账号注销 | deleted | 账号身份与认证关系失效；不得级联清除本地数据集或服务器加密备份 |
+| deleted | 重新注册 | 不变 | 视为新账号；不得自动恢复旧账号绑定 |
+
+`deleted` 为终态。账号注销不是个人数据清除；不能把 Account.deleted 映射为 DataSetLifecycle.cleared。
+
+### 9.2 ExternalIdentity
+
+状态：`active`、`revoked`。
+
+| 当前状态 | 事件/条件 | 下一状态 | 处理规则 |
+|---|---|---|---|
+| 不存在 | 绑定受支持的登录身份 | active | `(provider, provider_subject)` 全局唯一 |
+| active | 用户解绑或账号注销 | revoked | 认证映射失效，不删除账号以外的数据 |
+| revoked | 重新绑定 | 新建身份记录 | 不复活旧映射；仍须满足唯一性和账号状态校验 |
+
+### 9.3 AccountDataSetBinding
+
+状态：`active`、`inactive`、`revoked`。
+
+| 当前状态 | 事件/条件 | 下一状态 | 处理规则 |
+|---|---|---|---|
+| 不存在 | 用户明确选择数据集并建立当前账号上下文 | active | 显式绑定；同一数据集最多一个 active 账号绑定 |
+| active | 用户切换账号或主动解除当前选择 | inactive | 只解除当前上下文，不修改数据集内容及备份 |
+| active / inactive | 账号注销或绑定被安全撤销 | revoked | 不删除数据集，不自动迁移或合并 |
+| inactive | 用户再次明确选择同一账号下的数据集 | active | 重新校验账号权限与数据集状态 |
+| revoked | 再次使用 | 禁止复活 | 需要重新走合法绑定流程并产生新绑定记录 |
+
+账号切换后，在用户明确选择数据集前，不得读取、展示或写入此前账号的数据集。跨账号恢复必须走独立恢复凭证流程，不得把本地绑定当作恢复授权。
+
+### 9.4 LocalDataSet
+
+本地状态：`active`、`locally_locked`、`restore_pending`。
+
+| 当前状态 | 事件/条件 | 下一状态 | 处理规则 |
+|---|---|---|---|
+| 不存在 | 首次初始化本地数据 | active | 创建本地数据集 |
+| active | 当前账号上下文切换/退出 | active | 数据仍保留，但访问必须经过显式数据集选择和账号隔离校验 |
+| active | 本地安全锁定 | locally_locked | 禁止读取和写入，解锁后回到 active |
+| 不存在/空数据集 | 用户主动开始备份恢复 | restore_pending | 先保护现有本地数据；恢复过程不得覆盖非空数据集 |
+| restore_pending | 密文验证、解密、结构迁移和关系校验全部成功 | active | 原子提交恢复结果 |
+| restore_pending | 任一步失败 | 原状态或受保护快照 | 不得留下半恢复、半覆盖数据；记录失败原因 |
+
+`LocalDataSet.lifecycle_status` 与服务端 `DataSetLifecycle.status` 分离管理。第一版不做多设备实时同步；不同设备产生的数据集不得自动合并。当前数据字典没有独立 Device 实体，故本契约不虚构设备账号或设备同步状态；浏览器安装上下文是否需要持久化设备标识，列为安全设计待评审项。
+
+### 9.5 Server DataSetLifecycle
+
+状态：`active`、`inactive`、`cleared`。
+
+| 当前状态 | 事件/条件 | 下一状态 | 处理规则 |
+|---|---|---|---|
+| 不存在 | 首次建立备份数据集索引 | active | 仅保存最小必要索引和密文元数据 |
+| active | 当前账号绑定解除或无活动授权 | inactive | 不代表数据销毁；密文保持不变 |
+| inactive | 合法恢复凭证通过校验并重新授权 | active | 重新建立可用授权前必须检查墓碑 |
+| active / inactive | 用户明确确认清除个人数据 | cleared | 软删除/失效化用户关联索引和可用授权；原始密文及密钥材料保持不动 |
+| cleared | 任意登录、恢复、授权、上传完成或重新关联请求 | cleared | 不可逆墓碑优先，拒绝业务操作 |
+
+清除动作必须覆盖并发竞态：任何上传完成、授权签发、下载和恢复操作在最终提交时都必须再次检查墓碑；不能只在请求入口检查一次。
+
+## 10. 恢复挑战与恢复授权状态机
+
+### 10.1 RecoveryChallenge
+
+状态：`issued`、`consumed`、`expired`。
+
+- 创建挑战前校验恢复凭证标识格式、频率限制和滥用防护；挑战不得泄露数据集是否存在。
+- `issued → consumed`：挑战响应验证成功并原子消费；同一挑战不得重复签发授权。
+- `issued → expired`：超过 expires_at 后失效。
+- `consumed`、`expired` 均为终态；重试必须创建新挑战。
+- 挑战响应验证失败不得泄露恢复凭证或数据集信息；失败次数与限流策略由安全设计确定。
+
+### 10.2 BackupAuthorization
+
+状态：`active`、`used`、`expired`、`revoked`。
+
+| 当前状态 | 事件/条件 | 下一状态 | 处理规则 |
+|---|---|---|---|
+| 不存在 | RecoveryChallenge 验证成功 | active | 签发短时、范围受限的恢复授权 |
+| active | 完成授权范围内的恢复使用 | used | 单次授权消费；记录 used_at |
+| active | 超过 expires_at | expired | 不可再下载或恢复 |
+| active | 数据集清除、风险撤销或主动撤销 | revoked | 立即失效 |
+| used / expired / revoked | 再次使用 | 不变 | 拒绝；重新恢复必须创建新挑战和授权 |
+
+授权签发、下载和恢复每一步均须检查 `DataSetLifecycle`。`cleared` 优先于所有授权状态。恢复凭证独立于账号密码；服务端不得存储恢复凭证明文。凭证丢失且无其他有效恢复方式时，数据不可恢复，不设置管理员解密后门。
+
+## 11. 备份任务、上传会话与备份清单的状态映射
+
+三类状态不可混为一个枚举：
+
+| 层级 | 状态/阶段 | 含义与映射 |
+|---|---|---|
+| 客户端备份任务 | queued / snapshotting / serializing / encrypting | 本地准备阶段；尚未形成服务端可恢复备份 |
+| 客户端备份任务 | uploading | 服务端 BackupUploadSession 应为 open |
+| 客户端备份任务 | verifying | 服务端 BackupUploadSession 为 completing；服务端校验分块、数量、密文哈希、版本和墓碑 |
+| 客户端备份任务 | committed | 服务端 BackupUploadSession 为 completed，且 BackupManifest 为 committed；客户端才推进 last_acked_sequence |
+| 客户端备份任务 | retryable_failed | 保留本地任务与快照上下文，退避重试；不得伪造服务端 rejected |
+| 客户端备份任务 | permanent_failed | 记录错误并停止自动重试；服务端是否 rejected 由实际校验结果决定 |
+| 服务端 BackupUploadSession | open / completing / completed / expired / rejected | 上传会话生命周期；completed 不得绕过 Manifest 最终提交检查 |
+| 服务端 BackupManifest | uploading / committed / rejected / inaccessible | 备份清单生命周期；只有 committed 且父链完整的备份可进入可恢复清单 |
+
+补充约束：
+- 网络中断、页面关闭或客户端超时不等于服务端上传失败；恢复后先查询会话和备份清单，再决定续传或重建。
+- 客户端不得仅凭 HTTP 成功响应推进 `last_acked_sequence`，必须确认服务端 `BackupManifest.committed`。
+- `retryable_failed`、`permanent_failed` 是客户端任务状态，不是 BackupManifest 的新枚举值。
+- 同一幂等键重试必须返回同一上传会话；已提交备份不可被重试覆盖。
+- 清除墓碑在会话完成和清单提交时再次检查；墓碑存在时拒绝提交且不得复活数据集。
+
+## 12. 消息与生成状态边界（待契约确认）
+
+- `GenerationJob` 是服务端短暂计算任务；`GenerationReceipt` 是本地恢复生成状态的记录；`Message` 是本地长期对话记录。三者不能共用一个状态字段。
+- 用户 Message 必须在发起网络生成前本地持久化成功；生成失败不删除用户 Message。
+- Assistant Message 只有完整结果写入本地事务后才可标记 `complete`。
+- 当前数据字典为 Message 定义了 `pending / complete / failed / cancelled`，但尚未明确 `pending` 是否表示本地持久化事务未完成，还是生成过程进行中。不得用 Message.pending 代替 GenerationReceipt.streaming；该字段语义须在契约评审中明确。
+- 流式 delta 仅为临时 UI 状态；不得作为正式 Message 或备份数据。
+- GenerationJob 的 `completed / failed / cancelled / expired` 是服务端终态；终态竞态由服务端原子提交决定。客户端以查询到的最终结果为准，不以 SSE 事件流作为最终权威。
+
+## 12. 事件与审计最低要求
 
 关键事件建议：
 - mainline.source_presented
@@ -214,12 +343,15 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 
 事件至少包含 event_id、local_dataset_id、thread_id（适用时）、reading_round_id（适用时）、entity_id、event_type、occurred_at、schema_version。事件日志存本地并纳入加密备份；服务端不得为审计而保存私人消息正文。
 
-## 10. 尚待确认与验证
+## 13. 尚待确认与验证
 
 ### 需要产品确认
 1. 简短回应（如“确实”“不对”）是否可由 Agent 结合上下文判定为实质性讨论；建议允许上下文判断，但不得依赖字数阈值。
 2. 用户在主线已完成后要求重新深入讨论某个 skipped 单元，是否只作为 review，不改变已完成轮次状态；建议默认如此，除非用户主动开启新一轮。
 3. abandoned 轮次是否允许继续恢复；建议第一版先不提供恢复 abandoned 的入口，避免和二刷语义混淆。
+4. Message.pending 的持久化语义，以及本地 Message 状态与 GenerationReceipt 状态的映射。
+5. 浏览器安装上下文是否需要独立 Device 标识；第一版不因此引入多设备同步或数据集自动合并。
+6. RecoveryChallenge 的失败次数、速率限制、挑战有效期和重放保护参数，由安全设计确定。
 
 ### 需要 PoC 验证
 - 本地事务并发下主线状态与 Message sequence 一致性。
@@ -227,4 +359,6 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 - 多标签页锁、备份快照和 dirty_sequence 正确性。
 - 状态事件与业务实体事务的原子性。
 - 临时查看/复习绝不改变主线状态的自动化测试。
+- 账号注销不级联删除备份、账号切换不泄露其他数据集、清除墓碑与上传/授权并发竞态测试。
+- 恢复挑战单次消费、授权过期/撤销及 cleared 墓碑阻断恢复的测试。
 
