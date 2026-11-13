@@ -179,7 +179,7 @@
       }
       const reply = "你提出的重点可以拆成两个判断：一是目标是否一致，二是交接是否有明确完成条件。作者在当前单元强调的是两者共同作用，而不是单纯增加沟通动作。";
       appendMessage({ role: "agent", text: reply, citation: state.displayedUnit.id });
-      state.discussed = true;
+      if (state.viewMode === "mainline") state.discussed = true;
       setGenerationStatus(isRetry ? "重试完成 · 演示状态" : "生成完成 · 演示状态");
     }, 900);
   }
@@ -195,7 +195,7 @@
     }
     appendMessage({ role: "user", text: value, saved: true });
     input.value = "";
-    state.discussed = true;
+    if (state.viewMode === "mainline") state.discussed = true;
     generateReply(value);
   }
 
