@@ -71,7 +71,7 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
     expect(restored.restoredFromIndexedDB).toBe(true);
     expect(restored.citationCount).toBe(result.citationCount);
     await page.getByRole('button', { name: '定位到原文' }).click();
-    await expect(page.locator('#source')).toContainText('locator');
+    await expect(page.locator('#source')).toContainText('定位记录');
   });
 }
 
