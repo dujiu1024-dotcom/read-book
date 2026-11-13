@@ -396,6 +396,25 @@ test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async 
   expect(result.relationQueryMs.p95).toBeGreaterThan(0);
 });
 
+test('SQLite OPFS 检测缺失的关系记录，不静默修复或误报完整', async ({ page }, testInfo) => {
+  test.skip(!['chromium', 'chrome-stable', 'edge-stable'].includes(testInfo.project.name),
+    'SQLite OPFS 损坏检测仅在 Chromium 系列执行');
+  await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+  const result = await page.evaluate(async () => {
+    const { runSqlite, corruptSqliteDatasetForTest } = await import('/src/sqlite.js');
+    const datasetId = 'sqlite-corruption-fixture';
+    try { await runSqlite(10, datasetId); }
+    catch (error) { return { supported: false, error: error.message }; }
+    return { supported: true, check: await corruptSqliteDatasetForTest(datasetId) };
+  });
+  test.skip(!result.supported, 'SQLite OPFS VFS 不可用：' + result.error);
+  expect(result.check.integrity).toBe(false);
+  expect(result.check.relatedThreadCount).toBe(9);
+  expect(result.check.relationCount).toBe(9);
+});
+
 test('SQLite OPFS 多标签页串行打开同一数据库并受 Web Locks 写入协调', async ({ page }, testInfo) => {
   test.skip(!['chromium', 'chrome-stable', 'edge-stable'].includes(testInfo.project.name),
     'SQLite OPFS 多标签页主测在 Chromium 系列');
