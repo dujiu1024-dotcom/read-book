@@ -225,3 +225,61 @@ TextSage 最小验证：
 CI 第 4 次运行的 Core 测试、Expo App 测试、Reader 构建和 Expo 配置步骤均已通过；Android Debug APK 的 Gradle 构建仍在执行且尚无 Artifact。即使 APK 成功生成，也还需要真机安装、中文 EPUB 阅读、对话、流式响应、引用回跳和异常恢复验证。
 
 **当前仍不满足进入知行业务开发的放行条件。**
+
+
+## 9. 第 4 次 CI 最终结果与验证范围调整（2026-11-13）
+
+Run：43359000578  
+Workflow commit：b82608ef75458f0cdd797a4dcbb7126fe81a62e8  
+运行链接：https://github.com/dujiu1024-dotcom/read-book/actions/runs/43359000578
+
+最终结果：两个 Job 均 completed / success。
+
+### Quality Job
+
+- 依赖安装：成功。
+- Core tests：成功。
+- Expo App tests：成功。
+- Mobile app lint advisory：执行完成；该步骤为非阻断诊断项。
+- Reader 资源构建：成功。
+- Expo 公共配置检查：成功。
+
+### Android Build Job
+
+- 依赖安装：成功。
+- Reader 资源构建：成功。
+- Expo Android prebuild：成功。
+- Gradle assembleDebug：成功。
+- APK Artifact 上传：成功。
+
+Artifact：
+- 名称：readany-android-debug-fce44689e1377df1ae99a35e8e71d5e8b3a639d1
+- Artifact ID：14007664552
+- 大小：151,465,105 bytes（约 144.4 MiB）
+- 创建时间：2026-11-13 03:56:31 UTC
+- 到期时间：2026-11-20 03:56:19 UTC
+- SHA-256：75efda262d7fef500d467d1f3f0ac9acfb48f0a72493b02da8d220cc3adb16d4
+- 下载：通过上述 Actions 运行页面的 Artifacts 区域获取。
+
+### 结果解释
+
+本次证明固定 ReadAny commit 在 GitHub Linux Runner 上可以完成依赖安装、Core/App 自动化测试、Reader 构建、Expo 配置检查和 Android Debug APK 构建。
+
+本次不证明：
+- APK 已在真实设备安装或运行。
+- EPUB 阅读、对话、流式响应和引用回跳完整链路通过。
+- 中文真实书籍 RAG 质量达标。
+- ReadAny 可直接迁移到微信小程序。
+- 知行云端服务端已经实现或通过测试。
+
+### 用户确认后的验证范围调整
+
+用户明确表示当前不需要 Android/iOS 真机验证，未来可能采用微信小程序或服务号。因此：
+- Android/iOS 真机验证从当前阶段计划中暂停，不再作为当前放行条件。
+- APK 构建保留为 ReadAny 上游工程证据，不继续投入真机测试。
+- 不再把 React Native / Expo 视为知行已确定的用户端技术路线。
+- 后续优先验证平台无关的领域模型、API 契约、身份映射、Thread/Message 幂等与断线恢复、传输层抽象、Citation 定位和 RAG 真实书籍质量。
+- 微信小程序优先作为主入口候选，服务号作为辅助入口候选；实际账号资质、接口权限、审核规则和运行能力仍未验证。
+- 详细修订见 docs/validation-strategy.md 第 8 节。
+
+当前结论：ReadAny 上游工程构建验证通过；知行产品核心和目标入口尚未通过验证；仍不批准直接进入知行业务代码开发。
