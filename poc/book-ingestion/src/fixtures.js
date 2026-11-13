@@ -60,7 +60,7 @@ export function getFixture(id) {
         { text: 'Right column second line', x: 330, y: 700 },
         { text: 'Right column third line', x: 330, y: 660 }
       ]],
-      'pdf-3': [[{ text: 'Header - Sample Book', y: 770 }, { text: 'Body paragraph on page one.', y: 710 }, { text: 'Footer - Sample Book', y: 30 }], [{ text: 'Header - Sample Book', y: 770 }, { text: 'Body paragraph on page two.', y: 710 }, { text: 'Footer - Sample Book', y: 30 }]]
+      'pdf-3': [[{ text: 'Header - Sample Book', y: 770 }, { text: 'Body paragraph on page one.', y: 710 }, { text: 'Footer - Sample Book', y: 30 }, { text: '1', y: 15 }], [{ text: 'Header - Sample Book', y: 770 }, { text: 'Body paragraph on page two.', y: 710 }, { text: 'Footer - Sample Book', y: 30 }, { text: '2', y: 15 }]]
     };
     const bytes = pdfFixture(samples[id]);
     return { name: id + '.pdf', type: 'application/pdf', bytes };
