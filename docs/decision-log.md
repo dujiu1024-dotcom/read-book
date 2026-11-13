@@ -95,3 +95,13 @@
 - 验证要求：优先完成平台无关 API、身份映射、唯一 Thread、Message 幂等/断线恢复、传输层适配、Citation 定位契约和真实书籍 RAG 质量验证。小程序 SSE/WebSocket、文件阅读和平台审核待取得实际账号后验证。
 - 约束：不代表已决定采用原生小程序、跨端框架或 H5；不授权开始业务代码开发。ReadAny 上游 CI 和 Android APK 成功只证明其 Expo 工程构建能力，不能推断可直接迁移到小程序。
 - 依据：2026-11-13 平台网络能力和客服消息规则初审，详见验证策略第 8 节及后续平台专项记录。
+
+
+### D-020：ReadAny 不再作为知行小程序客户端的直接 Fork 起点
+
+- 状态：阶段性复核结论，客户端方案待验证
+- 决策：ReadAny 继续作为阅读引擎、数据结构、交互设计和部分 HTML/JavaScript 逻辑的参考项目；不再默认把其 Expo App 作为知行小程序客户端的直接 Fork 起点。
+- 源码依据：固定 commit 的 ReaderScreen 使用 React Native WebView、Expo Asset/DocumentPicker；reader.template.html 通过 window.ReactNativeWebView.postMessage 与宿主通信；local-file-server.ts 使用原生 Lighttpd 或 react-native-tcp-socket 在本机提供书籍文件和 Range 请求；ExtractorWebView 依赖隐藏 WebView 和原生桥接。
+- 影响：ReaderScreen、React Native WebView 桥接、本机文件服务器和 Expo 文件访问层不能直接迁移到小程序。Foliate/foliate-js 阅读引擎、与宿主无关的 HTML/CSS/JavaScript、EPUB CFI 和部分定位模型仍有研究复用价值。
+- 后续：比较小程序原生页面 + 共享引擎、小程序 web-view + 受控 H5 阅读器、独立小程序阅读组件三条路径；以 EPUB 加载、目录、选区、引用回跳、长文性能和文件访问作为验证指标。
+- 约束：当前不选定 A/B/C，不开始客户端开发。详细源码证据见 docs/readany-adaptation-matrix.md 第 13 节。
