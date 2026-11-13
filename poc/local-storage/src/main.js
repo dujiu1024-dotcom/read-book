@@ -19,6 +19,14 @@ $('capability').textContent = environment.opfs && environment.crossOriginIsolate
   ? '检测完成：OPFS 与跨源隔离可用。实际 SQLite VFS 初始化仍以运行结果为准。'
   : '检测完成：当前环境缺少 OPFS 或跨源隔离，SQLite OPFS 测试可能无法启动。';
 
+const saved = sessionStorage.getItem('lastPocDataset');
+if (saved) {
+  try {
+    window.lastPocDataset = JSON.parse(saved);
+    $('adapter').value = window.lastPocDataset.adapter;
+  } catch { sessionStorage.removeItem('lastPocDataset'); }
+}
+
 async function storageStatus() {
   const [estimate, persisted] = await Promise.all([
     navigator.storage?.estimate?.().catch(() => null),
@@ -53,6 +61,7 @@ $('run').addEventListener('click', async () => {
     show(result);
     $('status').textContent = result.integrity ? '完成：基础写入与查询通过。' : '失败：记录数量不一致。';
     window.lastPocDataset = { adapter, datasetId };
+    sessionStorage.setItem('lastPocDataset', JSON.stringify(window.lastPocDataset));
   } catch (error) {
     show({ adapter, datasetId, error: error.message, name: error.name });
     $('status').textContent = '执行失败；请保留错误信息，不要将该用例记为通过。';
