@@ -58,7 +58,7 @@ test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', 
   expect(result.writeMs.samples).toHaveLength(5);
   expect(result.queryMs.p50).toBeGreaterThan(0);
   expect(result.queryMs.p95).toBeGreaterThanOrEqual(result.queryMs.p50);
-  expect(result.relationCount).toBe(10000);
+  expect(result.relationCount).toBe(10000);\n  expect(result.relatedThreadCount).toBe(10);
   expect(result.relationQueryMs.p95).toBeGreaterThan(0);
 });
 
@@ -90,7 +90,7 @@ test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async 
   expect(result.writeMs.samples).toHaveLength(5);
   expect(result.queryMs.p50).toBeGreaterThan(0);
   expect(result.queryMs.p95).toBeGreaterThanOrEqual(result.queryMs.p50);
-  expect(result.relationCount).toBe(10000);
+  expect(result.relationCount).toBe(10000);\n  expect(result.relatedThreadCount).toBe(10);
   expect(result.relationQueryMs.p95).toBeGreaterThan(0);
 });
 
