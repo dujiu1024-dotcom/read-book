@@ -179,7 +179,8 @@ async function runIndexedDbUnlocked(count, datasetId, failureInjection) {
       relationSamples.push(query.relationQueryMs);
       finalCount = query.rows.length;
       relationCount = query.relationCount;
-      relatedThreadCount = query.relatedThreadCount;\n      longTextIntegrity = query.longTextIntegrity;
+      relatedThreadCount = query.relatedThreadCount;
+      longTextIntegrity = query.longTextIntegrity;
     }
     return {
       adapter: 'IndexedDB', datasetId, count: finalCount, relationCount,
