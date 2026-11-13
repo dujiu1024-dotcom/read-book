@@ -1,0 +1,12 @@
+{
+  "file": "embeddings/vectors.jsonl",
+  "format": "jsonl",
+  "embedding_model": "example-embedding",
+  "embedding_model_version": "1",
+  "embedding_dimension": 1024,
+  "normalization": "l2",
+  "distance_metric": "cosine",
+  "preprocessing_version": "0.1.0",
+  "chunk_id_mapping": "chunk_id",
+  "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}
