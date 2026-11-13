@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>知行 · 本地存储 PoC A</title>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">READ-BOOK / TECHNICAL POC A</p>
+      <h1>本地数据存储与浏览器可靠性</h1>
+      <p class="muted">独立技术验证，不连接知行正式业务数据。</p>
+    </header>
+    <section class="panel">
+      <h2>运行环境</h2>
+      <dl id="environment"></dl>
+      <p id="capability" role="status">正在检测浏览器能力…</p>
+    </section>
+    <section class="panel">
+      <h2>存储方案</h2>
+      <div class="controls">
+        <label>方案
+          <select id="adapter">
+            <option value="indexeddb">IndexedDB</option>
+            <option value="sqlite">SQLite WASM + OPFS</option>
+          </select>
+        </label>
+        <label>数据规模
+          <select id="count">
+            <option value="1000">1,000 条消息</option>
+            <option value="10000">10,000 条消息</option>
+            <option value="100000">100,000 条消息</option>
+          </select>
+        </label>
+        <button id="run">执行写入与查询测试</button>
+        <button id="integrity" class="secondary">完整性检查</button>
+      </div>
+      <p id="status" role="status">等待执行。</p>
+      <pre id="output" aria-live="polite"></pre>
+    </section>
+    <section class="panel">
+      <h2>测试说明</h2>
+      <ul>
+        <li>每次运行使用独立测试数据集 ID，不读取正式用户数据。</li>
+        <li>消息规模：1k / 10k / 100k；记录写入、关联查询耗时和存储用量。</li>
+        <li>SQLite 运行于专用 Worker；OPFS 不可用时明确失败，不静默切换为内存数据库。</li>
+        <li>浏览器配额、持久化申请和多标签页锁状态仅记录能力与结果，不推断永久保存。</li>
+      </ul>
+    </section>
+  </main>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
