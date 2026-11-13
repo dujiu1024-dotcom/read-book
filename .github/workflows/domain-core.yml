@@ -1,0 +1,30 @@
+name: Domain core tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/domain-core/**"
+      - ".github/workflows/domain-core.yml"
+  pull_request:
+    paths:
+      - "packages/domain-core/**"
+      - ".github/workflows/domain-core.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run domain core tests
+        working-directory: packages/domain-core
+        run: npm test
