@@ -134,14 +134,14 @@ async function queryDataset(db, datasetId, count) {
         const note = result.notes.find((item) => item.readingRoundId === round?.id);
         const memory = result.memories.find((item) => item.noteId === note?.id);
         const source = result.sources.find((item) => item.id === note?.sourceId);
-        return Boolean(round && note && memory && source);
+        return Boolean(round && note?.threadId === thread.id && memory?.threadId === thread.id && memory?.sourceId === note.sourceId && source);
       }).length;
       const thread = result.threads.find((item) => item.id === threadId);
       const round = result.rounds.find((item) => item.threadId === threadId);
       const note = result.notes.find((item) => item.readingRoundId === round?.id);
       const memory = result.memories.find((item) => item.noteId === note?.id);
       const source = result.sources.find((item) => item.id === note?.sourceId);
-      const related = Boolean(thread && round && note && memory && source);
+      const related = Boolean(thread && round && note?.threadId === thread.id && memory?.threadId === thread.id && memory?.sourceId === note.sourceId && source);
       resolve({ relationCount: related ? result.messages.length : 0, relatedThreadCount });
     };
     tx.onerror = () => reject(tx.error);
