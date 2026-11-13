@@ -171,7 +171,7 @@ test('事件重连回放保持 event_id 唯一且序号连续', async () => {
     const readEvents = async (after) => (await fetch(base + '/api/generations/' + receipt.generation_id + '/events?after=' + after)).text();
     const firstReplay = await readEvents(0);
     const reconnectReplay = await readEvents(2);
-    const parse = (raw) => [...raw.matchAll(/data: (\\{[^\\n]+\\})/g)].map((match) => JSON.parse(match[1]));
+    const parse = (raw) => [...raw.matchAll(/data: (\{[^\n]+\})/g)].map((match) => JSON.parse(match[1]));
     const all = parse(firstReplay);
     const resumed = parse(reconnectReplay);
     expect(all.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7]);
