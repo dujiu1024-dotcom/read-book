@@ -1,3 +1,13 @@
+function base64ToBytes(value) {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+async function sha256Base64(bytes) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  let binary = '';
+  for (const byte of digest) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 export class MockBackupServer {
   constructor() {
     this.sessions = new Map();
@@ -19,15 +29,24 @@ export class MockBackupServer {
     const session = this.sessions.get(backupId);
     if (!session || session.state !== 'uploading') throw new Error('上传会话不存在或已结束');
     if (this.tombstones.has(session.manifest.datasetId)) throw new Error('数据集已清除，拒绝上传');
+    if (!Number.isInteger(chunk.chunkIndex) || chunk.chunkIndex < 0 || chunk.chunkIndex >= session.manifest.chunkCount) throw new Error('分块序号非法');
     session.parts.set(chunk.chunkIndex, chunk);
   }
-  complete(backupId) {
+  async complete(backupId) {
     const session = this.sessions.get(backupId);
     if (!session) throw new Error('上传会话不存在');
     if (this.tombstones.has(session.manifest.datasetId)) throw new Error('清除墓碑优先，拒绝完成上传');
     if (session.parts.size !== session.manifest.chunkCount) throw new Error('分块不完整');
+    const ordered = [...session.parts.values()].sort((a, b) => a.chunkIndex - b.chunkIndex);
+    for (let i = 0; i < ordered.length; i++) {
+      const chunk = ordered[i];
+      const metadata = session.manifest.chunks.find((item) => item.chunkIndex === i);
+      if (!metadata || chunk.chunkIndex !== i) throw new Error('分块序号或 Manifest 不匹配');
+      if (await sha256Base64(base64ToBytes(chunk.ciphertext)) !== metadata.ciphertextHash) throw new Error('服务端密文哈希校验失败');
+    }
+    if (this.tombstones.has(session.manifest.datasetId)) throw new Error('清除墓碑优先，拒绝完成上传');
     session.state = 'committed';
-    this.backups.set(backupId, { manifest: session.manifest, chunks: [...session.parts.values()] });
+    this.backups.set(backupId, { manifest: session.manifest, chunks: ordered });
     return { backupId, state: 'committed' };
   }
   get(backupId) {
