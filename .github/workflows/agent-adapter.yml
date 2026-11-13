@@ -1,0 +1,31 @@
+name: Agent adapter contract tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "packages/agent-adapter/**"
+      - ".github/workflows/agent-adapter.yml"
+  pull_request:
+    paths:
+      - "packages/agent-adapter/**"
+      - ".github/workflows/agent-adapter.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run agent adapter contract tests
+        working-directory: packages/agent-adapter
+        run: npm test
