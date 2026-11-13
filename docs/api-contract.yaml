@@ -147,6 +147,8 @@ paths:
       tags: [Entitlements]
       summary: 为指定书籍版本领取或购买访问权益
       operationId: createEntitlement
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -371,6 +373,9 @@ paths:
       tags: [Backups]
       summary: 下载加密备份密文
       operationId: downloadBackup
+      security:
+        - bearerAuth: []
+        - recoveryAuthorization: []
       parameters:
         - $ref: '#/components/parameters/BackupId'
       responses:
@@ -443,9 +448,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [authorization_id, dataset_id, expires_at]
+                required: [authorization_id, authorization_token, dataset_id, expires_at]
                 properties:
                   authorization_id: { type: string, format: uuid }
+                  authorization_token: { type: string, description: 仅返回一次的短时授权令牌；客户端仅在恢复流程内存中使用 }
                   dataset_id: { type: string, format: uuid }
                   expires_at: { type: string, format: date-time }
         '401': { $ref: '#/components/responses/ApiError' }
