@@ -372,9 +372,10 @@ export async function createBackupHttpServer({ dataDir }) {
     const downloadMatch = /^\/v1\/download\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
     if (method === 'GET' && downloadMatch) {
       const token = downloadMatch[1];
-      const ticket = state.downloadTickets[tokenHash(token)];
+      const downloadHash = tokenHash(token);
+      const ticket = state.downloadTickets[downloadHash];
       if (!ticket) {
-        if (Object.values(state.tombstones).some((item) => (item.backupIds || []).includes(url.pathname.split('/').at(-1)))) {
+        if (Object.values(state.tombstones).some((item) => (item.downloadTicketHashes || []).includes(downloadHash))) {
           fail(410, '下载备份所属数据集已清除');
         }
         fail(401, '下载票据无效或已过期');
@@ -394,9 +395,13 @@ export async function createBackupHttpServer({ dataDir }) {
           ...Object.values(state.backups).filter((item) => item.manifest.datasetId === datasetId).map((item) => item.manifest.backupId),
           ...Object.values(state.sessions).filter((item) => item.datasetId === datasetId).map((item) => item.backupId)
         ];
+        const downloadTicketHashes = Object.entries(state.downloadTickets)
+          .filter(([, item]) => item.datasetId === datasetId)
+          .map(([hash]) => hash);
         state.tombstones[datasetId] = {
           clearedAt: Date.now(),
           backupIds: [...new Set(backupIds)],
+          downloadTicketHashes,
           pendingBackupIds: [...new Set(backupIds)],
           purged: false
         };
