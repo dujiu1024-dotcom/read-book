@@ -129,7 +129,7 @@ def json_and_schema_check() -> tuple[int, int, int]:
     schema_by_example = {path.name.removesuffix(".schema.json"): path for path in schemas}
     for example in examples:
         key = example.name.removesuffix(".example.json")
-        schema_path = schema_by_example.get(key + ".schema.json")
+        schema_path = schema_by_example.get(key)
         if schema_path is None:
             errors.append(f"{example.relative_to(ROOT)}: no matching {key}.schema.json found")
             continue
