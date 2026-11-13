@@ -55,3 +55,27 @@ test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', 
   expect(result.relationCount).toBe(10000);
   expect(result.relationQueryMs.p95).toBeGreaterThan(0);
 });
+
+test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'SQLite OPFS 100k 性能基准仅在 Chromium 主测');
+  test.setTimeout(120_000);
+  await page.goto('/');
+  const capability = await page.evaluate(() => ({
+    opfs: Boolean(navigator.storage?.getDirectory),
+    isolated: window.crossOriginIsolated
+  }));
+  test.skip(!capability.opfs || !capability.isolated, '当前运行环境不具备 OPFS/跨源隔离，保留明确失败记录');
+  await page.locator('#adapter').selectOption('sqlite');
+  await page.locator('#count').selectOption('100000');
+  await page.getByRole('button', { name: '执行写入与查询测试' }).click();
+  await expect(page.locator('#status')).toContainText('完成', { timeout: 110_000 });
+  const result = JSON.parse(await page.locator('#output').textContent());
+  expect(result.count).toBe(100000);
+  expect(result.integrity).toBe(true);
+  expect(result.runs).toBe(5);
+  expect(result.writeMs.samples).toHaveLength(5);
+  expect(result.queryMs.p50).toBeGreaterThan(0);
+  expect(result.queryMs.p95).toBeGreaterThanOrEqual(result.queryMs.p50);
+  expect(result.relationCount).toBe(10000);
+  expect(result.relationQueryMs.p95).toBeGreaterThan(0);
+});
