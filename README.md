@@ -19,6 +19,8 @@
 - [用户认知记忆与读书笔记](docs/user-memory.md)
 - [本地数据、加密备份与账号分离](docs/data-storage-security.md)
 - [标准书籍包与云端验收协议](docs/book-package-ingestion-contract.md)
+- [书籍包 V1.0.0 manifest Schema](schemas/book-package/1.0.0/manifest.schema.json)
+- [书籍包校验器](tools/book_package_validator/README.md)
 - [决策记录](docs/decision-log.md)
 - [项目审查与验证策略](docs/project-audit.md)、[验证策略](docs/validation-strategy.md)
 - [PC Web 详细技术设计](docs/pc-web-detailed-design.md)
