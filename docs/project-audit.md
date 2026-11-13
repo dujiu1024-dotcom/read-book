@@ -155,3 +155,14 @@ P0/P1 的结果明确后，提交最终技术方案、工作量和开发计划�
 - 第一阶段转为验证标准浏览器环境下的本地持久化能力，优先评估 IndexedDB 与 OPFS 的组合；具体数据库封装、加密和恢复能力仍需 PoC。
 - PC 窄屏布局是呈现要求，不代表使用微信小程序运行时，也不意味着未来小程序适配已经完成。
 - ReadAny 继续作为阅读引擎和宿主无关模块参考，不恢复 Expo 原生 App 作为第一阶段客户端的路线。
+
+
+## PC Web 详细设计阶段复核（2026-11-13）
+
+- 第一阶段入口：PC 浏览器 Web，窄屏居中单列；小程序和 Expo 不属于当前实现路线。
+- 新增详细设计：docs/pc-web-detailed-design.md、docs/pc-web-poc-plan.md、docs/pc-web-interaction-spec.md。
+- 当前本地存储建议：优先 PoC SQLite WASM + OPFS，IndexedDB 作为对照/回退；尚未实测，不是最终技术选型。
+- 当前主测浏览器建议：Chrome / Edge 桌面端；Firefox / Safari 作为兼容评估对象。
+- 公开资料已核查浏览器配额/持久化、OPFS VFS、IndexedDB 事务和 Web Crypto API；没有知行运行时实现，因此不能宣称本地数据库、加密备份、恢复、文件阅读或流式对话已通过。
+- 下一阶段需要用户批准独立技术 PoC 工程；PoC 不包含知行业务页面、正式业务 API 或生产数据迁移。
+- 详细状态见 docs/review-and-validation-report.md 第 9 节及 docs/validation-strategy.md 第 14 节。
