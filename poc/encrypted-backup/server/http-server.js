@@ -353,7 +353,12 @@ export async function createBackupHttpServer({ dataDir }) {
         if (missing.length) fail(409, '分块不完整');
         assertNotCleared(session.datasetId);
         for (let index = 0; index < session.manifest.chunkCount; index++) {
-          const ciphertext = await readFile(chunkPath(backupId, index), 'utf8');
+          let ciphertext;
+          try { ciphertext = await readFile(chunkPath(backupId, index), 'utf8'); }
+          catch (error) {
+            if (error.code === 'ENOENT') fail(409, '服务端分块文件缺失，请重新上传');
+            throw error;
+          }
           const metadata = session.manifest.chunks[index];
           if (sha256Base64(decodeBase64(ciphertext)) !== metadata.ciphertextHash) fail(400, '服务端密文哈希校验失败');
         }
