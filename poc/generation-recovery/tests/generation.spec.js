@@ -183,3 +183,40 @@ test('事件重连回放保持 event_id 唯一且序号连续', async () => {
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+
+test('接近自然完成时取消仍产生唯一终态，不暴露最终结果', async () => {
+  const port = 4191;
+  const stateDir = await mkdtemp(join(tmpdir(), 'read-book-cancel-race-'));
+  const child = launchServer(port, join(stateDir, 'state.json'));
+  try {
+    await waitForHealth(port, child);
+    const base = `http://127.0.0.1:${port}`;
+    const created = await fetch(base + '/api/generations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'cancel-race-key' },
+      body: JSON.stringify({ message: 'cancel race fixture' })
+    });
+    const receipt = await created.json();
+    let state;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      state = await (await fetch(base + '/api/generations/' + receipt.generation_id)).json();
+      const events = await (await fetch(base + '/api/generations/' + receipt.generation_id + '/events?after=0')).text();
+      const deltaCount = [...events.matchAll(/"type":"delta"/g)].length;
+      if (deltaCount >= 4) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const cancelled = await fetch(base + '/api/generations/' + receipt.generation_id + '/cancel', { method: 'POST' });
+    expect((await cancelled.json()).status).toBe('cancelled');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    state = await (await fetch(base + '/api/generations/' + receipt.generation_id)).json();
+    expect(state.status).toBe('cancelled');
+    expect(state.final_result).toBeNull();
+    const events = await (await fetch(base + '/api/generations/' + receipt.generation_id + '/events?after=0')).text();
+    expect([...events.matchAll(/event: completed/g)]).toHaveLength(0);
+    expect([...events.matchAll(/event: cancelled/g)]).toHaveLength(1);
+  } finally {
+    await stopServer(child);
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
