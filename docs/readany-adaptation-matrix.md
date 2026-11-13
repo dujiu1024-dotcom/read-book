@@ -14,9 +14,9 @@ ReadAny 当前形态与知行的关键差异：
 
 | 维度 | ReadAny 当前实现 | 知行目标 | 结论 |
 |---|---|---|---|
-| 数据权威 | SQLite 本地数据库 + 同步适配器 | 云端 PostgreSQL 权威，本地 SQLite 缓存 | 必须改造 |
+| 数据权威 | SQLite 本地数据库 + 同步适配器 | 保留本地为用户数据主存储；服务器仅加密备份 | 需重新评估 |
 | Thread | 一书可有多个 Thread，用户可新建/切换/删除 | 一个 user + 一本 book 唯一 Thread | 必须改造 |
-| Message | 直接写本地 SQLite，按本地线程读取 | 云端正式持久化，客户端缓存和离线待发送 | 必须改造 |
+| Message | 直接写本地 SQLite，按本地线程读取 | 本地正式持久化；服务器仅接收模型请求所需上下文和加密备份 | 需重新评估 |
 | 模型调用 | App 配置模型供应商、客户端发起调用 | 云端统一调用模型，密钥不下发客户端 | 必须替换调用边界 |
 | RAG | 本地切片、Embedding、SQLite/向量库检索 | 云端正式解析、向量化、检索；客户端不承担权威处理 | 核心能力迁移到云端 |
 | 记忆 | Thread 内摘要压缩，写回 Thread | 用户认知记忆独立实体、来源可追溯、观点可演进 | 必须改造 |
@@ -57,7 +57,7 @@ ReadAny 当前形态与知行的关键差异：
 | `packages/app-expo/src/stores/library-store.ts` | 改造 | 书城/书架从 API 获取；本地只缓存元数据和下载状态 | P1 |
 | `packages/app-expo/src/stores/reader-store.ts` | 优先保留 | 阅读器 UI 状态与 CFI 导航；禁止将阅读位置作为 Agent 自动续读指令 | P1 |
 | `packages/app-expo/src/stores/reading-session-store.ts` | 删除或降为纯 UI 状态 | 不形成阅读任务、进度目标或对话触发条件 | P2 |
-| `packages/app-expo/src/stores/notebook-store.ts` / Note 相关 | 改造 | API 正式笔记、revision、冲突处理；本地仅缓存 | P1 |
+| `packages/app-expo/src/stores/notebook-store.ts` / Note 相关 | 改造 | 本地正式笔记与版本记录；服务器只保存加密备份 | 需重新评估 |
 
 ## 3. 移动端工程与页面
 
@@ -368,7 +368,7 @@ packages/app-expo/src/
 - [ ] 建立认证和 API Client。
 - [ ] 建立远端/本地 Repository 接口。
 - [ ] 建立 Book、Thread、Message DTO。
-- [ ] 本地 SQLite 缓存与云端 ID 映射。
+- [ ] 本地数据集、书籍版本和备份 manifest 的 ID 映射与恢复协议。
 - [ ] 先不改 Agent/RAG 内部逻辑。
 
 验收：登录后可从云端获取书籍和书架；无网络时能读取已缓存元数据。
