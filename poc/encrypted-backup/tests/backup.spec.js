@@ -88,24 +88,48 @@ test('Mock 服务端在提交前拒绝被篡改的密文块', async ({ page }) =
 test('全量后可创建有序增量备份并验证父链', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {
-    const { createEncryptedBackup, decryptBackup } = await import('/src/crypto.js');
+    const { createDatasetKeyMaterial, createEncryptedBackup, decryptBackup } = await import('/src/crypto.js');
     const { MockBackupServer } = await import('/src/mock-server.js');
     const server = new MockBackupServer();
-    const full = await createEncryptedBackup({ datasetId: 'chain-dataset', sequence: 1, payload: { version: 1, records: ['a'] } });
+    const keyMaterial = createDatasetKeyMaterial('chain-dataset');
+    const full = await createEncryptedBackup({ datasetId: 'chain-dataset', sequence: 1, payload: { version: 1, records: ['a'] }, keyMaterial });
     server.init(full.manifest, 'full-key');
     for (const chunk of full.chunks) server.putPart(full.manifest.backupId, chunk);
     await server.complete(full.manifest.backupId);
-    const incremental = await createEncryptedBackup({ datasetId: 'chain-dataset', sequence: 2, parentBackupId: full.manifest.backupId, payload: { changes: [{ id: 'b', op: 'insert' }] } });
+    const incremental = await createEncryptedBackup({ datasetId: 'chain-dataset', sequence: 2, parentBackupId: full.manifest.backupId, payload: { changes: [{ id: 'b', op: 'insert' }] }, keyMaterial });
     server.init(incremental.manifest, 'incremental-key');
     for (const chunk of incremental.chunks) server.putPart(incremental.manifest.backupId, chunk);
     await server.complete(incremental.manifest.backupId);
     const remote = server.get(incremental.manifest.backupId);
-    const restored = await decryptBackup({ ...remote, recoveryKey: incremental.recoveryKey });
-    return { type: remote.manifest.backupType, parent: remote.manifest.parentBackupId, restored };
+    const restored = await decryptBackup({ ...remote, recoveryKey: keyMaterial.recoveryKey });
+    const restoredFull = await decryptBackup({ ...server.get(full.manifest.backupId), recoveryKey: keyMaterial.recoveryKey });
+    return {
+      type: remote.manifest.backupType, parent: remote.manifest.parentBackupId, restored,
+      sameRecoveryCredential: full.recoveryKey === incremental.recoveryKey,
+      restoredFull: restoredFull.records[0]
+    };
   });
   expect(result.type).toBe('incremental');
   expect(result.parent).toBeTruthy();
   expect(result.restored.changes[0].id).toBe('b');
+  expect(result.sameRecoveryCredential).toBe(true);
+  expect(result.restoredFull).toBe('a');
+});
+
+
+test('数据集密钥材料不能跨数据集复用', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createDatasetKeyMaterial, createEncryptedBackup } = await import('/src/crypto.js');
+    const keyMaterial = createDatasetKeyMaterial('dataset-a');
+    try {
+      await createEncryptedBackup({
+        datasetId: 'dataset-b', sequence: 1, payload: { value: 'cross-dataset' }, keyMaterial
+      });
+      return false;
+    } catch { return true; }
+  });
+  expect(result).toBe(true);
 });
 
 test('增量备份拒绝缺失父备份、跨数据集父备份和错误序号', async ({ page }) => {
