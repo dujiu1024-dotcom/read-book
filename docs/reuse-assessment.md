@@ -240,3 +240,26 @@ ReadAny Fork（手机端）
 - 中文/英文/多语言 Embedding 需要使用同一套书籍样本评测，不根据模型名称直接拍板。
 - PDF 解析必须验证页码、双栏、脚注、表格、图片、扫描件；EPUB 必须验证章节和 CFI；TXT 必须验证章节推断与段落边界。
 - 许可证和第三方依赖义务继续记录；当前共享使用定位不把许可证当作技术选型的硬性排除项。
+
+
+## 8. 用户端平台调整后的复用结论修订（2026-11-13）
+
+本节修订前文“ReadAny 作为手机端 Fork 起点”的建议，依据用户提出的微信小程序/服务号候选入口，以及对固定 ReadAny commit 的 ReaderScreen、reader.template.html、local-file-server.ts、ExtractorWebView.tsx 和 app-expo/package.json 的进一步审查。
+
+### 修订结论
+
+- ReadAny Expo App 不再作为知行最终用户端的默认 Fork 起点。
+- ReadAny 继续作为阅读引擎、Foliate/foliate-js、EPUB 定位、Citation/Chunk 数据结构和部分通用 HTML/JavaScript 的参考。
+- React Native 页面、WebView bridge、本机 HTTP 文件服务器、Expo 文件访问和原生模块不能直接迁移到微信小程序。
+- 书籍对话 UI 的交互模式可以借鉴，但需由所选客户端平台重新实现。
+- 云端 FastAPI、PostgreSQL、对象存储、Agent/RAG 和书籍处理引擎仍可按平台无关方向继续评估，不受客户端路线变化影响。
+
+### 需要重新验证的阅读器路线
+
+1. 小程序原生页面 + 共享阅读引擎。
+2. 小程序 web-view + 受控 H5 阅读器。
+3. 独立小程序 EPUB/PDF 阅读组件。
+
+在真实小程序环境验证 EPUB 加载、章节导航、选区、Citation 回跳、长书性能和文件访问前，不选定其中任何方案。
+
+本节优先级高于本文第 1、2、4、5、6 节中将 Expo App 描述为直接客户端底座的建议。ReadAny 上游 CI 构建成功仅证明其 Expo 工程可构建，不证明其客户端能迁移至小程序。
