@@ -1,100 +1,93 @@
-# PoC A：PC Web 本地数据存储与浏览器可靠性
+# PoC A：本地存储与浏览器可靠性
 
-本目录是完全独立的技术验证工程，不属于知行正式业务代码，不连接正式账号、用户数据或服务端 API。
+本目录是独立技术验证，不是 read-book 正式业务实现，也不代表已完成生产级选型。
 
-## 环境与固定版本
+## 目标与数据模型
 
-- Node.js：22.12.0 或更高的 22.x/兼容 LTS。
-- SQLite WASM：`@sqlite.org/sqlite-wasm@3.54.1-build1`。
-- Playwright：`@playwright/test@1.65.0`。
-- Vite：`7.2.2`。
-- 浏览器主测：Chromium（Chrome/Edge 需分别记录实际版本）；Firefox/WebKit 仅做兼容探测，不等同于 Safari/Edge 实际产品浏览器验收。
+对 IndexedDB 与 SQLite WASM + OPFS 两条路线使用相同的六实体模型和固定测试数据：
 
-## 启动
+- Thread：阅读对话线程
+- Message：用户与 Agent 消息
+- ReadingRound：一次阅读轮次
+- Note：阅读笔记
+- Memory：认知记忆
+- Source：书籍/原文来源
+
+关系：Thread→ReadingRound→Note→Memory，Note→Source，Message→Thread。
+
+IndexedDB schema 当前版本为 v4：
+- Message：datasetId 索引、threadId+sequence 唯一复合索引。
+- ReadingRound：datasetId 索引、threadId+sequence 唯一复合索引；同一 Thread 可有多个不同序号轮次，不允许重复序号。
+- Note、Memory：分别约束 ReadingRound、Note 的唯一归属。
+- v1 与 v3 数据库升级至 v4 的迁移探针验证旧 Thread/Message 数据保留、索引修正和唯一约束语义。
+
+SQLite 使用六张关系表、外键、CHECK、唯一约束和多表 JOIN。OPFS 文件使用独立的 v2 文件名，避免旧两实体 PoC 数据库结构冲突。
+
+## 运行方式
+
+在本目录执行：
 
 ```bash
-cd poc/local-storage
 npm install
-npx playwright install chromium firefox webkit
 npm run dev
-```
-
-打开终端显示的本地地址。SQLite OPFS 必须在 Worker 中运行；Vite 已配置 COOP/COEP 响应头。不要通过 file:// 打开页面。
-
-## 自动化测试
-
-```bash
-npm test
 npm run build
+npm test
 ```
 
-测试覆盖基础 IndexedDB 写入、查询、刷新后重开，以及 Chromium 下 SQLite OPFS 的启动/明确失败行为。浏览器测试需要安装对应 Playwright 浏览器。
+CI 安装 Playwright Chromium、Firefox、WebKit，以及 Google Chrome Stable、Microsoft Edge Stable。测试服务器通过 localhost 提供 COOP/COEP 响应头，以满足 Worker 与 OPFS 环境要求。
 
-## 当前实现范围与限制
+## 写入协调与失败策略
 
-- 两种存储方案现使用相同的六实体最小领域关系：Thread、Message、ReadingRound、Note、Memory、Source；测试夹具建立 Thread→ReadingRound→Note→Memory 与 Note→Source 关系，Message 归属 Thread。
-- IndexedDB 使用六个 Object Store、datasetId 索引、thread/sequence 唯一索引，以及 readingRoundId/noteId 等关系索引。
-- SQLite 使用独立 Worker、OPFS VFS、六张关系表、外键、CHECK、唯一约束及关系索引；六实体验证使用独立 v2 数据库文件，避免与旧两实体 PoC 文件发生结构冲突。
-- 性能界面支持 1k、10k、100k 消息；每次规模执行 5 轮，分别记录写入、数据集查询和跨 Thread、ReadingRound、Note、Memory、Source 关系查询的 P50/P95 与原始样本。IndexedDB 使用 datasetId 与复合索引；SQLite 使用多表 JOIN。内存字段仅在浏览器暴露 performance.memory 时提供，存储体积由 Storage Estimate 观测。
-- IndexedDB 和 SQLite 分别使用不同数据库，测试运行时一次只选择一个写入；两者不是同一数据集的双写主库。
-- OPFS 不可用时 SQLite 方案明确失败，不降级为内存数据库。
-- `persist()` 是浏览器申请，不代表永久存储；申请结果和配额仅作为观测数据。
-- 已将 Web Locks 单写者协调接入 IndexedDB 与 SQLite OPFS 基准写入口：无法获得写锁的标签页会在执行写入前失败并提示只读降级；释放后可由另一标签页获得写锁。BroadcastChannel 广播锁状态。浏览器不支持 Web Locks 时会显式在结果中标注 `unsupported`，不能据此宣称多标签页写安全。
+- Web Locks 对同一 dataset 提供单写者协调。
+- BroadcastChannel 广播标签页状态。
+- 无 Web Locks 时写入 fail-closed：拒绝写入并保持只读，不退化为无锁写入。
+- IndexedDB 的整批数据集替换在同一个 readwrite transaction 内完成；事务中止时保留上一次已提交数据。
+- SQLite 使用独立 Worker、OPFS VFS 与 BEGIN IMMEDIATE 事务。
+- OPFS VFS 不可用时明确报错，不降级到内存 SQLite，避免产生第二份数据源。
+- Worker 终止后重新初始化，验证 OPFS 数据仍可读取。
 
-## 测试结果状态
+## 自动化覆盖范围
 
-| 验收项 | 状态 | 说明 |
-|---|---|---|
-| 工程独立运行 | 待本地执行 | 尚未生成 lockfile |
-| IndexedDB 1k/10k/100k | 六实体 100k 自动化通过 | Run 43428146017：Chromium 五轮六实体写入/查询/Thread→Source 关联查询通过（1.4 分钟）；最新十条关系链完整性检查待 CI |
-| SQLite OPFS 1k/10k/100k | CI 环境未具备 VFS | Run 43424902738：Worker 中 `sqlite3.opfs` 不可用；不能标记通过，新增实际 VFS 探测并跳过机制，需在支持 OPFS 的 Chrome/Edge 环境单独实测 |
-| Chrome 与 Edge 实测 | 未执行 | Playwright Chromium 不等于两个正式浏览器版本验收 |
-| 六实体关系与关联查询 | CI 通过 | Run 43428146017：IndexedDB 校验 10 条完整 Thread→Source 关系链及跨实体 ID 一致性；SQLite 多表 JOIN 已实现，但 OPFS VFS 未在 CI 暴露 |
-| 多标签页单写者与锁交接 | CI 通过 | Run 43424902738：Chromium 跨标签页竞争、阻止第二标签页写入、释放后交接并成功写入通过 |
-| Worker 崩溃/页面关闭恢复 | 未执行 | 需故障注入 |
-| 配额不足与 persist 拒绝 | 未执行 | 需模拟与真实浏览器测试 |
-| 迁移与批量一致性快照 | 未实现 | 后续迭代 |
-| P50/P95、内存、存储体积 | 已加入采集 | 尚未在目标 Chrome/Edge 环境完成实测与报告 |
+最新完整 CI：Run 43433647454。
 
-## 六实体模型 Chromium CI 100k 基准结果（Run 43428146017）
+- 85 项测试：53 passed、32 skipped、0 failed。
+- IndexedDB：1k、10k、100k 数据规模；五轮写入/查询，输出 P50/P95。
+- SQLite OPFS：1k、10k、100k 数据规模；五轮写入/查询，输出 P50/P95。
+- Chrome Stable、Edge Stable、Playwright Chromium、Firefox、WebKit 的 IndexedDB 基础恢复、迁移、事务回滚与 fail-closed 检查。
+- Chrome Stable、Edge Stable 与 Chromium 的 SQLite OPFS 基础恢复、完整性、唯一约束和多标签页串行打开。
+- 浏览器进程完全关闭后重新打开：在 Playwright Chromium 持久化配置目录中验证 IndexedDB 与 SQLite OPFS 数据恢复。
+- 配额不足：通过 Chromium CDP 降低 origin quota，验证替换事务失败且旧数据仍完整。
+- persist() 被拒绝、站点数据清理、长文本往返、重复唯一键拒绝、缺失关联记录检测。
+- v1/v3→v4 IndexedDB schema migration。
+- 多标签页单写者、只读降级与锁交接。
 
-测试环境：GitHub Actions Linux headless Chromium；100,000 条消息；每轮同时写入 10 条 Thread、10 条 ReadingRound、10 条 Note、10 条 Memory、1 条 Source；五轮；Web Locks 单写者协调已启用。
+32 项 skipped 是按项目设计的能力/主测范围跳过：例如 100k 性能基准只在 Playwright Chromium 执行，Chromium CDP 配额注入不在 Firefox/WebKit 执行，浏览器进程重启只在 Playwright Chromium 执行；SQLite OPFS 不支持的浏览器不执行 SQLite 写入测试。Skipped 不计为通过。
 
-| 指标 | P50 | P95 |
-|---|---:|---:|
-| IndexedDB 六实体批量写入 | 8,209 ms | 9,234 ms |
-| IndexedDB 数据集查询（getAll） | 3,336 ms | 5,135 ms |
-| IndexedDB Thread→Source 关联查询 | 355 ms | 582 ms |
+## 性能结果
 
-- JS Heap：约 103 MB。
-- Storage Estimate：usage 约 114.0 MB；quota 约 10.85 GB；usageDetails.indexedDB 约 114.0 MB。
-- persisted() 与 persist() 均为 false：当前 CI 环境未授予持久化存储权限。
-- SQLite OPFS 100k：Worker 未暴露 OPFS VFS，明确跳过，没有 SQLite 性能数据。
-- 本次六实体性能基准与十条 Thread→Source 关系链完整性、跨实体 ID 一致性检查均通过；Run 43428146017 构建成功，Chromium 15 项中 6 通过、9 按浏览器能力/主测范围跳过，无失败；100k 基准用时约 2.7 分钟。
+测试环境：GitHub Actions Linux headless。每项基准五轮，以下为 Run 43433647454 的结果。
 
-## 两实体模型历史基线（Run 43425500315；不代表当前六实体模型）
+| 适配器 / 数据量 | 写入 P50 / P95 | 数据集查询 P50 / P95 | 关联查询 P50 / P95 |
+|---|---:|---:|---:|
+| IndexedDB / 10k | 4.83 / 5.66 s | 557 / 663 ms | 61 / 82 ms |
+| IndexedDB / 100k | 33.09 / 46.00 s | 3.29 / 5.01 s | 356 / 588 ms |
+| SQLite OPFS / 10k | 2.67 / 2.70 s | 2.64 / 2.94 ms | 2.54 / 2.86 ms |
+| SQLite OPFS / 100k | 33.58 / 35.10 s | 186 / 196 ms | 1.52 / 1.60 s |
 
-测试环境：GitHub Actions Linux headless Chromium；100,000 条消息；5 轮写入/查询；Web Locks 单写者协调已启用。数值为本次运行观测值，不代表 Chrome/Edge 桌面稳定版。
+IndexedDB 100k 测试的 JS Heap 约 103 MB，IndexedDB usage 约 113.8 MB。CI 中 persisted() 与 persist() 均为 false。
 
-| 指标 | P50 | P95 |
-|---|---:|---:|
-| IndexedDB 批量写入 | 5,356 ms | 5,853 ms |
-| IndexedDB 数据集查询（getAll） | 2,550 ms | 3,640 ms |
-| IndexedDB Thread 关联查询 | 271 ms | 296 ms |
+这些指标是 PoC 固定夹具的测量值，不构成存储选型结论。数据集查询和关联查询的实现形态不同；真实产品负载、设备性能、OPFS/IndexedDB 配额策略及桌面浏览器差异都可能改变结果。尤其 SQLite 的数据集查询更快，但当前 Thread 关联查询慢于 IndexedDB。不能仅凭这一组 headless CI 数据定型。
 
-- JS Heap：约 103 MB（运行结束时 performance.memory.usedJSHeapSize）。
-- Storage Estimate：usage 约 112.9 MB；quota 约 10.85 GB；usageDetails.indexedDB 约 112.9 MB。
-- persisted() 返回 false，persist() 请求返回 false：当前 CI 环境未授予持久化存储权限；这不影响 IndexedDB 本次读写测试，但意味着不能声称已取得持久化保护。
-- SQLite OPFS 100k：本次 CI Worker 未暴露 OPFS VFS，测试明确跳过；没有 SQLite 性能数据。
+## 已知限制与未完成验收
 
-## 已知技术前提
+- 当前没有 package-lock.json，依赖安装尚未达到 lockfile 级可重复性。
+- Chrome/Edge Stable 是 GitHub Actions 安装的稳定版浏览器，不是用户实体设备；仍需真实桌面设备样本和实际交互验证。
+- 当前是独立 PoC，尚未接入 read-book 正式数据写入路径、阅读器和备份流程。
+- 已验证逻辑关联缺失的检测，不等于完成 SQLite 文件级物理损坏检测与修复。
+- 发现损坏时不静默清空或自动重建；生产恢复应由加密备份链路负责恢复，属于 PoC B（Issue #2）的后续验收。
+- CI 未获得持久化存储授权，不能据此承诺浏览器数据永不被系统清理。
+- 超大书籍导入、长期运行压力、真实设备断电/强制杀进程等仍需单独验证。
 
-SQLite 官方 WASM npm 包说明：OPFS 后端只能在 Worker 中使用；示例部署需要 COOP: same-origin 与 COEP: require-corp。Node 环境只支持内存数据库，不能代替浏览器 OPFS 实测。
+## 当前结论
 
-## 下一步
-
-1. 生成 lockfile 并在 Chromium/Chrome/Edge 实际环境执行 1k/10k/100k。
-2. 补充完整领域 Schema、关联查询、迁移、批量快照和多轮统计。
-3. 增加 Worker 强杀、页面强制关闭和锁持有者异常退出故障测试；当前 Web Locks 已接入两种 PoC 写入口。
-4. 增加崩溃、刷新、关闭、配额、persist 拒绝、多标签页和损坏恢复故障注入。
-5. 汇总实测数据后再形成存储选型结论；未完成前不放行正式数据库选型。
+两条存储路线均已完成六实体模型、1k/10k/100k 自动化基准和核心可靠性测试。尚不做最终选型，不关闭 Issue #1；先保留两条独立路线，等待 lockfile、真实设备样本和生产恢复链路验证。
