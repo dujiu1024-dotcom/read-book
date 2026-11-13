@@ -1,3 +1,5 @@
+import { withDatasetWriter } from './coordination.js';
+
 let worker;
 let sequence = 0;
 const pending = new Map();
