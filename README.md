@@ -30,8 +30,9 @@ PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不�
 唯一 MVP 总控：[#23 跑通阅读—讨论—认知沉淀闭环](https://github.com/dujiu1024-dotcom/read-book/issues/23)
 
 - [x] [#24 领域模型与纯规则内核](https://github.com/dujiu1024-dotcom/read-book/pull/24)（已合并）
-- [ ] [#20 PC 窄屏阅读原型自动化与浏览器兼容性验收](https://github.com/dujiu1024-dotcom/read-book/pull/20)
-- [ ] [#22 移动触控适配模拟视口自动化验收](https://github.com/dujiu1024-dotcom/read-book/pull/22)
+- [x] [#20 PC 窄屏阅读原型自动化与浏览器兼容性验收](https://github.com/dujiu1024-dotcom/read-book/pull/20)（已合并）
+- [x] [#22 移动触控适配模拟视口自动化验收](https://github.com/dujiu1024-dotcom/read-book/pull/22)（已合并，不要求实体设备测试）
+- [x] [#8 PC 阅读交互原型](https://github.com/dujiu1024-dotcom/read-book/issues/8)（PR #20/#22 已合并；原型验收完成）
 - [ ] [#25 正式阅读客户端](https://github.com/dujiu1024-dotcom/read-book/issues/25)
 - [ ] [#26 本地个人数据 Repository](https://github.com/dujiu1024-dotcom/read-book/issues/26)
 - [ ] [#27 Agent 生成适配器与可靠消息交付](https://github.com/dujiu1024-dotcom/read-book/issues/27)
