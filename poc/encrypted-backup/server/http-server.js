@@ -131,6 +131,11 @@ export async function createBackupHttpServer({ dataDir }) {
   function assertNotCleared(datasetId) {
     if (state.tombstones[datasetId]) fail(410, '数据集已清除');
   }
+  function assertBackupNotCleared(backupId) {
+    if (Object.values(state.tombstones).some((item) => (item.backupIds || []).includes(backupId))) {
+      fail(410, '备份所属数据集已清除');
+    }
+  }
   function requireTicket(req, datasetId, scope) {
     const authorization = req.headers.authorization || '';
     const match = /^Bearer ([A-Za-z0-9_-]+)$/.exec(authorization);
@@ -167,7 +172,10 @@ export async function createBackupHttpServer({ dataDir }) {
   }
   function getSession(backupId) {
     const session = state.sessions[backupId];
-    if (!session) fail(404, '上传会话不存在');
+    if (!session) {
+      assertBackupNotCleared(backupId);
+      fail(404, '上传会话不存在');
+    }
     if (session.expiresAt <= Date.now()) fail(410, '上传会话已过期');
     assertNotCleared(session.datasetId);
     return session;
@@ -339,7 +347,10 @@ export async function createBackupHttpServer({ dataDir }) {
     if (method === 'GET' && backupMatch) {
       const backupId = safeId(backupMatch[1], 'backupId');
       const backup = state.backups[backupId];
-      if (!backup) fail(404, '备份不存在');
+      if (!backup) {
+        assertBackupNotCleared(backupId);
+        fail(404, '备份不存在');
+      }
       requireTicket(req, backup.manifest.datasetId, 'backup:read');
       return json(res, 200, await readBackup(backupId));
     }
@@ -362,7 +373,13 @@ export async function createBackupHttpServer({ dataDir }) {
     if (method === 'GET' && downloadMatch) {
       const token = downloadMatch[1];
       const ticket = state.downloadTickets[tokenHash(token)];
-      if (!ticket || ticket.expiresAt <= Date.now()) fail(401, '下载票据无效或已过期');
+      if (!ticket) {
+        if (Object.values(state.tombstones).some((item) => (item.backupIds || []).includes(url.pathname.split('/').at(-1)))) {
+          fail(410, '下载备份所属数据集已清除');
+        }
+        fail(401, '下载票据无效或已过期');
+      }
+      if (ticket.expiresAt <= Date.now()) fail(401, '下载票据无效或已过期');
       assertNotCleared(ticket.datasetId);
       if (!state.backups[ticket.backupId]) fail(404, '备份不存在');
       return json(res, 200, await readBackup(ticket.backupId));
@@ -377,7 +394,12 @@ export async function createBackupHttpServer({ dataDir }) {
           ...Object.values(state.backups).filter((item) => item.manifest.datasetId === datasetId).map((item) => item.manifest.backupId),
           ...Object.values(state.sessions).filter((item) => item.datasetId === datasetId).map((item) => item.backupId)
         ];
-        state.tombstones[datasetId] = { clearedAt: Date.now(), pendingBackupIds: [...new Set(backupIds)], purged: false };
+        state.tombstones[datasetId] = {
+          clearedAt: Date.now(),
+          backupIds: [...new Set(backupIds)],
+          pendingBackupIds: [...new Set(backupIds)],
+          purged: false
+        };
         for (const [id, item] of Object.entries(state.backups)) if (item.manifest.datasetId === datasetId) delete state.backups[id];
         for (const [id, item] of Object.entries(state.sessions)) if (item.datasetId === datasetId) delete state.sessions[id];
         for (const [key, backupId] of Object.entries(state.idempotency)) if (backupIds.includes(backupId)) delete state.idempotency[key];
