@@ -164,6 +164,12 @@ item_type：key_point / concept / author_claim / argument / evidence / case / cr
 
 约束：状态只指向主线位置；临时查看和复习不得修改此表。当前主线单元的详细状态由后续 state-machines.md 进一步定义。
 
+### 3.9 ReadingUnitProgress
+
+字段：reading_round_id UUID NOT NULL FK → ReadingRound.id；structure_node_id UUID NOT NULL FK → BookStructureNode.id；status TEXT NOT NULL（not_presented / presented / awaiting_user / discussion_active / discussed / skipped）；first_presented_source_id UUID NULL FK → PresentedSource.id；last_activity_message_id UUID NULL FK → Message.id；completed_at TIMESTAMP NULL；updated_at TIMESTAMP NOT NULL。
+
+主键：(reading_round_id, structure_node_id)。所有属于本轮主线的论述单元在轮次创建时初始化为 not_presented。status 的转换规则以 [核心状态机](state-machines.md) 为准。review / temporary 展示不得修改此表。discussed / skipped 为单元终态；轮次是否 completed 由所有主线单元是否进入终态共同决定。
+
 ### 3.9 Citation
 
 字段：id UUID PK；message_id UUID NOT NULL FK；book_revision_id UUID NOT NULL；chunk_id UUID NOT NULL；structure_node_id UUID NOT NULL；source_locator JSON NOT NULL；quote TEXT NOT NULL；source_hash TEXT NOT NULL；created_at TIMESTAMP NOT NULL。
@@ -288,11 +294,11 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 6. BookRevision 撤回：阻止新访问/新权益签发；已获得的永久权益如何受法律或安全撤回约束，仍需单独明确；不得擅自物理删除历史引用所需版本数据。
 7. 任何外键级联删除必须经过单独评审；默认 RESTRICT 或应用层显式状态迁移。
 
-## 7. 仍待状态机文档冻结的枚举
+## 7. 状态机权威来源
 
-以下字段枚举已作为数据约束草案，但其转换条件、事件和非法转换将由 `docs/state-machines.md` 权威定义：
+以下字段枚举的转换条件、事件和非法转换以 [核心状态机](state-machines.md) 为权威定义：
 - ReadingRound.status
-- ReadingRoundState.current_structure_node_id 对应的主线单元状态
+- ReadingUnitProgress.status 与 ReadingRoundState.current_structure_node_id 的协同规则
 - Message.status 与 GenerationJob.status 的竞态处理
 - Note.status / edit_origin
 - Memory.status 与 MemoryRelation 的演变方向
