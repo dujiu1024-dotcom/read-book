@@ -310,12 +310,21 @@ export async function createBackupHttpServer({ dataDir }) {
         if (bytes.length !== metadata.ciphertextSize || sha256Base64(bytes) !== metadata.ciphertextHash) fail(400, '分块大小或密文哈希不匹配');
         const existingHash = session.parts[String(index)];
         if (existingHash && existingHash !== metadata.ciphertextHash) fail(409, '同一分块序号不能上传不同密文');
-        if (!existingHash) {
+        let alreadyStored = false;
+        if (existingHash) {
+          try {
+            const persisted = decodeBase64(await readFile(chunkPath(backupId, index), 'utf8'));
+            alreadyStored = sha256Base64(persisted) === metadata.ciphertextHash;
+          } catch { alreadyStored = false; }
+        }
+        if (!alreadyStored) {
           await atomicWrite(chunkPath(backupId, index), body.ciphertext);
           session.parts[String(index)] = metadata.ciphertextHash;
           await save();
         }
-        return json(res, existingHash ? 200 : 201, { backupId, chunkIndex: index, stored: true, idempotent: Boolean(existingHash) });
+        return json(res, alreadyStored ? 200 : 201, {
+          backupId, chunkIndex: index, stored: true, idempotent: alreadyStored
+        });
       });
     }
 
