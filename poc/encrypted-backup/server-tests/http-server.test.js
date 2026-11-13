@@ -183,6 +183,9 @@ test('HTTP 票据按数据集和权限隔离，支持撤销与过期', async (t)
   const datasetId = 'http-ticket-dataset';
   const revokeTicket = await issueTicket(env.base, datasetId, ['ticket:revoke'], 600);
   const readOnlyTicket = await issueTicket(env.base, datasetId, ['backup:read'], 600);
+  const ticketState = JSON.parse(await readFile(path.join(env.dataDir, 'state.json'), 'utf8'));
+  assert.equal((await readFile(path.join(env.dataDir, 'state.json'), 'utf8')).includes(readOnlyTicket.token), false);
+  assert.ok(Object.keys(ticketState.tickets).every((hash) => /^[a-f0-9]{64}$/.test(hash)));
   const encrypted = await createEncryptedBackup({ datasetId, sequence: 1, payload: { value: 'ticket-scope' } });
   const denied = await request(env.base, '/v1/backups/init', {
     method: 'POST', token: readOnlyTicket.token,
@@ -219,6 +222,11 @@ test('清除墓碑先持久化，再撤销票据、下载 URL、会话和密文�
     method: 'POST', token: ticket.token, body: {}
   });
   assert.equal(download.status, 201);
+  const downloadToken = download.body.downloadUrl.split('/').pop();
+  const stateWithDownloadTicket = await readFile(path.join(env.dataDir, 'state.json'), 'utf8');
+  assert.equal(stateWithDownloadTicket.includes(downloadToken), false);
+  assert.ok(Object.keys(JSON.parse(stateWithDownloadTicket).downloadTickets)
+    .every((hash) => /^[a-f0-9]{64}$/.test(hash)));
 
   const pending = await createEncryptedBackup({ datasetId, sequence: 2, parentBackupId: encrypted.manifest.backupId, payload: { value: 'pending' } });
   const pendingInit = await request(env.base, '/v1/backups/init', {
