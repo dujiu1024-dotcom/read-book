@@ -162,3 +162,67 @@ test('清除墓碑与正在进行的上传完成竞争时墓碑优先', async ({
   });
   expect(result).toEqual({ rejected: true, cleared: true });
 });
+
+
+test('分块上传中断后可查询缺块并继续，重复上传相同分块幂等', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup, decryptBackup } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    const server = new MockBackupServer();
+    const backup = await createEncryptedBackup({
+      datasetId: 'resume-upload-fixture', sequence: 1,
+      payload: { text: 'resume-'.repeat(30_000) }
+    });
+    const key = 'resume-idempotency-key';
+    server.init(backup.manifest, key);
+    server.putPart(backup.manifest.backupId, backup.chunks[0]);
+    server.putPart(backup.manifest.backupId, backup.chunks[0]);
+    const missingBeforeResume = server.missingParts(backup.manifest.backupId);
+    // Re-initializing with the same idempotency key returns the existing session.
+    const resumed = server.init(backup.manifest, key);
+    for (const chunk of backup.chunks.slice(1)) server.putPart(backup.manifest.backupId, chunk);
+    const missingAfterResume = server.missingParts(backup.manifest.backupId);
+    const committed = await server.complete(backup.manifest.backupId);
+    const remote = server.get(backup.manifest.backupId);
+    const restored = await decryptBackup({ ...remote, recoveryKey: backup.recoveryKey });
+    return {
+      chunkCount: backup.chunks.length, missingBeforeResume, missingAfterResume,
+      sameSession: resumed.backupId === backup.manifest.backupId,
+      committed: committed.state, restoredLength: restored.text.length
+    };
+  });
+  expect(result.chunkCount).toBeGreaterThan(1);
+  expect(result.missingBeforeResume).toEqual(Array.from({ length: result.chunkCount - 1 }, (_, i) => i + 1));
+  expect(result.missingAfterResume).toEqual([]);
+  expect(result.sameSession).toBe(true);
+  expect(result.committed).toBe('committed');
+  expect(result.restoredLength).toBe('resume-'.repeat(30_000).length);
+});
+
+test('分块重复上传不同密文时拒绝覆盖，缺块时拒绝提交', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    const server = new MockBackupServer();
+    const backup = await createEncryptedBackup({
+      datasetId: 'conflicting-part-fixture', sequence: 1,
+      payload: { text: 'x'.repeat(100_000) }
+    });
+    server.init(backup.manifest, 'conflict-key');
+    server.putPart(backup.manifest.backupId, backup.chunks[0]);
+    let conflictingPartRejected = false;
+    try {
+      const changed = { ...backup.chunks[0], ciphertext: backup.chunks[0].ciphertext.slice(0, -4) + 'AAAA' };
+      server.putPart(backup.manifest.backupId, changed);
+    } catch { conflictingPartRejected = true; }
+    let incompleteCommitRejected = false;
+    try { await server.complete(backup.manifest.backupId); }
+    catch { incompleteCommitRejected = true; }
+    return { conflictingPartRejected, incompleteCommitRejected, missing: server.missingParts(backup.manifest.backupId) };
+  });
+  expect(result.conflictingPartRejected).toBe(true);
+  expect(result.incompleteCommitRejected).toBe(true);
+  expect(result.missing.length).toBeGreaterThan(0);
+});
