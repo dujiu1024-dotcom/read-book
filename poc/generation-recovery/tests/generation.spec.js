@@ -135,7 +135,7 @@ test('服务进程重启后恢复任务、事件序号与幂等映射', async ()
 test('同一幂等键绑定请求正文，正文不同时拒绝复用', async () => {
   const port = await freePort();
   const stateDir = await mkdtemp(join(tmpdir(), 'read-book-idempotency-'));
-  const child = launchServer(port, join(stateDir, 'state.json'), { GENERATION_TOKEN_DELAY_MS: '1000' });
+  const child = launchServer(port, join(stateDir, 'state.json'));
   try {
     await waitForHealth(port, child);
     const base = `http://127.0.0.1:${port}`;
@@ -199,7 +199,7 @@ test('事件重连回放保持 event_id 唯一且序号连续', async () => {
 test('接近自然完成时取消仍产生唯一终态，不暴露最终结果', async () => {
   const port = await freePort();
   const stateDir = await mkdtemp(join(tmpdir(), 'read-book-cancel-race-'));
-  const child = launchServer(port, join(stateDir, 'state.json'));
+  const child = launchServer(port, join(stateDir, 'state.json'), { GENERATION_TOKEN_DELAY_MS: '1000' });
   try {
     await waitForHealth(port, child);
     const base = `http://127.0.0.1:${port}`;
