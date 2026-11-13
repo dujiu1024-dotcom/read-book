@@ -49,58 +49,61 @@ function percentile(values, p) {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)];
 }
-async function clearDataset(db, datasetId) {
+function clearDatasetInTransaction(tx, datasetId, onCleared) {
+  let remaining = STORES.length;
   for (const storeName of STORES) {
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(storeName, 'readwrite');
-      const request = tx.objectStore(storeName).index('datasetId').openCursor(IDBKeyRange.only(datasetId));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (cursor) { cursor.delete(); cursor.continue(); }
-      };
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error || new Error('清理事务中止'));
+    const request = tx.objectStore(storeName).index('datasetId').openCursor(IDBKeyRange.only(datasetId));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+        return;
+      }
+      remaining -= 1;
+      if (remaining === 0) onCleared();
+    };
+  }
+}
+function enqueueDatasetWrites(tx, count, datasetId) {
+  const threads = tx.objectStore('threads');
+  const messages = tx.objectStore('messages');
+  const rounds = tx.objectStore('readingRounds');
+  const notes = tx.objectStore('notes');
+  const memories = tx.objectStore('memories');
+  const sources = tx.objectStore('sources');
+  const sourceId = datasetId + ':source:book';
+  sources.put({ id: sourceId, datasetId, title: 'PoC 测试书籍' });
+  for (let thread = 0; thread < 10; thread++) {
+    const threadId = datasetId + ':thread:' + thread;
+    const roundId = datasetId + ':round:' + thread;
+    const noteId = datasetId + ':note:' + thread;
+    const memoryId = datasetId + ':memory:' + thread;
+    threads.put({ id: threadId, datasetId, title: 'Thread ' + thread });
+    rounds.put({ id: roundId, datasetId, threadId, sequence: 1 });
+    notes.put({ id: noteId, datasetId, threadId, readingRoundId: roundId, sourceId, content: '测试笔记 ' + thread });
+    memories.put({ id: memoryId, datasetId, threadId, noteId, sourceId, content: '测试记忆 ' + thread });
+  }
+  for (let i = 0; i < count; i++) {
+    messages.put({
+      id: datasetId + ':' + i,
+      datasetId,
+      threadId: datasetId + ':thread:' + (i % 10),
+      sequence: Math.floor(i / 10),
+      role: i % 2 ? 'assistant' : 'user',
+      content: '测试消息 ' + i + ' / ' + '知行阅读与思考内容。'.repeat(8),
+      createdAt: i
     });
   }
 }
 async function writeBatch(db, count, datasetId) {
-  await clearDataset(db, datasetId);
   const start = performance.now();
   await new Promise((resolve, reject) => {
     const tx = db.transaction(STORES, 'readwrite');
-    const threads = tx.objectStore('threads');
-    const messages = tx.objectStore('messages');
-    const rounds = tx.objectStore('readingRounds');
-    const notes = tx.objectStore('notes');
-    const memories = tx.objectStore('memories');
-    const sources = tx.objectStore('sources');
-    const sourceId = datasetId + ':source:book';
-    sources.put({ id: sourceId, datasetId, title: 'PoC 测试书籍' });
-    for (let thread = 0; thread < 10; thread++) {
-      const threadId = datasetId + ':thread:' + thread;
-      const roundId = datasetId + ':round:' + thread;
-      const noteId = datasetId + ':note:' + thread;
-      const memoryId = datasetId + ':memory:' + thread;
-      threads.put({ id: threadId, datasetId, title: 'Thread ' + thread });
-      rounds.put({ id: roundId, datasetId, threadId, sequence: 1 });
-      notes.put({ id: noteId, datasetId, threadId, readingRoundId: roundId, sourceId, content: '测试笔记 ' + thread });
-      memories.put({ id: memoryId, datasetId, threadId, noteId, sourceId, content: '测试记忆 ' + thread });
-    }
-    for (let i = 0; i < count; i++) {
-      messages.put({
-        id: datasetId + ':' + i,
-        datasetId,
-        threadId: datasetId + ':thread:' + (i % 10),
-        sequence: Math.floor(i / 10),
-        role: i % 2 ? 'assistant' : 'user',
-        content: '测试消息 ' + i + ' / ' + '知行阅读与思考内容。'.repeat(8),
-        createdAt: i
-      });
-    }
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error('写入事务中止'));
+    clearDatasetInTransaction(tx, datasetId, () => enqueueDatasetWrites(tx, count, datasetId));
   });
   return performance.now() - start;
 }
@@ -180,12 +183,54 @@ export async function runIndexedDb(count, datasetId) {
 export async function checkIndexedDb(datasetId) {
   const db = await openDb();
   try {
-    const rows = await new Promise((resolve, reject) => {
-      const tx = db.transaction('messages', 'readonly');
-      const request = tx.objectStore('messages').index('datasetId').getAll(datasetId);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+    const result = await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORES, 'readonly');
+      const requests = Object.fromEntries(STORES.map((name) => [
+        name,
+        tx.objectStore(name).index('datasetId').getAll(datasetId)
+      ]));
+      tx.oncomplete = () => {
+        const data = Object.fromEntries(Object.entries(requests).map(([name, request]) => [name, request.result]));
+        const threads = new Map(data.threads.map((item) => [item.id, item]));
+        const rounds = new Map(data.readingRounds.map((item) => [item.id, item]));
+        const notes = new Map(data.notes.map((item) => [item.id, item]));
+        const sources = new Map(data.sources.map((item) => [item.id, item]));
+        const memories = new Map(data.memories.map((item) => [item.noteId, item]));
+        const threadChains = data.threads.map((thread) => {
+          const round = data.readingRounds.find((item) => item.threadId === thread.id);
+          const note = data.notes.find((item) => item.readingRoundId === round?.id);
+          const memory = memories.get(note?.id);
+          const source = sources.get(note?.sourceId);
+          return Boolean(
+            round && rounds.has(round.id) &&
+            note && notes.has(note.id) && note.threadId === thread.id &&
+            memory && memory.threadId === thread.id && memory.sourceId === note.sourceId &&
+            source && source.datasetId === datasetId
+          );
+        });
+        const messagesValid = data.messages.every((message) =>
+          message.datasetId === datasetId && threads.has(message.threadId)
+        );
+        const integrity = data.threads.length === 10 &&
+          data.readingRounds.length === 10 &&
+          data.notes.length === 10 &&
+          data.memories.length === 10 &&
+          data.sources.length === 1 &&
+          threadChains.every(Boolean) && messagesValid;
+        resolve({
+          adapter: 'IndexedDB', datasetId, count: data.messages.length,
+          entityCounts: {
+            threads: data.threads.length, messages: data.messages.length,
+            readingRounds: data.readingRounds.length, notes: data.notes.length,
+            memories: data.memories.length, sources: data.sources.length
+          },
+          relatedThreadCount: threadChains.filter(Boolean).length,
+          integrity
+        });
+      };
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('完整性检查事务中止'));
     });
-    return { adapter: 'IndexedDB', datasetId, count: rows.length, integrity: rows.every((row) => row.datasetId === datasetId) };
+    return result;
   } finally { db.close(); }
 }
