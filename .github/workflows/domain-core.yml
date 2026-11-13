@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "packages/domain-core/**"
+      - "packages/agent-adapter/**"
       - ".github/workflows/domain-core.yml"
   pull_request:
     paths:
@@ -28,4 +29,7 @@ jobs:
           node-version: "22"
       - name: Run domain core tests
         working-directory: packages/domain-core
+        run: npm test
+      - name: Run agent adapter contract tests
+        working-directory: packages/agent-adapter
         run: npm test
