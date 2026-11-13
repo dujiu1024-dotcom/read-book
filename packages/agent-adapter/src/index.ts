@@ -187,7 +187,7 @@ export function authoritativeFinalResult(snapshot: GenerationSnapshot): Generati
 }
 
 export function validateGenerationEvent(value: unknown): GenerationEvent {
-  const item = validateGenerationEvent(value);
+  const item = record(value);
   const eventId = item.event_id;
   const generationId = item.generation_id;
   if (!Number.isInteger(item.sequence) || (item.sequence as number) < 1) {
@@ -215,9 +215,9 @@ export function advanceGenerationEventCursor(
   cursor: GenerationEventCursor,
   value: unknown,
 ): { cursor: GenerationEventCursor; duplicate: boolean } {
-  const item = record(value);
-  const eventId = requiredString(item.event_id, "event_id");
-  const generationId = requiredString(item.generation_id, "generation_id");
+  const item = validateGenerationEvent(value);
+  const eventId = item.event_id;
+  const generationId = item.generation_id;
   if (generationId !== cursor.generationId) {
     throw new GenerationProtocolError("Generation event belongs to a different generation.");
   }
