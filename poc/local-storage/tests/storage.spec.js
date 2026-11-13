@@ -288,6 +288,26 @@ test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失�
   }
 });
 
+test('IndexedDB 1k 消息基准输出 P50/P95 与完整关系校验', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', '1k 性能基准仅在 Playwright Chromium 主测');
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await page.locator('#adapter').selectOption('indexeddb');
+  await page.locator('#count').selectOption('1000');
+  await page.getByRole('button', { name: '执行写入与查询测试' }).click();
+  await expect(page.locator('#status')).toContainText('完成', { timeout: 100_000 });
+  const result = JSON.parse(await page.locator('#output').textContent());
+  console.log('IndexedDB 1k benchmark:', JSON.stringify({
+    writeMs: result.writeMs, queryMs: result.queryMs, relationQueryMs: result.relationQueryMs,
+    memory: result.memory, storage: result.storage
+  }));
+  expect(result.count).toBe(1000);
+  expect(result.integrity).toBe(true);
+  expect(result.longTextIntegrity).toBe(true);
+  expect(result.runs).toBe(5);
+  expect(result.relatedThreadCount).toBe(10);
+});
+
 test('IndexedDB 10k 消息基准输出 P50/P95 与完整关系校验', async ({ page, browserName }, testInfo) => {
   await page.goto('/');
   const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
@@ -300,7 +320,8 @@ test('IndexedDB 10k 消息基准输出 P50/P95 与完整关系校验', async ({ 
   await expect(page.locator('#status')).toContainText('完成', { timeout: 160_000 });
   const result = JSON.parse(await page.locator('#output').textContent());
   console.log('IndexedDB 10k benchmark:', JSON.stringify({
-    writeMs: result.writeMs, queryMs: result.queryMs, relationQueryMs: result.relationQueryMs
+    writeMs: result.writeMs, queryMs: result.queryMs, relationQueryMs: result.relationQueryMs,
+    memory: result.memory, storage: result.storage
   }));
   expect(result.count).toBe(10000);
   expect(result.integrity).toBe(true);
@@ -337,6 +358,32 @@ test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', 
   expect(result.relationQueryMs.p95).toBeGreaterThan(0);
 });
 
+test('SQLite OPFS 1k 消息基准输出 P50/P95 与完整关系校验', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'SQLite OPFS 1k 性能基准仅在 Playwright Chromium 主测');
+  test.setTimeout(120_000);
+  await page.goto('/');
+  const capability = await page.evaluate(async () => {
+    const { runSqlite } = await import('/src/sqlite.js');
+    try { await runSqlite(1, 'sqlite-opfs-1k-capability'); return { supported: true }; }
+    catch (error) { return { supported: false, error: error.message }; }
+  });
+  test.skip(!capability.supported, 'SQLite OPFS VFS 不可用：' + capability.error);
+  await page.locator('#adapter').selectOption('sqlite');
+  await page.locator('#count').selectOption('1000');
+  await page.getByRole('button', { name: '执行写入与查询测试' }).click();
+  await expect(page.locator('#status')).toContainText('完成', { timeout: 100_000 });
+  const result = JSON.parse(await page.locator('#output').textContent());
+  console.log('SQLite OPFS 1k benchmark:', JSON.stringify({
+    writeMs: result.writeMs, queryMs: result.queryMs, relationQueryMs: result.relationQueryMs,
+    memory: result.memory, storage: result.storage
+  }));
+  expect(result.count).toBe(1000);
+  expect(result.integrity).toBe(true);
+  expect(result.longTextIntegrity).toBe(true);
+  expect(result.runs).toBe(5);
+  expect(result.relatedThreadCount).toBe(10);
+});
+
 test('SQLite OPFS 10k 消息基准输出 P50/P95 与完整关系校验', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium', 'SQLite OPFS 10k 性能基准仅在 Playwright Chromium 主测');
   test.setTimeout(180_000);
@@ -353,7 +400,8 @@ test('SQLite OPFS 10k 消息基准输出 P50/P95 与完整关系校验', async (
   await expect(page.locator('#status')).toContainText('完成', { timeout: 160_000 });
   const result = JSON.parse(await page.locator('#output').textContent());
   console.log('SQLite OPFS 10k benchmark:', JSON.stringify({
-    writeMs: result.writeMs, queryMs: result.queryMs, relationQueryMs: result.relationQueryMs
+    writeMs: result.writeMs, queryMs: result.queryMs, relationQueryMs: result.relationQueryMs,
+    memory: result.memory, storage: result.storage
   }));
   expect(result.count).toBe(10000);
   expect(result.integrity).toBe(true);
