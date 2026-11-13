@@ -168,15 +168,21 @@ def evaluate(corpus_rows: list[dict[str, Any]], question_rows: list[dict[str, An
     citation_generation_enabled = not run_metadata_values or any(
         metadata.get("citation_generation") != "none" for metadata in run_metadata_values
     )
+    answer_generation_enabled = not run_metadata_values or any(
+        metadata.get("answer_generation") != "none" for metadata in run_metadata_values
+    )
+    agent_policy_evaluation_enabled = not run_metadata_values or any(
+        metadata.get("agent_policy_events") != "none" for metadata in run_metadata_values
+    )
     metrics = {
         f"recall_at_{k}": mean(recall_values),
         "citation_precision": round(citation_hits / citation_total, 4) if citation_total and citation_generation_enabled else None,
         "citation_coverage": round(citation_covered / answerable_count, 4) if answerable_count and citation_generation_enabled else None,
         "locator_accuracy": round(locator_hits / locator_total, 4) if locator_total and citation_generation_enabled else None,
         "human_adjudicated_groundedness": round(grounded_author_claims / author_claim_total, 4) if author_claim_total else None,
-        "unanswerable_abstention_accuracy": round(correct_abstentions / unanswerable_total, 4) if unanswerable_total else None,
-        "answerable_abstention_rate": round(answerable_abstentions / answerable_count, 4) if answerable_count else None,
-        "forbidden_agent_action_count": len(forbidden_events),
+        "unanswerable_abstention_accuracy": round(correct_abstentions / unanswerable_total, 4) if unanswerable_total and answer_generation_enabled else None,
+        "answerable_abstention_rate": round(answerable_abstentions / answerable_count, 4) if answerable_count and answer_generation_enabled else None,
+        "forbidden_agent_action_count": len(forbidden_events) if agent_policy_evaluation_enabled else None,
         "mean_latency_ms": mean(latencies),
         "mean_input_tokens": mean(input_tokens),
         "mean_output_tokens": mean(output_tokens),
@@ -203,11 +209,13 @@ def evaluate(corpus_rows: list[dict[str, Any]], question_rows: list[dict[str, An
             "citation_coverage": "Share of answerable questions with at least one gold evidence citation.",
             "locator_accuracy": "Exact structured locator equality for locator questions. Null when the adapter declares citation_generation=none.",
             "human_adjudicated_groundedness": "Uses reviewer-supplied human_adjudicated_supported; not inferred by the script.",
-            "agent_policy": "Counts prohibited actions only when the adapter records them in agent_actions.",
+            "agent_policy": "Counts prohibited actions only when the adapter records them in agent_actions; null when no Agent policy event stream is supplied.",
+            "abstention": "Null for retrieval-only runs without answer generation.",
             "thresholds": "No pass threshold is set by this first baseline; values are measurements, not release gates."
         },
         "metrics": metrics,
         "by_question_type": type_metrics,
+        "agent_policy_evaluation_enabled": agent_policy_evaluation_enabled,
         "policy_violations": forbidden_events,
     }
 
