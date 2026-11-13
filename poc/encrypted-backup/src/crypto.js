@@ -25,13 +25,28 @@ function aadFor({ datasetId, backupId, sequence, parentBackupId, backupType, chu
   return encoder.encode([datasetId, backupId, sequence, parentBackupId || '', backupType, chunkIndex, schemaVersion, SUITE].join('|'));
 }
 
-export async function createEncryptedBackup({ datasetId, sequence, parentBackupId = null, backupType = parentBackupId ? 'incremental' : 'full', payload }) {
+export function createDatasetKeyMaterial(datasetId) {
+  if (typeof datasetId !== 'string' || !datasetId) throw new Error('数据集 ID 非法');
+  return {
+    datasetId,
+    dekRaw: randomBytes(32),
+    recoveryKey: bytesToBase64(randomBytes(32))
+  };
+}
+
+export async function createEncryptedBackup({ datasetId, sequence, parentBackupId = null, backupType = parentBackupId ? 'incremental' : 'full', payload, keyMaterial }) {
   if (!['full', 'incremental'].includes(backupType)) throw new Error('不支持的备份类型');
   if (backupType === 'full' && parentBackupId) throw new Error('全量备份不能指定父备份');
   if (backupType === 'incremental' && !parentBackupId) throw new Error('增量备份必须指定父备份');
   const backupId = crypto.randomUUID();
-  const dekRaw = randomBytes(32);
-  const recoveryKeyRaw = randomBytes(32);
+  const material = keyMaterial || createDatasetKeyMaterial(datasetId);
+  if (material.datasetId !== datasetId || !(material.dekRaw instanceof Uint8Array) ||
+      material.dekRaw.length !== 32 || typeof material.recoveryKey !== 'string') {
+    throw new Error('备份密钥材料与数据集不匹配或格式非法');
+  }
+  const dekRaw = material.dekRaw;
+  const recoveryKeyRaw = base64ToBytes(material.recoveryKey);
+  if (recoveryKeyRaw.length !== 32) throw new Error('恢复凭证长度非法');
   const dek = await importAesKey(dekRaw, ['encrypt', 'decrypt']);
   const wrappingKey = await importAesKey(recoveryKeyRaw, ['encrypt', 'decrypt']);
   const wrapNonce = randomBytes(12);
@@ -64,7 +79,7 @@ export async function createEncryptedBackup({ datasetId, sequence, parentBackupI
     if (plain.length === 0) break;
   }
   return {
-    recoveryKey: bytesToBase64(recoveryKeyRaw),
+    recoveryKey: material.recoveryKey,
     manifest: {
       datasetId, backupId, sequence, parentBackupId, backupType, schemaVersion: SCHEMA_VERSION,
       cipherSuite: SUITE, wrappedDek: bytesToBase64(wrappedDek), wrapNonce: bytesToBase64(wrapNonce),
