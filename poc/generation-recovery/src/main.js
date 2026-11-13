@@ -10,7 +10,7 @@ async function refreshRetryButton() {
   const jobs = await listJobs();
   pendingJob = jobs
     .filter((job) => !job.generationId && ['queued', 'creation_failed'].includes(job.status))
-    .sort((a, b) => b.userMessageId.localeCompare(a.userMessageId))[0] || null;
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))[0] || null;
   $('retry').hidden = !pendingJob;
 }
 async function renderMessages() {
@@ -93,7 +93,7 @@ $('send').addEventListener('click', async () => {
   const createdAt = new Date().toISOString();
   const userMessage = { id: crypto.randomUUID(), role: 'user', content: userText, createdAt };
   await saveMessage(userMessage);
-  const job = { idempotencyKey: crypto.randomUUID(), userText, userMessageId: userMessage.id, status: 'queued', lastSequence: 0 };
+  const job = { idempotencyKey: crypto.randomUUID(), userText, userMessageId: userMessage.id, createdAt, status: 'queued', lastSequence: 0 };
   await saveJob(job);
   await renderMessages();
   status('用户消息已先落本地，正在创建服务端生成任务…');
