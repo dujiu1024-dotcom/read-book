@@ -1,0 +1,60 @@
+name: Book package validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "schemas/book-package/**"
+      - "tools/book_package_validator/**"
+      - "docs/book-package-ingestion-contract.md"
+      - ".github/workflows/book-package-validation.yml"
+  pull_request:
+    paths:
+      - "schemas/book-package/**"
+      - "tools/book_package_validator/**"
+      - "docs/book-package-ingestion-contract.md"
+      - ".github/workflows/book-package-validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: book-package-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate schemas, packages and hostile ZIP cases
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tools/book_package_validator/requirements.txt
+
+      - name: Install pinned validator dependency
+        run: python -m pip install -r tools/book_package_validator/requirements.txt
+
+      - name: Run schema and package validator tests
+        run: |
+          mkdir -p artifacts
+          python -m unittest discover -s tools/book_package_validator -p 'test_*.py' -v 2>&1 | tee artifacts/book-package-test-report.txt
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: book-package-validation-report
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
