@@ -57,6 +57,66 @@ test('批量替换事务中断时回滚，原数据集保持完整', async ({ pa
   });
 });
 
+test('真实浏览器配额不足时中止事务并保留旧数据', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'CDP 配额故障注入仅在 Chromium 系列执行');
+  await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+  const session = await page.context().newCDPSession(page);
+  const origin = 'http://127.0.0.1:4173';
+  try {
+    try {
+      await session.send('Storage.overrideQuotaForOrigin', { origin, quotaSize: 200000 });
+    } catch {
+      test.skip(true, '当前 Chromium CDP 不支持 Storage.overrideQuotaForOrigin');
+    }
+    const result = await page.evaluate(async () => {
+      const { runIndexedDb, checkIndexedDb } = await import('/src/indexeddb.js');
+      await runIndexedDb(10, 'quota-rollback-fixture');
+      let failure;
+      try { await runIndexedDb(10000, 'quota-rollback-fixture'); }
+      catch (error) { failure = { name: error.name, message: error.message }; }
+      return { failure, check: await checkIndexedDb('quota-rollback-fixture') };
+    });
+    expect(result.failure).toBeTruthy();
+    expect(result.failure.name).toMatch(/QuotaExceededError|AbortError/);
+    expect(result.check.count).toBe(10);
+    expect(result.check.integrity).toBe(true);
+  } finally {
+    await session.send('Storage.resetQuotaForOrigin', { origin }).catch(() => {});
+    await session.detach();
+  }
+});
+
+test('清理站点数据后 IndexedDB 不残留原数据', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', '站点数据清理通过 Chromium CDP 验证');
+  await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+  const datasetId = 'site-data-clear-fixture';
+  await page.evaluate(async (id) => {
+    const { runIndexedDb } = await import('/src/indexeddb.js');
+    await runIndexedDb(10, id);
+  }, datasetId);
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send('Storage.clearDataForOrigin', {
+      origin: 'http://127.0.0.1:4173', storageTypes: 'all'
+    });
+    await page.reload();
+    const result = await page.evaluate(async (id) => {
+      const { checkIndexedDb } = await import('/src/indexeddb.js');
+      return checkIndexedDb(id);
+    }, datasetId);
+    expect(result.count).toBe(0);
+    expect(result.entityCounts).toEqual({
+      threads: 0, messages: 0, readingRounds: 0, notes: 0, memories: 0, sources: 0
+    });
+  } finally {
+    await session.detach();
+  }
+});
+
 test('Web Locks 不可用时 fail-closed，不能创建或写入数据集', async ({ page }) => {
   await page.goto('/');
   await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
