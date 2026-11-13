@@ -206,3 +206,22 @@ TextSage 最小验证：
 运行链接：https://github.com/dujiu1024-dotcom/read-book/actions/runs/43359000578
 
 注意：当前仅是上游源码在 GitHub Linux runner 上的构建验证。APK 成功仍不等于真机安装、启动、导入 EPUB、发起对话和引用定位端到端通过。
+
+
+## 8. 自动化测试覆盖审查补充（2026-11-13）
+
+- 固定版本目录树共发现 99 个测试文件：core 85、app-expo 7、CLI 7。文件数不等于测试用例数或覆盖率。
+- 根目录 `pnpm test` 实际运行 core 测试；CI 另行运行 app-expo 测试。
+- 已检查 Thread/Message 查询、Chat Store、RAG Search、Chat Memory 和 Reading Context 关键测试。
+- Thread/Message 测试主要验证本地 SQLite CRUD；没有证明知行的一书一 Thread 云端唯一约束、跨设备并发和 Message 幂等。
+- RAG 测试使用 Mock 数据库/Embedding，不能证明真实中文书籍检索和引用准确性。
+- Chat Memory 测试覆盖摘要滑动窗口，不覆盖知行的来源可追溯认知记忆。
+- app-expo 当前发现 7 个测试文件，主要覆盖键盘布局、阅读排版/字体、TTS 和主题；未发现 BookChatScreen 端到端测试。
+- 固定版本目录树中未发现 Detox、Maestro、Appium、Playwright 等 E2E 框架配置。
+- 详细审查与放行规则见 [ReadAny 自动化测试覆盖审查](readany-test-coverage-audit.md)。
+
+### 当前结论
+
+CI 第 4 次运行的 Core 测试、Expo App 测试、Reader 构建和 Expo 配置步骤均已通过；Android Debug APK 的 Gradle 构建仍在执行且尚无 Artifact。即使 APK 成功生成，也还需要真机安装、中文 EPUB 阅读、对话、流式响应、引用回跳和异常恢复验证。
+
+**当前仍不满足进入知行业务开发的放行条件。**
