@@ -421,3 +421,57 @@ packages/app-expo/src/
 先完成 M0：确认 Android APK 可运行，并验证最短阅读链路。随后从 M1 开始建立 API Client 和 Repository 边界，再实施 M2 一书一 Thread。Agent/RAG 迁移放在消息云端化之后，避免同时改变 UI、数据、模型和检索四条链路。
 
 **不可妥协的产品约束：一本书只有一个长期对话；Agent 不管理阅读过程；本地 SQLite 不是正式数据权威端。**
+
+
+## 13. 微信小程序入口下的阅读器可移植性复核（2026-11-13）
+
+审查固定上游 commit：fce44689e1377df1ae99a35e8e71d5e8b3a639d1。此次只做源码审查，不代表已在小程序运行环境验证。
+
+### 13.1 已确认的实现依赖
+
+| 文件/模块 | 源码证据 | 对小程序迁移的影响 |
+|---|---|---|
+| ReaderScreen.tsx | 使用 react-native-webview、Expo Asset、DocumentPicker、React Native AppState、Platform 等 | 页面本身属于 React Native 页面，不能直接放进原生小程序 |
+| reader.template.html | 通过 window.ReactNativeWebView.postMessage 与宿主通信 | 必须替换消息桥接；不能假设小程序 web-view 可提供同名对象 |
+| local-file-server.ts | 使用原生 Lighttpd 或 react-native-tcp-socket 在本机启动 HTTP 文件服务器，支持 Range | 依赖原生本地端口和文件系统；小程序没有相同的本机服务器执行环境 |
+| ExtractorWebView.tsx | 隐藏 WebView 承载书籍提取，并通过 WebView bridge 传输数据 | 需要重新设计文件读取、解析和消息回传方式 |
+| packages/app-expo/package.json | 包含 react-native-webview、Expo FileSystem、原生静态服务器、TCP Socket 等依赖 | 整个 Expo 包不能直接视为小程序可复用工程 |
+
+### 13.2 复用边界修订
+
+**可继续研究复用：**
+- Foliate / foliate-js 的阅读排版与分页引擎。
+- 阅读器 HTML/CSS/JavaScript 中与宿主无关的逻辑。
+- EPUB 章节结构、CFI 和文本锚点等定位算法。
+- Citation、Chunk、TextSegment 等数据结构与定位思想。
+
+**不能直接复用：**
+- ReaderScreen React Native 页面。
+- react-native-webview 宿主和 window.ReactNativeWebView bridge。
+- 本机 Lighttpd/TCP 文件服务器。
+- Expo FileSystem / DocumentPicker / Asset 等平台适配。
+- 依赖原生模块的本地书籍加载、文件服务和隐藏 WebView 提取流程。
+
+### 13.3 小程序阅读器候选路径
+
+A. 小程序原生页面 + 共享阅读引擎：
+- 将不依赖 DOM 宿主的章节、文本、定位和排版逻辑抽离。
+- 用小程序原生组件承载阅读页面。
+- 风险：EPUB 排版、复杂 CSS、脚注、图片、分页和选区需要较多适配。
+
+B. 小程序 web-view + 受控 H5 阅读器：
+- 将 Foliate 相关 HTML/JS 作为独立 H5 阅读器部署在已配置业务域名上。
+- 小程序 web-view 打开该 H5 页面，通过受控 URL 参数或消息机制传递 book/revision/locator。
+- 风险：H5 与小程序宿主的消息桥接、文件分段加载、域名白名单、登录态传递、返回导航和平台审核限制。
+
+C. 更换轻量阅读组件：
+- 以知行需要的格式和定位能力为基准，单独评估适配小程序的 EPUB/PDF 阅读组件。
+- 风险：可能失去 Foliate 的部分格式兼容和排版能力，需要重新建立格式样本测试集。
+
+当前不选择 A/B/C。先用最小技术验证比较 EPUB 加载、目录、选区、Citation 回跳、长文性能和文件访问，再决定。
+
+### 13.4 复用评估结论修订
+
+ReadAny 仍可作为阅读引擎、数据结构和交互设计的参考项目；但不再将其 Expo App 视为知行小程序客户端的直接 Fork 起点。客户端工程底座应在小程序/H5 方案验证后重新选择。
+
+这项修订不影响其上游 CI 构建结果，也不表示 Foliate 阅读引擎本身不可复用。
