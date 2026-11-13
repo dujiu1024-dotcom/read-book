@@ -96,14 +96,20 @@ function enqueueDatasetWrites(tx, count, datasetId) {
     });
   }
 }
-async function writeBatch(db, count, datasetId) {
+async function writeBatch(db, count, datasetId, failureInjection) {
   const start = performance.now();
   await new Promise((resolve, reject) => {
     const tx = db.transaction(STORES, 'readwrite');
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error('写入事务中止'));
-    clearDatasetInTransaction(tx, datasetId, () => enqueueDatasetWrites(tx, count, datasetId));
+    clearDatasetInTransaction(tx, datasetId, () => {
+      if (failureInjection === 'abort-after-clear') {
+        tx.abort();
+        return;
+      }
+      enqueueDatasetWrites(tx, count, datasetId);
+    });
   });
   return performance.now() - start;
 }
@@ -152,13 +158,13 @@ async function queryDataset(db, datasetId, count) {
   });
   return { rows, queryMs, relationQueryMs: performance.now() - joinStart, relationCount: relation.relationCount, relatedThreadCount: relation.relatedThreadCount };
 }
-async function runIndexedDbUnlocked(count, datasetId) {
+async function runIndexedDbUnlocked(count, datasetId, failureInjection) {
   const db = await openDb();
   const writeSamples = [], querySamples = [], relationSamples = [];
   let finalCount = 0, relationCount = 0, relatedThreadCount = 0;
   try {
     for (let run = 0; run < RUNS; run++) {
-      writeSamples.push(await writeBatch(db, count, datasetId));
+      writeSamples.push(await writeBatch(db, count, datasetId, failureInjection));
       const query = await queryDataset(db, datasetId, count);
       querySamples.push(query.queryMs);
       relationSamples.push(query.relationQueryMs);
@@ -176,8 +182,8 @@ async function runIndexedDbUnlocked(count, datasetId) {
     };
   } finally { db.close(); }
 }
-export async function runIndexedDb(count, datasetId) {
-  const coordinated = await withDatasetWriter(datasetId, () => runIndexedDbUnlocked(count, datasetId));
+export async function runIndexedDb(count, datasetId, options = {}) {
+  const coordinated = await withDatasetWriter(datasetId, () => runIndexedDbUnlocked(count, datasetId, options.failureInjection));
   return { ...coordinated.result, writerCoordination: coordinated.coordination };
 }
 export async function checkIndexedDb(datasetId) {
