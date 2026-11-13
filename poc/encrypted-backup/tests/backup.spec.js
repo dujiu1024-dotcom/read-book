@@ -117,6 +117,30 @@ test('全量后可创建有序增量备份并验证父链', async ({ page }) => 
 });
 
 
+
+test('增量备份和后续全量检查点必须显式复用数据集密钥材料', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup } = await import('/src/crypto.js');
+    let incrementalRejected = false;
+    let checkpointRejected = false;
+    try {
+      await createEncryptedBackup({
+        datasetId: 'missing-key-material', sequence: 2, parentBackupId: 'parent',
+        payload: { changes: [] }
+      });
+    } catch { incrementalRejected = true; }
+    try {
+      await createEncryptedBackup({
+        datasetId: 'missing-key-material', sequence: 2, backupType: 'full',
+        payload: { records: [] }
+      });
+    } catch { checkpointRejected = true; }
+    return { incrementalRejected, checkpointRejected };
+  });
+  expect(result).toEqual({ incrementalRejected: true, checkpointRejected: true });
+});
+
 test('数据集密钥材料不能跨数据集复用', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {
