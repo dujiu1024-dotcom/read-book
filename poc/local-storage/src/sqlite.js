@@ -31,8 +31,11 @@ function request(type, payload = {}) {
 }
 
 export async function runSqlite(count, datasetId) {
-  await request('init');
-  return request('run', { count, datasetId });
+  const coordinated = await withDatasetWriter(datasetId, async () => {
+    await request('init');
+    return request('run', { count, datasetId });
+  });
+  return { ...coordinated.result, writerCoordination: coordinated.coordination };
 }
 export async function checkSqlite(datasetId) {
   await request('init');
