@@ -34,7 +34,7 @@ npm run build
 
 - 两种存储方案现使用相同的六实体最小领域关系：Thread、Message、ReadingRound、Note、Memory、Source；测试夹具建立 Thread→ReadingRound→Note→Memory 与 Note→Source 关系，Message 归属 Thread。
 - IndexedDB 使用六个 Object Store、datasetId 索引、thread/sequence 唯一索引，以及 readingRoundId/noteId 等关系索引。
-- SQLite 使用独立 Worker、OPFS VFS、六张关系表、外键、CHECK、唯一约束及关系索引。
+- SQLite 使用独立 Worker、OPFS VFS、六张关系表、外键、CHECK、唯一约束及关系索引；六实体验证使用独立 v2 数据库文件，避免与旧两实体 PoC 文件发生结构冲突。
 - 性能界面支持 1k、10k、100k 消息；每次规模执行 5 轮，分别记录写入、数据集查询和跨 Thread、ReadingRound、Note、Memory、Source 关系查询的 P50/P95 与原始样本。IndexedDB 使用 datasetId 与复合索引；SQLite 使用多表 JOIN。内存字段仅在浏览器暴露 performance.memory 时提供，存储体积由 Storage Estimate 观测。
 - IndexedDB 和 SQLite 分别使用不同数据库，测试运行时一次只选择一个写入；两者不是同一数据集的双写主库。
 - OPFS 不可用时 SQLite 方案明确失败，不降级为内存数据库。
@@ -49,7 +49,7 @@ npm run build
 | IndexedDB 1k/10k/100k | 100k 自动化通过 | Run 43424902738：Chromium 100k、5 轮写入/查询与 Thread 关联查询通过（1.9 分钟）；指标原始数据将在下一轮 CI 日志输出 |
 | SQLite OPFS 1k/10k/100k | CI 环境未具备 VFS | Run 43424902738：Worker 中 `sqlite3.opfs` 不可用；不能标记通过，新增实际 VFS 探测并跳过机制，需在支持 OPFS 的 Chrome/Edge 环境单独实测 |
 | Chrome 与 Edge 实测 | 未执行 | Playwright Chromium 不等于两个正式浏览器版本验收 |
-| 六实体关系与关联查询 | 已实现，待新 CI | 两种适配器均建立六实体关系；IndexedDB 关系索引与 SQLite 多表 JOIN 已接入性能基准 |
+| 六实体关系与关联查询 | 已实现，待新 CI | 两种适配器均建立六实体关系；IndexedDB 关系索引与 SQLite 多表 JOIN 已接入性能基准，校验 10 条完整 Thread→Source 关系链 |
 | 多标签页单写者与锁交接 | CI 通过 | Run 43424902738：Chromium 跨标签页竞争、阻止第二标签页写入、释放后交接并成功写入通过 |
 | Worker 崩溃/页面关闭恢复 | 未执行 | 需故障注入 |
 | 配额不足与 persist 拒绝 | 未执行 | 需模拟与真实浏览器测试 |
