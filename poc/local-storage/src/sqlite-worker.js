@@ -171,6 +171,41 @@ async function run(count, datasetId) {
   };
 }
 
+
+function constraintProbe(datasetId) {
+  const threadId = datasetId + ':thread:0';
+  const roundId = datasetId + ':round:0';
+  const noteId = datasetId + ':note:0';
+  const sourceId = datasetId + ':source:book';
+  const attempts = {
+    messageThreadSequence: () => execute(
+      'INSERT INTO message(id,dataset_id,thread_id,sequence,role,content,created_at) VALUES (?,?,?,?,?,?,?)',
+      [datasetId + ':duplicate-message', datasetId, threadId, 0, 'user', 'duplicate', 999999]
+    ),
+    readingRoundThreadSequence: () => execute(
+      'INSERT INTO reading_round(id,dataset_id,thread_id,sequence) VALUES (?,?,?,?)',
+      [datasetId + ':duplicate-round', datasetId, threadId, 1]
+    ),
+    noteReadingRound: () => execute(
+      'INSERT INTO note(id,dataset_id,thread_id,reading_round_id,source_id,content) VALUES (?,?,?,?,?,?)',
+      [datasetId + ':duplicate-note', datasetId, threadId, roundId, sourceId, 'duplicate']
+    ),
+    memoryNote: () => execute(
+      'INSERT INTO memory(id,dataset_id,thread_id,note_id,source_id,content) VALUES (?,?,?,?,?,?)',
+      [datasetId + ':duplicate-memory', datasetId, threadId, noteId, sourceId, 'duplicate']
+    )
+  };
+  const rejected = {};
+  for (const [name, attempt] of Object.entries(attempts)) {
+    try { attempt(); rejected[name] = false; }
+    catch (error) { rejected[name] = /constraint|unique/i.test(error.message); }
+  }
+  return {
+    adapter: 'SQLite WASM + OPFS', datasetId, rejected,
+    integrity: Object.values(rejected).every(Boolean)
+  };
+}
+
 function check(datasetId) {
   const integrity = execute('PRAGMA integrity_check');
   const count = execute('SELECT COUNT(*) AS count FROM message WHERE dataset_id = ?', [datasetId]);
@@ -212,6 +247,8 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ id: data.id, result: await run(data.count, data.datasetId) });
     } else if (data.type === 'check') {
       self.postMessage({ id: data.id, result: check(data.datasetId) });
+    } else if (data.type === 'constraints') {
+      self.postMessage({ id: data.id, result: constraintProbe(data.datasetId) });
     }
   } catch (error) {
     self.postMessage({ id: data.id, error: { name: error.name, message: error.message } });
