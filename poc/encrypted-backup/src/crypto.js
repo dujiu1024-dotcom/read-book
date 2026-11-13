@@ -21,11 +21,14 @@ async function importAesKey(raw, usages) {
 async function digest(bytes) {
   return bytesToBase64(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
 }
-function aadFor({ datasetId, backupId, sequence, chunkIndex, schemaVersion }) {
-  return encoder.encode([datasetId, backupId, sequence, chunkIndex, schemaVersion, SUITE].join('|'));
+function aadFor({ datasetId, backupId, sequence, parentBackupId, backupType, chunkIndex, schemaVersion }) {
+  return encoder.encode([datasetId, backupId, sequence, parentBackupId || '', backupType, chunkIndex, schemaVersion, SUITE].join('|'));
 }
 
-export async function createEncryptedBackup({ datasetId, sequence, parentBackupId = null, payload }) {
+export async function createEncryptedBackup({ datasetId, sequence, parentBackupId = null, backupType = parentBackupId ? 'incremental' : 'full', payload }) {
+  if (!['full', 'incremental'].includes(backupType)) throw new Error('不支持的备份类型');
+  if (backupType === 'full' && parentBackupId) throw new Error('全量备份不能指定父备份');
+  if (backupType === 'incremental' && !parentBackupId) throw new Error('增量备份必须指定父备份');
   const backupId = crypto.randomUUID();
   const dekRaw = randomBytes(32);
   const recoveryKeyRaw = randomBytes(32);
@@ -48,7 +51,7 @@ export async function createEncryptedBackup({ datasetId, sequence, parentBackupI
       nonceText = bytesToBase64(nonce);
     } while (usedNonces.has(nonceText));
     usedNonces.add(nonceText);
-    const aad = aadFor({ datasetId, backupId, sequence, chunkIndex, schemaVersion: SCHEMA_VERSION });
+    const aad = aadFor({ datasetId, backupId, sequence, parentBackupId, backupType, chunkIndex, schemaVersion: SCHEMA_VERSION });
     const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aad }, dek, part));
     chunks.push({
       chunkIndex,
@@ -63,7 +66,7 @@ export async function createEncryptedBackup({ datasetId, sequence, parentBackupI
   return {
     recoveryKey: bytesToBase64(recoveryKeyRaw),
     manifest: {
-      datasetId, backupId, sequence, parentBackupId, schemaVersion: SCHEMA_VERSION,
+      datasetId, backupId, sequence, parentBackupId, backupType, schemaVersion: SCHEMA_VERSION,
       cipherSuite: SUITE, wrappedDek: bytesToBase64(wrappedDek), wrapNonce: bytesToBase64(wrapNonce),
       chunkCount: chunks.length, chunks: chunks.map(({ chunkIndex, nonce, ciphertextHash, plaintextSize, ciphertextSize }) =>
         ({ chunkIndex, nonce, ciphertextHash, plaintextSize, ciphertextSize }))
@@ -73,7 +76,9 @@ export async function createEncryptedBackup({ datasetId, sequence, parentBackupI
 }
 
 export async function decryptBackup({ manifest, chunks, recoveryKey }) {
-  if (manifest.schemaVersion !== SCHEMA_VERSION || manifest.cipherSuite !== SUITE) throw new Error('不支持的备份协议版本或算法套件');
+  if (manifest.schemaVersion !== SCHEMA_VERSION || manifest.cipherSuite !== SUITE || !['full', 'incremental'].includes(manifest.backupType)) throw new Error('不支持的备份协议版本、备份类型或算法套件');
+  if (manifest.backupType === 'full' && manifest.parentBackupId) throw new Error('全量备份父链非法');
+  if (manifest.backupType === 'incremental' && !manifest.parentBackupId) throw new Error('增量备份缺少父备份');
   const recoveryKeyRaw = base64ToBytes(recoveryKey);
   const wrappingKey = await importAesKey(recoveryKeyRaw, ['decrypt']);
   const dekRaw = await crypto.subtle.decrypt(
@@ -90,7 +95,7 @@ export async function decryptBackup({ manifest, chunks, recoveryKey }) {
     const metadata = manifest.chunks.find((item) => item.chunkIndex === chunk.chunkIndex);
     if (!metadata || metadata.ciphertextHash !== await digest(base64ToBytes(chunk.ciphertext))) throw new Error('密文哈希校验失败');
     if (chunk.chunkIndex !== i) throw new Error('分块序号不连续');
-    const aad = aadFor({ datasetId: manifest.datasetId, backupId: manifest.backupId, sequence: manifest.sequence, chunkIndex: i, schemaVersion: manifest.schemaVersion });
+    const aad = aadFor({ datasetId: manifest.datasetId, backupId: manifest.backupId, sequence: manifest.sequence, parentBackupId: manifest.parentBackupId, backupType: manifest.backupType, chunkIndex: i, schemaVersion: manifest.schemaVersion });
     plaintextParts.push(new Uint8Array(await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: base64ToBytes(metadata.nonce), additionalData: aad },
       dek,
