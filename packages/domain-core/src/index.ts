@@ -141,10 +141,12 @@ export function advanceMainline(
   };
 }
 
-/** User messages are durable local input before any Agent request is attempted. */
-export function createUserMessage(input: Omit<UserMessage, "role" | "status">): UserMessage {
+/** Build a user-message draft. The repository must commit it before starting Agent generation. */
+export function createUserMessage(
+  input: Omit<UserMessage, "role" | "status">,
+): Omit<UserMessage, "status"> {
   if (!input.content.trim()) throw new DomainRuleError("A user message cannot be empty.");
-  return { ...input, role: "user", status: "saved" };
+  return { ...input, role: "user" };
 }
 
 /** A generation result changes only the assistant message; it cannot erase user input. */
@@ -155,6 +157,9 @@ export function transitionAssistantMessage(
 ): AssistantMessage {
   if (message.status !== "generating") {
     throw new DomainRuleError("Only a generating assistant message can transition.");
+  }
+  if (status === "generating") {
+    throw new DomainRuleError("An assistant message cannot transition back to generating.");
   }
   return { ...message, status, content };
 }
