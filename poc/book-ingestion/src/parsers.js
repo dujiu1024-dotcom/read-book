@@ -105,10 +105,15 @@ async function parsePdf(bytes) {
       .filter((item) => !repeatedEdgeText.has(item.text.replace(/\\s+/g, ' ').trim()));
     const ordered = orderPdfItems(visibleItems, page.width);
     const items = ordered.items;
+    const printedPageItem = items.find((item) =>
+      item.y < 40 && /^\\d{1,4}$/.test(item.text.trim())
+    );
+    const bodyItems = printedPageItem ? items.filter((item) => item !== printedPageItem) : items;
     return {
-      physicalPage: page.physicalPage, printedPage: null,
-      text: items.map((item) => item.text).join(' ').replace(/\\s+/g, ' ').trim(),
-      viewport: page.viewport, items: items.length,
+      physicalPage: page.physicalPage,
+      printedPage: printedPageItem ? Number(printedPageItem.text.trim()) : null,
+      text: bodyItems.map((item) => item.text).join(' ').replace(/\\s+/g, ' ').trim(),
+      viewport: page.viewport, items: bodyItems.length,
       columnCount: ordered.columnCount, columnSplitAt: ordered.splitAt,
       textItems: items
     };
