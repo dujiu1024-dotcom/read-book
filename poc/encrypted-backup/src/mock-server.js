@@ -44,7 +44,18 @@ export class MockBackupServer {
     if (!session || session.state !== 'uploading') throw new Error('上传会话不存在或已结束');
     if (this.tombstones.has(session.manifest.datasetId)) throw new Error('数据集已清除，拒绝上传');
     if (!Number.isInteger(chunk.chunkIndex) || chunk.chunkIndex < 0 || chunk.chunkIndex >= session.manifest.chunkCount) throw new Error('分块序号非法');
-    session.parts.set(chunk.chunkIndex, chunk);
+    const existing = session.parts.get(chunk.chunkIndex);
+    if (existing && existing.ciphertext !== chunk.ciphertext) {
+      throw new Error('同一分块序号不能上传不同密文');
+    }
+    // Repeating the exact same part is safe and idempotent after a lost response.
+    if (!existing) session.parts.set(chunk.chunkIndex, chunk);
+  }
+  missingParts(backupId) {
+    const session = this.sessions.get(backupId);
+    if (!session || session.state !== 'uploading') throw new Error('上传会话不存在或已结束');
+    return Array.from({ length: session.manifest.chunkCount }, (_, index) => index)
+      .filter((index) => !session.parts.has(index));
   }
   async complete(backupId) {
     const session = this.sessions.get(backupId);
