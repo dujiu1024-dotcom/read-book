@@ -324,7 +324,7 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 - 流式 delta 仅为临时 UI 状态；不得作为正式 Message 或备份数据。
 - GenerationJob 的 `completed / failed / cancelled / expired` 是服务端终态；终态竞态由服务端原子提交决定。客户端以查询到的最终结果为准，不以 SSE 事件流作为最终权威。
 
-## 12. 事件与审计最低要求
+## 13. 事件与审计最低要求
 
 关键事件建议：
 - mainline.source_presented
@@ -343,7 +343,7 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 
 事件至少包含 event_id、local_dataset_id、thread_id（适用时）、reading_round_id（适用时）、entity_id、event_type、occurred_at、schema_version。事件日志存本地并纳入加密备份；服务端不得为审计而保存私人消息正文。
 
-## 13. 尚待确认与验证
+## 14. 尚待确认与验证
 
 ### 需要产品确认
 1. 简短回应（如“确实”“不对”）是否可由 Agent 结合上下文判定为实质性讨论；建议允许上下文判断，但不得依赖字数阈值。
