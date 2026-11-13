@@ -46,7 +46,7 @@ npm run build
 | 验收项 | 状态 | 说明 |
 |---|---|---|
 | 工程独立运行 | 待本地执行 | 尚未生成 lockfile |
-| IndexedDB 1k/10k/100k | 100k 自动化通过 | Run 43424902738：Chromium 100k、5 轮写入/查询与 Thread 关联查询通过（1.9 分钟）；指标原始数据将在下一轮 CI 日志输出 |
+| IndexedDB 1k/10k/100k | 六实体 100k 自动化通过 | Run 43427818798：Chromium 五轮六实体写入/查询/Thread→Source 关联查询通过（1.4 分钟）；最新十条关系链完整性检查待 CI |
 | SQLite OPFS 1k/10k/100k | CI 环境未具备 VFS | Run 43424902738：Worker 中 `sqlite3.opfs` 不可用；不能标记通过，新增实际 VFS 探测并跳过机制，需在支持 OPFS 的 Chrome/Edge 环境单独实测 |
 | Chrome 与 Edge 实测 | 未执行 | Playwright Chromium 不等于两个正式浏览器版本验收 |
 | 六实体关系与关联查询 | 已实现，待新 CI | 两种适配器均建立六实体关系；IndexedDB 关系索引与 SQLite 多表 JOIN 已接入性能基准，校验 10 条完整 Thread→Source 关系链 |
