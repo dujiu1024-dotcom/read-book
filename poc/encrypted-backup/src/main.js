@@ -14,7 +14,7 @@ $('backup').addEventListener('click', async () => {
     const encrypted = await createEncryptedBackup({ datasetId, sequence: 1, payload });
     const session = server.init(encrypted.manifest, 'init-' + encrypted.manifest.backupId);
     for (const chunk of encrypted.chunks) server.putPart(encrypted.manifest.backupId, chunk);
-    server.complete(encrypted.manifest.backupId);
+    await server.complete(encrypted.manifest.backupId);
     lastBackup = { ...encrypted, state: 'committed' };
     $('status').textContent = '备份完成：服务端仅保存密文与 Manifest。';
     show({ datasetId, backupId: encrypted.manifest.backupId, chunks: encrypted.manifest.chunkCount, recoveryKey: encrypted.recoveryKey, serverCanDecrypt: false, state: session.state });
