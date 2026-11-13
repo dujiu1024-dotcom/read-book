@@ -3,8 +3,16 @@ import { saveMessage, saveJob, listMessages, listJobs } from './local-store.js';
 
 const $ = (id) => document.getElementById(id);
 let activeJob = null;
+let pendingJob = null;
 let streamController = null;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function refreshRetryButton() {
+  const jobs = await listJobs();
+  pendingJob = jobs
+    .filter((job) => !job.generationId && ['queued', 'creation_failed'].includes(job.status))
+    .sort((a, b) => b.userMessageId.localeCompare(a.userMessageId))[0] || null;
+  $('retry').hidden = !pendingJob;
+}
 async function renderMessages() {
   const messages = (await listMessages()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   $('messages').innerHTML = messages.map((item) => `<li><strong>${item.role}</strong> · ${item.content}</li>`).join('');
@@ -89,8 +97,36 @@ $('send').addEventListener('click', async () => {
   await saveJob(job);
   await renderMessages();
   status('用户消息已先落本地，正在创建服务端生成任务…');
-  try { activeJob = await requestGeneration(job); await consumeEvents(activeJob); }
-  catch (error) { status('任务暂不可用；用户消息仍保留在本地。' + error.message); }
+  pendingJob = job;
+  $('retry').hidden = false;
+  try {
+    activeJob = await requestGeneration(job);
+    pendingJob = null;
+    $('retry').hidden = true;
+    await consumeEvents(activeJob);
+  } catch (error) {
+    pendingJob = { ...job, status: 'creation_failed', lastError: error.message };
+    await saveJob(pendingJob);
+    $('retry').hidden = false;
+    status('任务暂不可用；用户消息仍保留在本地。可重试创建，不会重复插入用户消息。' + error.message);
+  }
+});
+$('retry').addEventListener('click', async () => {
+  if (!pendingJob) await refreshRetryButton();
+  if (!pendingJob) { status('没有待重试的任务。'); return; }
+  const retrying = pendingJob;
+  status('使用原幂等键重试创建任务…');
+  try {
+    activeJob = await requestGeneration(retrying);
+    pendingJob = null;
+    $('retry').hidden = true;
+    await consumeEvents(activeJob);
+  } catch (error) {
+    pendingJob = { ...retrying, status: 'creation_failed', lastError: error.message };
+    await saveJob(pendingJob);
+    $('retry').hidden = false;
+    status('重试仍未成功；本地用户消息保持不变。' + error.message);
+  }
 });
 $('disconnect').addEventListener('click', () => {
   streamController?.abort();
@@ -116,4 +152,5 @@ $('cancel').addEventListener('click', async () => {
   await finalize(activeJob);
 });
 await renderMessages();
+await refreshRetryButton();
 await $('recover').click();
