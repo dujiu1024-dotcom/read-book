@@ -66,13 +66,13 @@ test("discussed mainline unit advances explicitly and resets discussion state", 
   assert.equal(next.currentUnitDiscussed, false);
 });
 
-test("user input is created as saved before generation", () => {
+test("user input draft is created before the persistence boundary", () => {
   const message = createUserMessage({
     id: "m-user", threadId: "t1", content: "这是用户的原始表达",
     createdAt: "2026-11-13T00:00:00.000Z", sourceReferences: [],
   });
   assert.equal(message.role, "user");
-  assert.equal(message.status, "saved");
+  assert.equal("status" in message, false);
   assert.throws(() => createUserMessage({
     id: "empty", threadId: "t1", content: "  ",
     createdAt: "2026-11-13T00:00:00.000Z", sourceReferences: [],
@@ -88,6 +88,7 @@ test("assistant generation may complete, fail or cancel", () => {
   assert.equal(transitionAssistantMessage(assistant, "failed").status, "failed");
   assert.equal(transitionAssistantMessage(assistant, "cancelled").status, "cancelled");
   assert.equal(transitionAssistantMessage(assistant, "completed", "回应").content, "回应");
+  assert.throws(() => transitionAssistantMessage(assistant, "generating"), DomainRuleError);
   assert.throws(() => transitionAssistantMessage(
     transitionAssistantMessage(assistant, "failed"), "completed",
   ), DomainRuleError);
