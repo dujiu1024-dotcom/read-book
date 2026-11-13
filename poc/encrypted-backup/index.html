@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>知行 · 加密备份 PoC</title></head>
+<body>
+  <main>
+    <header><p>READ-BOOK / TECHNICAL POC B</p><h1>端侧加密备份与恢复</h1><p>仅使用虚拟数据和内存 Mock API，不连接真实账号或服务端。</p></header>
+    <section>
+      <h2>模拟备份</h2>
+      <label>虚拟数据集 JSON<textarea id="payload" rows="7">{"messages":[{"id":"m1","text":"这是虚拟测试数据，不是真实用户内容。"}],"notes":[]}</textarea></label>
+      <div class="actions"><button id="backup">加密并上传</button><button id="restore">下载并恢复</button><button id="tamper">篡改密文后恢复</button><button id="clear">写入清除墓碑</button></div>
+      <p id="status" role="status">等待操作。</p><pre id="output"></pre>
+    </section>
+    <section><h2>安全边界</h2><ul><li>每个数据集随机生成 256-bit DEK；独立恢复密钥随机生成，和账号密码分离。</li><li>每个分块使用独立随机 96-bit nonce，AES-256-GCM；AAD 绑定数据集、备份、序号、块号和 Schema 版本。</li><li>Mock 服务端只保存密文与最小 Manifest，不能解密。</li><li>恢复密钥格式、KDF 和参数仍待安全评审，本 PoC 不将口令 KDF 作为最终方案。</li></ul></section>
+  </main>
+  <script type="module" src="/src/main.js"></script>
+</body></html>
