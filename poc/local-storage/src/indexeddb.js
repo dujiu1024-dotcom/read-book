@@ -305,6 +305,15 @@ export async function runMigrationProbe() {
     const expectedStores = STORES.every((store) => migrated.stores.includes(store));
     const expectedIndexes = ['datasetId', 'threadSequence'].every((index) => migrated.messageIndexes.includes(index));
     const v1RoundIndexCorrect = migrated.roundSequenceUnique && !migrated.roundIndexes.includes('threadId');
+    const duplicateMessageRejected = await new Promise((resolve) => {
+      const tx = db.transaction('messages', 'readwrite');
+      tx.objectStore('messages').add({
+        id: 'duplicate-legacy-message', datasetId: 'legacy', threadId: 'legacy-thread',
+        sequence: 0, role: 'user', content: 'duplicate', createdAt: 2
+      });
+      tx.oncomplete = () => resolve(false);
+      tx.onabort = () => resolve(true);
+    });
 
     await new Promise((resolve, reject) => {
       const request = indexedDB.open(v3Name, 3);
@@ -365,10 +374,10 @@ export async function runMigrationProbe() {
       legacyThreadPreserved: migrated.thread?.title === 'Legacy Thread',
       legacyMessagePreserved: migrated.message?.content === '迁移前原文',
       expectedStores, expectedIndexes,
-      v1RoundIndexCorrect, v3RoundIndexCorrect, multipleRoundsAllowed, duplicateSequenceRejected,
+      v1RoundIndexCorrect, v3RoundIndexCorrect, multipleRoundsAllowed, duplicateSequenceRejected, duplicateMessageRejected,
       integrity: migrated.thread?.title === 'Legacy Thread' &&
         migrated.message?.content === '迁移前原文' && expectedStores &&
-        expectedIndexes && v1RoundIndexCorrect && v3RoundIndexCorrect
+        expectedIndexes && v1RoundIndexCorrect && v3RoundIndexCorrect && duplicateMessageRejected
     };
   } finally {
     db?.close();
