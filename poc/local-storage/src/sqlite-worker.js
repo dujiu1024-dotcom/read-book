@@ -164,10 +164,10 @@ function check(datasetId) {
   const relations = execute(`
     SELECT COUNT(*) AS count FROM message m
     JOIN thread t ON t.id = m.thread_id
-    JOIN reading_round rr ON rr.thread_id = t.id
-    JOIN note n ON n.reading_round_id = rr.id
-    JOIN memory mm ON mm.note_id = n.id
-    JOIN source s ON s.id = n.source_id
+    JOIN reading_round rr ON rr.thread_id = t.id AND rr.dataset_id = t.dataset_id
+    JOIN note n ON n.reading_round_id = rr.id AND n.dataset_id = rr.dataset_id AND n.thread_id = t.id
+    JOIN memory mm ON mm.note_id = n.id AND mm.dataset_id = n.dataset_id AND mm.thread_id = t.id AND mm.source_id = n.source_id
+    JOIN source s ON s.id = n.source_id AND s.dataset_id = n.dataset_id
     WHERE m.dataset_id = ?
   `, [datasetId]);
   return {
