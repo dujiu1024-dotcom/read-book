@@ -36,6 +36,8 @@ jobs:
           python-version: "3.12"
       - name: Check prototype JavaScript syntax
         run: node --check prototypes/pc-reading/app.js
+      - name: Run BookContentProvider contract tests
+        run: node --test prototypes/pc-reading/book-content-provider.test.mjs
       - name: Install pinned browser test dependency
         run: npm install --no-save playwright@1.55.0
       - name: Install Chromium
