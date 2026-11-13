@@ -179,3 +179,16 @@ test("stream cursor advances across multiple events and rejects unknown event ty
     { event_id: "e1", generation_id: "generation-1", sequence: 1, type: "unknown" },
   ), /Unknown generation event type/);
 });
+
+test("rejects malformed result payloads and non-object relevant memory", () => {
+  assert.throws(() => validateGenerationSnapshot({
+    generation_id: "generation-1",
+    status: "completed",
+    expires_at: "2026-11-14T00:00:00.000Z",
+    result: { content: 42 },
+  }), GenerationProtocolError);
+  assert.throws(() => validateGenerationRequest({
+    ...request,
+    context: { ...request.context, relevant_memory: ["not-an-object"] as unknown as Array<Record<string, unknown>> },
+  }), GenerationProtocolError);
+});
