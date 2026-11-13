@@ -1,0 +1,15 @@
+{
+  "title": "示例书籍",
+  "authors": [
+    "示例作者"
+  ],
+  "language": "zh-CN",
+  "description": null,
+  "identifiers": {
+    "isbn": "9780000000000"
+  },
+  "metadata_confidence": 0.95,
+  "metadata_sources": [
+    "source title page"
+  ]
+}
