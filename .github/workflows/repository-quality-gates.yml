@@ -9,6 +9,7 @@ on:
       - "README.md"
       - "docs/**"
       - ".github/quality/**"
+      - ".github/quality-requirements.txt"
       - ".github/scripts/**"
       - ".github/workflows/repository-quality-gates.yml"
   pull_request:
