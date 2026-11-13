@@ -1,6 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
+
+function citationsText(result) {
+  if (result.parsed.format === 'EPUB') return result.parsed.chapters[0].text.slice(0, 40);
+  if (result.parsed.format === 'PDF') return result.parsed.pages[0].text.slice(0, 40);
+  return result.parsed.paragraphs[0].text.slice(0, 40);
+}
+
 const fixtureHashes = JSON.parse(readFileSync(new URL('../fixtures.sha256.json', import.meta.url), 'utf8'));
 
 for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 'txt-1', 'txt-2', 'txt-3']) {
@@ -52,7 +59,10 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
       expect(result.parsed.paragraphs[0].text).toContain('中文字符');
     }
     await page.getByRole('button', { name: '定位到原文' }).click();
-    await expect(page.locator('#source')).toContainText('locator');
+    await expect(page.locator('#source')).toContainText('定位记录');
+    await expect(page.locator('#source')).toContainText('引用片段');
+    await expect(page.locator('#source')).toContainText('所在原文单元');
+    expect(await page.locator('#source').textContent()).toContain(citationsText(result));
     await page.reload();
     await expect(page.locator('#saved-books')).toContainText(fixture);
     await page.getByRole('button', { name: new RegExp(fixture) }).click();
