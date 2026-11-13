@@ -71,3 +71,21 @@ test('不支持的文件格式明确失败且不污染本地书库', async ({ pa
   await expect(page.locator('#status')).toContainText('暂不支持该文件格式');
   await expect(page.locator('#saved-books')).not.toContainText('unsupported.mobi');
 });
+
+test('TXT 段落定位偏移与去除首尾空白后的原文完全一致', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { parseBook } = await import('/src/parsers.js');
+    const source = '  标题段落  \\n\\n   正文段落包含中文和 emoji 😀  \\n\\n\\t末段  ';
+    const parsed = await parseBook('offset-check.txt', new TextEncoder().encode(source));
+    return parsed.paragraphs.map((paragraph) => ({
+      text: paragraph.text,
+      slice: source.slice(paragraph.startOffset, paragraph.endOffset),
+      startOffset: paragraph.startOffset,
+      endOffset: paragraph.endOffset
+    }));
+  });
+  expect(result.length).toBe(3);
+  for (const paragraph of result) expect(paragraph.slice).toBe(paragraph.text);
+});
+
