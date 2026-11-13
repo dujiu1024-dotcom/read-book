@@ -56,6 +56,22 @@ npm run build
 | 迁移与批量一致性快照 | 未实现 | 后续迭代 |
 | P50/P95、内存、存储体积 | 已加入采集 | 尚未在目标 Chrome/Edge 环境完成实测与报告 |
 
+## 六实体模型 Chromium CI 100k 基准结果（Run 43427818798）
+
+测试环境：GitHub Actions Linux headless Chromium；100,000 条消息；每轮同时写入 10 条 Thread、10 条 ReadingRound、10 条 Note、10 条 Memory、1 条 Source；五轮；Web Locks 单写者协调已启用。
+
+| 指标 | P50 | P95 |
+|---|---:|---:|
+| IndexedDB 六实体批量写入 | 3,805 ms | 3,897 ms |
+| IndexedDB 数据集查询（getAll） | 2,058 ms | 2,424 ms |
+| IndexedDB Thread→Source 关联查询 | 224 ms | 291 ms |
+
+- JS Heap：约 103 MB。
+- Storage Estimate：usage 约 114.0 MB；quota 约 10.85 GB；usageDetails.indexedDB 约 114.0 MB。
+- persisted() 与 persist() 均为 false：当前 CI 环境未授予持久化存储权限。
+- SQLite OPFS 100k：Worker 未暴露 OPFS VFS，明确跳过，没有 SQLite 性能数据。
+- 本次六实体性能基准通过；随后补充的十条 Thread→Source 关系链完整性及跨实体 ID 一致性检查，最新代码等待下一轮 CI。
+
 ## 两实体模型历史基线（Run 43425500315；不代表当前六实体模型）
 
 测试环境：GitHub Actions Linux headless Chromium；100,000 条消息；5 轮写入/查询；Web Locks 单写者协调已启用。数值为本次运行观测值，不代表 Chrome/Edge 桌面稳定版。
