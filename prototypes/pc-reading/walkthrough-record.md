@@ -3,7 +3,8 @@
 日期：2026-11-13  
 版本：PR #20 分支首轮  
 测试数据：原型内置虚构书籍与模拟对话  
-证据类型：Chromium 自动化交互走查；不是外部用户访谈或真实用户可用性研究。
+证据类型：Chromium 自动化交互走查；不是外部用户访谈或真实用户可用性研究。  
+CI 运行：[PC reading prototype #2](https://github.com/dujiu1024-dotcom/read-book/actions/runs/43424432306)，结论 success。
 
 | ID | 任务 | 走查结果 | 结论/遗留 |
 |---|---|---|---|
