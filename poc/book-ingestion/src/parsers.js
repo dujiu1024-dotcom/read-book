@@ -46,6 +46,29 @@ async function parseEpub(bytes) {
   return result;
 }
 
+function orderPdfItems(items, pageWidth) {
+  const starts = [...new Set(items.map((item) => item.x))].sort((a, b) => a - b);
+  let splitAt = null;
+  let largestGap = 0;
+  for (let index = 0; index < starts.length - 1; index++) {
+    const gap = starts[index + 1] - starts[index];
+    if (gap > largestGap) { largestGap = gap; splitAt = (starts[index] + starts[index + 1]) / 2; }
+  }
+  // A wide horizontal gap relative to page width is treated as a two-column
+  // layout. This is a deliberately conservative heuristic, not full layout analysis.
+  if (splitAt !== null && largestGap >= pageWidth * 0.18) {
+    const topToBottom = (a, b) => Math.abs(a.y - b.y) > 2 ? b.y - a.y : a.x - b.x;
+    const left = items.filter((item) => item.x < splitAt).sort(topToBottom);
+    const right = items.filter((item) => item.x >= splitAt).sort(topToBottom);
+    return { items: [...left, ...right], columnCount: 2, splitAt };
+  }
+  return {
+    items: [...items].sort((a, b) => Math.abs(a.y - b.y) > 2 ? b.y - a.y : a.x - b.x),
+    columnCount: 1,
+    splitAt: null
+  };
+}
+
 async function parsePdf(bytes) {
   if (bytes.length < 5 || new TextDecoder().decode(bytes.slice(0, 5)) !== '%PDF-') {
     throw new Error('PDF 文件头无效');
@@ -74,17 +97,19 @@ async function parsePdf(bytes) {
         repeatedEdgeCounts.set(normalized, (repeatedEdgeCounts.get(normalized) || 0) + 1);
       }
     }
-    rawPages.push({ physicalPage: pageNumber, viewport: viewport.view, height: viewport.height, items });
+    rawPages.push({ physicalPage: pageNumber, viewport: viewport.view, width: viewport.width, height: viewport.height, items });
   }
   const repeatedEdgeText = new Set([...repeatedEdgeCounts].filter(([, count]) => count > 1).map(([text]) => text));
   const pages = rawPages.map((page) => {
-    const items = page.items
-      .filter((item) => !repeatedEdgeText.has(item.text.replace(/\\s+/g, ' ').trim()))
-      .sort((a, b) => Math.abs(a.y - b.y) > 2 ? b.y - a.y : a.x - b.x);
+    const visibleItems = page.items
+      .filter((item) => !repeatedEdgeText.has(item.text.replace(/\\s+/g, ' ').trim()));
+    const ordered = orderPdfItems(visibleItems, page.width);
+    const items = ordered.items;
     return {
       physicalPage: page.physicalPage, printedPage: null,
       text: items.map((item) => item.text).join(' ').replace(/\\s+/g, ' ').trim(),
       viewport: page.viewport, items: items.length,
+      columnCount: ordered.columnCount, columnSplitAt: ordered.splitAt,
       textItems: items
     };
   });
@@ -99,7 +124,11 @@ async function parseTxt(bytes) {
   const matcher = /[^\\r\\n]+(?:\\r?\\n(?!\\s*\\r?\\n)[^\\r\\n]+)*/g;
   for (const match of text.matchAll(matcher)) {
     const value = match[0].trim();
-    if (value) paragraphs.push({ text: value, startOffset: match.index, endOffset: match.index + match[0].length });
+    if (value) {
+      const leadingWhitespace = match[0].length - match[0].trimStart().length;
+      const startOffset = match.index + leadingWhitespace;
+      paragraphs.push({ text: value, startOffset, endOffset: startOffset + value.length });
+    }
   }
   return { format: 'TXT', encoding, characterCount: text.length, paragraphCount: paragraphs.length, paragraphs };
 }
