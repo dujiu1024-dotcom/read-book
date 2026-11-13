@@ -206,6 +206,11 @@ function constraintProbe(datasetId) {
   };
 }
 
+function corruptDatasetForTest(datasetId) {
+  execute('DELETE FROM memory WHERE id = ?', [datasetId + ':memory:0']);
+  return check(datasetId);
+}
+
 function check(datasetId) {
   const integrity = execute('PRAGMA integrity_check');
   const count = execute('SELECT COUNT(*) AS count FROM message WHERE dataset_id = ?', [datasetId]);
@@ -249,6 +254,8 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ id: data.id, result: check(data.datasetId) });
     } else if (data.type === 'constraints') {
       self.postMessage({ id: data.id, result: constraintProbe(data.datasetId) });
+    } else if (data.type === 'corrupt') {
+      self.postMessage({ id: data.id, result: corruptDatasetForTest(data.datasetId) });
     }
   } catch (error) {
     self.postMessage({ id: data.id, error: { name: error.name, message: error.message } });
