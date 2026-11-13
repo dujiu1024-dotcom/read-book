@@ -62,13 +62,16 @@
 - Account 代表身份和认证关系，不是用户私人数据容器。
 - ExternalIdentity：id、account_id、provider、provider_subject、created_at、status；(provider, provider_subject) 唯一。
 ### BackupManifest
-- backup_id、local_dataset_id、schema_version、cipher_suite、key_version、ciphertext_hash、ciphertext_size、created_at、backup_sequence。
+- backup_id、local_dataset_id、schema_version、cipher_suite、key_version、ciphertext_hash、ciphertext_size、created_at、backup_sequence、parent_backup_id、backup_type（full/incremental）。
+- 本地记录 last_backup_at、last_backup_id、last_backup_status、pending_change_marker；应用每次打开时检查是否存在待备份变更。
 - 只保存密文和最小必要元数据，不保存可读私人内容。
 ### BackupAuthorization
 - backup_id、authorization_method、created_at、expires_at、used_at。
 - 账号注销后仍可通过独立恢复凭证授权下载。
 
 ## 5. 备份与恢复 API 草案
+
+启动流程：应用打开 → 检查本地数据集与最近成功备份 → 有变更则生成全量/增量密文备份并上传 → 更新本地备份状态。离线或失败时保留待备份标记，不阻断本地使用。新设备无本地数据时提示用户是否恢复；第一版不提供多设备实时同步。
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | POST | /backups | 上传加密备份并创建记录 |
@@ -94,7 +97,7 @@
 ## 7. 待验证
 - 小程序本地数据库容量、事务、后台任务和加密能力。
 - 本地密钥安全存储、恢复凭证格式和密钥轮换。
-- 备份包全量/增量格式、版本兼容和历史保留。
+- 启动时备份检查、备份包全量/增量格式、版本兼容和历史保留。
 - 账号注销后备份恢复授权与反滥用机制。
 - 不同设备恢复同一备份后的分叉处理。
 - 本地书架权益凭证的签发、离线校验与长期可用性。
