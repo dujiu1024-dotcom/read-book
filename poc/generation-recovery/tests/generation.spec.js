@@ -41,7 +41,7 @@ test('取消任务后不生成正式 Assistant Message', async ({ page }) => {
 });
 
 async function waitForHealth(port, child) {
-  for (let attempt = 0; attempt < 80; attempt++) {
+  for (let attempt = 0; attempt < 200; attempt++) {
     if (child.exitCode !== null) throw new Error('Mock server exited before becoming healthy');
     try {
       const response = await fetch(`http://127.0.0.1:${port}/api/health`);
