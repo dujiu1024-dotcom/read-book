@@ -1,3 +1,5 @@
+import { withDatasetWriter } from './coordination.js';
+
 const DB_NAME = 'read-book-poc-a';
 const STORE = 'messages';
 const RUNS = 5;
@@ -77,7 +79,7 @@ async function queryDataset(db, datasetId, count) {
   });
   return { rows, queryMs, relationQueryMs: performance.now() - joinStart, relationCount: threadRows.length };
 }
-export async function runIndexedDb(count, datasetId) {
+async function runIndexedDbUnlocked(count, datasetId) {
   const db = await openDb();
   const writeSamples = [], querySamples = [], relationSamples = [];
   let finalCount = 0, relationCount = 0;
@@ -112,4 +114,10 @@ export async function checkIndexedDb(datasetId) {
     });
     return { adapter: 'IndexedDB', datasetId, count: rows.length, integrity: rows.every((row) => row.datasetId === datasetId) };
   } finally { db.close(); }
+}
+
+
+export async function runIndexedDb(count, datasetId) {
+  const coordinated = await withDatasetWriter(datasetId, () => runIndexedDbUnlocked(count, datasetId));
+  return { ...coordinated.result, writerCoordination: coordinated.coordination };
 }
