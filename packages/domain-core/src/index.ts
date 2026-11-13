@@ -209,6 +209,8 @@ export interface MemoryCandidate {
   };
   sourceMessageIds: MessageId[];
   sourceReferences: SourceReference[];
+  /** True when the candidate makes a claim about book content and must cite its exact source. */
+  requiresBookCitation: boolean;
 }
 
 export interface MemoryCandidatePolicy {
@@ -267,13 +269,24 @@ export function evaluateMemoryCandidate(
   if (candidate.sourceMessageIds.length < policy.minimumSourceMessages) {
     reasons.push("insufficient_source_messages");
   }
+  if (new Set(candidate.sourceMessageIds).size !== candidate.sourceMessageIds.length) {
+    throw new DomainRuleError("Source message ids must be unique.");
+  }
+  if (candidate.sourceReferences.some((reference) =>
+    !reference.bookRevisionId.trim() || !reference.structureNodeId.trim() || !reference.locator.trim()
+  )) {
+    throw new DomainRuleError("Book source references require revision, structure node and locator.");
+  }
+  if (candidate.requiresBookCitation && candidate.sourceReferences.length === 0) {
+    reasons.push("missing_book_citation");
+  }
   if (candidate.sourceMessageIds.some((id) => !id.trim())) {
     throw new DomainRuleError("Source message ids cannot be empty.");
   }
   if (candidate.confidence < policy.minimumConfidence) reasons.push("low_confidence");
   if (candidate.ambiguity > policy.maximumAmbiguity) reasons.push("high_ambiguity");
 
-  if (reasons.includes("insufficient_source_messages")) {
+  if (reasons.includes("insufficient_source_messages") || reasons.includes("missing_book_citation")) {
     return { decision: "reject", score, reasons };
   }
   if (reasons.length > 0) {
