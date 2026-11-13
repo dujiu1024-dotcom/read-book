@@ -4,7 +4,8 @@ test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ p
   await page.goto('/');
   const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
   test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
-  await expect(page.getByRole('heading', { name: '本地数据存储与浏览器可靠性' })).toBeVisible();\n  console.log('Browser compatibility:', await page.evaluate(() => navigator.userAgent));
+  await expect(page.getByRole('heading', { name: '本地数据存储与浏览器可靠性' })).toBeVisible();
+  console.log('Browser compatibility:', await page.evaluate(() => navigator.userAgent));
   await page.locator('#adapter').selectOption('indexeddb');
   await page.locator('#count').selectOption('1000');
   await page.getByRole('button', { name: '执行写入与查询测试' }).click();
