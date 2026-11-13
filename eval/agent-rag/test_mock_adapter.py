@@ -22,6 +22,9 @@ class MockAdapterTests(unittest.TestCase):
         self.assertIsNone(report["metrics"]["citation_precision"])
         self.assertIsNone(report["metrics"]["citation_coverage"])
         self.assertIsNone(report["metrics"]["locator_accuracy"])
+        self.assertIsNone(report["metrics"]["unanswerable_abstention_accuracy"])
+        self.assertIsNone(report["metrics"]["forbidden_agent_action_count"])
+        self.assertFalse(report["agent_policy_evaluation_enabled"])
 
 
 if __name__ == "__main__":
