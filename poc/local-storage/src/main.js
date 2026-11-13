@@ -60,6 +60,11 @@ $('run').addEventListener('click', async () => {
     const result = adapter === 'indexeddb'
       ? await runIndexedDb(count, datasetId)
       : await runSqlite(count, datasetId);
+    result.memory = {
+      usedJSHeapSize: performance.memory?.usedJSHeapSize ?? null,
+      totalJSHeapSize: performance.memory?.totalJSHeapSize ?? null,
+      jsHeapSizeLimit: performance.memory?.jsHeapSizeLimit ?? null
+    };
     result.storage = await storageStatus();
     result.browser = { userAgent: navigator.userAgent, crossOriginIsolated: window.crossOriginIsolated };
     show(result);
