@@ -39,14 +39,20 @@ export async function createEncryptedBackup({ datasetId, sequence, parentBackupI
   ));
   const plain = encoder.encode(JSON.stringify(payload));
   const chunks = [];
+  const usedNonces = new Set();
   for (let offset = 0, chunkIndex = 0; offset < plain.length || (plain.length === 0 && chunkIndex === 0); offset += CHUNK_SIZE, chunkIndex++) {
     const part = plain.slice(offset, Math.min(offset + CHUNK_SIZE, plain.length));
-    const nonce = randomBytes(12);
+    let nonce, nonceText;
+    do {
+      nonce = randomBytes(12);
+      nonceText = bytesToBase64(nonce);
+    } while (usedNonces.has(nonceText));
+    usedNonces.add(nonceText);
     const aad = aadFor({ datasetId, backupId, sequence, chunkIndex, schemaVersion: SCHEMA_VERSION });
     const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aad }, dek, part));
     chunks.push({
       chunkIndex,
-      nonce: bytesToBase64(nonce),
+      nonce: nonceText,
       ciphertext: bytesToBase64(ciphertext),
       ciphertextHash: await digest(ciphertext),
       plaintextSize: part.length,
