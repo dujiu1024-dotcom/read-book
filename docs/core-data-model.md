@@ -38,11 +38,15 @@ Book 表示书目；BookRevision 表示具体版本。不同译本、出版社�
 
 书架和 Thread 关联 Book，不直接绑定文件路径。检索时由服务端确定可用的已发布版本；每条 Citation 固定 revision_id，保证历史引用可追溯。
 
-### UserBook（书架）
+### UserBook（书架与永久访问权益）
 - user_id、book_id
-- personal_tags：可选的轻量个人标签
-- added_at
-- 唯一约束：(user_id, book_id)
+- added_at：首次加入时间
+- removed_at：移出书架时间，可为空
+- shelf_status：active / removed
+- 唯一约束：(user_id, book_id)，移出后恢复原记录，不创建新的权益记录
+- 加入书架即获得永久访问权；商城下架不撤销已获得的访问权。
+- 移出书架仅软删除/隐藏书架展示，不删除书籍访问权益、Thread、Message、Note、Memory 或 Citation。
+- 商城商品状态、Book/BookRevision 状态和 UserBook 访问权益独立管理。
 
 不增加 progress、last_read_position、daily_goal 等字段。
 
@@ -53,6 +57,7 @@ Book 表示书目；BookRevision 表示具体版本。不同译本、出版社�
 - version：并发控制版本
 
 **关键约束：数据库唯一索引 (user_id, book_id)。**
+- 同一本书的所有阅读轮次共用唯一 Thread，不按章节、日期或轮次创建新 Thread。
 
 获取或创建 Thread 必须由服务端原子完成（事务 + 唯一约束冲突后重新读取），禁止客户端自行生成多个 Thread。章节、日期、主题和退出/重新进入均不得创建新 Thread。
 
@@ -82,16 +87,23 @@ Book 表示书目；BookRevision 表示具体版本。不同译本、出版社�
 
 引用必须指向实际书籍版本和原文片段。模型生成的概括不能伪装成逐字引文；作者原文、思想推演和 AI 模拟回答应有明确类型标记。
 
-### Note（读书笔记）
+### Note（自动读书笔记）
 - id、user_id、book_id
-- type：summary / insight / question / practice / other
+- type：book_understanding / user_insight / question / disagreement / discussion_conclusion / ai_explanation / cognitive_change
 - title、content
-- source：ai_generated / user_edited
+- source：user_original / ai_organized / ai_explanation / user_edited
+- reading_round_id：所属阅读轮次，可为空
 - version：乐观锁版本
 - source_message_ids、citation_ids
 - created_at、updated_at
 
-AI 自动整理和用户主动编辑必须区分。用户编辑后，AI 不能静默覆盖；新生成结果应形成建议版本或差异，交由用户决定是否采纳。笔记属于私人数据，管理员默认不可见。
+规则：
+- Agent 自动识别并沉淀有认知价值的内容，不设置收藏动作，不要求用户手动标记重点。
+- 讨论频率和篇幅是信号但不是唯一标准；独立观点、关键疑问、认知冲突和观点变化均可能值得记录。
+- 用户观点、作者观点、AI 整理和 AI 解释必须区分。
+- 用户可以编辑、删除笔记；AI 不得静默覆盖用户编辑。
+- 笔记属于私人数据，管理员默认不可见。
+- 认知演变通过关联新旧笔记保留补充、修正、冲突和推翻关系，不能覆盖旧记录。
 
 ### Memory（认知记忆）
 
@@ -248,3 +260,71 @@ POST /threads/{thread_id}/messages
 - 任何客户端缓存丢失后，都应能从云端恢复书架、Thread、Message 和正式笔记；未同步草稿应有明确的风险提示与保留策略。
 
 因此，SQLite 是原生 App 的一个实现选项，不是知行业务架构前提。
+
+
+## 10. 全书通用知识库与个人知识隔离
+
+每本书在进入商城前，必须完成全书级加工，建立可复用的通用书籍知识库。该知识库不是用户聊天记录的摘要，也不是只针对单个问题临时生成的 RAG 索引。
+
+建议新增或明确以下数据对象：
+
+### BookKnowledgeBase
+- id、book_revision_id
+- processing_version、status：pending / processing / review / ready / failed
+- created_at、published_at
+- 与具体 BookRevision 绑定；版本变化时生成新知识库版本，不覆盖历史依据。
+
+### BookStructureNode
+- id、book_revision_id、parent_id
+- node_type：part / chapter / section / argument_unit / paragraph_group
+- title、order_index、source_locator、content_hash
+- 表达原书结构、层级和论述单元，支持按作者顺序遍历。
+
+### BookKnowledgeItem
+- id、book_revision_id、structure_node_id
+- item_type：key_point / concept / argument / evidence / thesis / relation / reference
+- content、source_chunk_ids、confidence
+- 记录核心要点、关键概念、论证思想、证据、章节关系和引用关系；每项必须可追溯到原文切片。
+
+### BookChunk / Embedding
+继续保存原文切片、定位和检索向量。通用知识库和原文检索互相补充：前者提供全书理解，后者提供准确原文依据。
+
+隔离规则：
+- 同一书籍版本的通用知识库可供所有获得该书访问权的用户复用。
+- User、Thread、Message、Note、Memory 和用户阅读轮次均为私人数据，不进入公共知识库。
+- Agent 生成回答时，结合全书知识库、当前主线位置、相关原文和当前用户自己的历史认知。
+
+## 11. 阅读轮次与主线位置
+
+阅读轮次是同一 Thread 下的阅读阶段，不是独立会话。
+
+### ReadingRound
+- id、thread_id、round_number
+- status：active / completed
+- started_at、completed_at
+- start_reason：initial / reread
+- 唯一约束：(thread_id, round_number)
+
+### ReadingRoundState
+- reading_round_id、current_structure_node_id
+- current_order_index
+- last_presented_chunk_id
+- discussion_state：reading / discussing / ready_to_continue / completed
+- updated_at
+
+规则：
+- 一本书一个 Thread；每个 Thread 可以有多个顺序递增的 ReadingRound。
+- 新一轮只能在上一轮整本书主线阅读完成后开启。
+- 同一轮主线按 BookStructureNode 的作者原始顺序推进；略读可以快速确认已理解内容，但不能跳过主线节点。
+- 用户要求复习已读内容或查看其他章节/后续原文时，创建临时访问/展示记录，不修改 ReadingRoundState 的主线位置。
+- Agent 讨论充分后推荐下一论述单元并询问用户，不自动推送原文。
+- 用户可以随时复习已读内容；复习不创建新轮次。
+- 一刷、二刷、三刷的消息和笔记均保留在同一个 Thread 下，并通过 reading_round_id 追踪来源。
+
+## 12. 数据保留与软删除
+
+- UserBook 移出书架只更新 shelf_status / removed_at，不级联删除任何历史数据。
+- Book 从商城下架只改变商城可见状态，不撤销已加入书架用户的访问权。
+- 书籍版本更新创建新 BookRevision；旧版本、旧知识库、旧 Citation 保留，避免历史内容失去依据。
+- Thread、Message、Note、Memory、ReadingRound 和原文引用不因书架软删除而级联删除。
+- 普通业务操作不执行物理删除；应具备备份、恢复、完整性校验和操作审计能力。
