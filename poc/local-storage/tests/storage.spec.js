@@ -100,14 +100,23 @@ test('多标签页通过 Web Locks 单写者与只读降级，并支持锁交接
     return window.blockedWriter.mode;
   });
   expect(blockedMode).toBe('readonly');
-  await page.evaluate(() => { window.firstWriter.release(); window.firstWriter.close(); });
-  const handedOffMode = await second.evaluate(async () => {
-    window.blockedWriter.close();
-    const { acquireDatasetWriter } = await import('/src/coordination.js');
-    window.nextWriter = await acquireDatasetWriter('lock-handoff-fixture');
-    return window.nextWriter.mode;
+  const blockedWrite = await second.evaluate(async () => {
+    const { runIndexedDb } = await import('/src/indexeddb.js');
+    try {
+      await runIndexedDb(10, 'lock-handoff-fixture');
+      return { rejected: false };
+    } catch (error) { return { rejected: true, message: error.message }; }
   });
-  expect(handedOffMode).toBe('writer');
-  await second.evaluate(() => { window.nextWriter.release(); window.nextWriter.close(); });
+  expect(blockedWrite.rejected).toBe(true);
+  expect(blockedWrite.message).toContain('已阻止写入');
+  await page.evaluate(() => { window.firstWriter.release(); window.firstWriter.close(); });
+  const handedOff = await second.evaluate(async () => {
+    window.blockedWriter.close();
+    const { runIndexedDb } = await import('/src/indexeddb.js');
+    const result = await runIndexedDb(10, 'lock-handoff-fixture');
+    return { count: result.count, writerCoordination: result.writerCoordination };
+  });
+  expect(handedOff.count).toBe(10);
+  expect(handedOff.writerCoordination).toBe('web-locks-single-writer');
   await second.close();
 });
