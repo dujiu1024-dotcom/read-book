@@ -90,6 +90,16 @@ test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失�
   } else {
     expect(output.count).toBe(1000);
     expect(output.integrity).toBe(true);
+    await page.evaluate(async () => {
+      const { terminateSqliteWorkerForTest } = await import('/src/sqlite.js');
+      terminateSqliteWorkerForTest();
+    });
+    const recovered = await page.evaluate(async (datasetId) => {
+      const { checkSqlite } = await import('/src/sqlite.js');
+      return checkSqlite(datasetId);
+    }, output.datasetId);
+    expect(recovered.count).toBe(1000);
+    expect(recovered.integrity).toBe(true);
     await page.reload();
     await page.getByRole('button', { name: '完整性检查' }).click();
     await expect(page.locator('#status')).toContainText('完整性检查通过', { timeout: 60_000 });
