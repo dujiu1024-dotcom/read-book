@@ -282,11 +282,12 @@ export async function runMigrationProbe() {
       const tx = db.transaction(['threads', 'messages'], 'readonly');
       const threadRequest = tx.objectStore('threads').get('legacy-thread');
       const messageRequest = tx.objectStore('messages').get('legacy-message');
+      const messageIndexes = [...tx.objectStore('messages').indexNames];
       tx.oncomplete = () => resolve({
         thread: threadRequest.result,
         message: messageRequest.result,
         stores: [...db.objectStoreNames],
-        messageIndexes: [...tx.db.transaction('messages').objectStore('messages').indexNames]
+        messageIndexes
       });
       tx.onerror = () => reject(tx.error);
     });
