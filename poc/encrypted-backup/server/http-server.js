@@ -368,6 +368,7 @@ export async function createBackupHttpServer({ dataDir }) {
 
     const downloadTicketMatch = method === 'POST' && /^\/v1\/backups\/([A-Za-z0-9._-]+)\/download-ticket$/.exec(url.pathname);
     if (downloadTicketMatch) {
+      await readJson(req);
       const backupId = safeId(downloadTicketMatch[1], 'backupId');
       return withMutationLock(async () => {
         const backup = state.backups[backupId];
@@ -403,6 +404,7 @@ export async function createBackupHttpServer({ dataDir }) {
 
     const clearMatch = method === 'POST' && /^\/v1\/datasets\/([A-Za-z0-9._-]+)\/clear$/.exec(url.pathname);
     if (clearMatch) {
+      await readJson(req);
       const datasetId = safeId(clearMatch[1], 'datasetId');
       return withMutationLock(async () => {
         requireTicket(req, datasetId, 'backup:clear');
