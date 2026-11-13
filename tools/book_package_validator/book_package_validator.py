@@ -119,16 +119,19 @@ class ZipPackage(PackageView):
         total = 0
         file_count = 0
         try:
+            seen_entries: set[str] = set()
             for info in self.archive.infolist():
-                if info.is_dir():
-                    continue
-                normalized = safe_package_path(info.filename)
+                raw_name = info.filename.rstrip("/")
+                normalized = safe_package_path(raw_name)
                 key = normalized.casefold()
-                if key in self._entries:
+                if key in seen_entries:
                     raise PackageError(f"duplicate normalized ZIP path: {normalized}")
+                seen_entries.add(key)
                 mode = info.external_attr >> 16
                 if stat.S_ISLNK(mode):
                     raise PackageError(f"ZIP symlink entry is forbidden: {normalized}")
+                if info.is_dir():
+                    continue
                 if info.flag_bits & 0x1:
                     raise PackageError(f"encrypted ZIP entry is forbidden: {normalized}")
                 if PurePosixPath(normalized).suffix.lower() in BLOCKED_EXTENSIONS:
