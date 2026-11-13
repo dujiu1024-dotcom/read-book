@@ -44,9 +44,7 @@ export async function acquireDatasetWriter(datasetId) {
 
 export async function withDatasetWriter(datasetId, operation) {
   if (!navigator.locks?.request) {
-    // Keep the adapter runnable for compatibility measurement, but report that
-    // this browser cannot enforce the single-writer guarantee.
-    return { result: await operation(), coordination: 'unsupported' };
+    throw new Error('当前浏览器不支持 Web Locks，无法保证数据集单写者；已阻止写入并降级只读');
   }
   const lease = await acquireDatasetWriter(datasetId);
   if (lease.mode !== 'writer') {
