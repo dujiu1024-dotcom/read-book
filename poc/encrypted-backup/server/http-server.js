@@ -258,10 +258,10 @@ export async function createBackupHttpServer({ dataDir }) {
       const manifest = body.manifest;
       validateManifest(manifest);
       const datasetId = manifest.datasetId;
-      requireTicket(req, datasetId, 'backup:write');
       const idempotencyKey = body.idempotencyKey;
       if (typeof idempotencyKey !== 'string' || !idempotencyKey || idempotencyKey.length > 200) fail(400, '幂等键非法');
       return withMutationLock(async () => {
+        requireTicket(req, datasetId, 'backup:write');
         assertNotCleared(datasetId);
         const key = datasetId + ':' + idempotencyKey;
         const priorBackupId = state.idempotency[key];
