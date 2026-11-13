@@ -1,0 +1,67 @@
+name: Repository quality gates
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "README.md"
+      - "docs/**"
+      - ".github/quality/**"
+      - ".github/scripts/**"
+      - ".github/workflows/repository-quality-gates.yml"
+  pull_request:
+    paths:
+      - "README.md"
+      - "docs/**"
+      - ".github/quality/**"
+      - ".github/scripts/**"
+      - ".github/workflows/repository-quality-gates.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-quality-gates-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Validate documents and contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/quality-requirements.txt
+
+      - name: Install pinned quality dependencies
+        run: python -m pip install -r .github/quality-requirements.txt
+
+      - name: Check Markdown links, JSON, JSONL, JSON Schema and OpenAPI
+        run: python .github/scripts/quality_gate.py
+
+      - name: Run quality gate self-tests
+        working-directory: .github/scripts
+        run: python -m unittest -v test_quality_gate.py
+
+      - name: Discover and run project test targets
+        run: python .github/scripts/run_project_tests.py
+
+      - name: Upload quality reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-quality-reports
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
