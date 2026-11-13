@@ -1,7 +1,7 @@
 import { withDatasetWriter } from './coordination.js';
 
 const DB_NAME = 'read-book-poc-a';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const RUNS = 5;
 const LONG_TEXT = '长文本'.repeat(16384);
 const STORES = ['threads', 'messages', 'readingRounds', 'notes', 'memories', 'sources'];
@@ -24,8 +24,10 @@ function upgradeSchema(db, transaction) {
   ]);
   ensureStore(db, transaction, 'readingRounds', [
     ['datasetId', 'datasetId'],
-    ['threadId', 'threadId', { unique: true }]
+    ['threadSequence', ['threadId', 'sequence'], { unique: true }]
   ]);
+  const readingRounds = transaction.objectStore('readingRounds');
+  if (readingRounds.indexNames.contains('threadId')) readingRounds.deleteIndex('threadId');
   ensureStore(db, transaction, 'notes', [
     ['datasetId', 'datasetId'],
     ['readingRoundId', 'readingRoundId', { unique: true }],
@@ -294,7 +296,7 @@ export async function runMigrationProbe() {
     const expectedStores = STORES.every((store) => migrated.stores.includes(store));
     const expectedIndexes = ['datasetId', 'threadSequence'].every((index) => migrated.messageIndexes.includes(index));
     return {
-      adapter: 'IndexedDB', migration: 'v1-to-v3',
+      adapter: 'IndexedDB', migration: 'v1-to-v4',
       legacyThreadPreserved: migrated.thread?.title === 'Legacy Thread',
       legacyMessagePreserved: migrated.message?.content === '迁移前原文',
       expectedStores, expectedIndexes,
