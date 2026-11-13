@@ -114,6 +114,9 @@ test('HTTP 上传支持断点续传，服务重启后可继续并恢复密文', 
   assert.equal(persistedState.includes(payload.marker), false);
   assert.equal(persistedState.includes(encrypted.recoveryKey), false);
   assert.equal(persistedState.includes('PLAINTEXT_MUST_NOT_REACH_SERVER'), false);
+  const persistedChunk = await readFile(path.join(env.dataDir, 'chunks', encrypted.manifest.backupId, '0.b64'), 'utf8');
+  assert.equal(persistedChunk.includes(payload.marker), false);
+  assert.equal(persistedChunk.includes(encrypted.recoveryKey), false);
 });
 
 test('HTTP 父链验证、幂等键和全量到多级增量备份', async (t) => {
@@ -236,6 +239,11 @@ test('清除墓碑先持久化，再撤销票据、下载 URL、会话和密文�
   assert.equal(oldDownload.status, 410);
   const oldSession = await request(env.base, '/v1/backups/' + pending.manifest.backupId + '/missing', { token: ticket.token });
   assert.equal(oldSession.status, 410);
+  const lateUpload = await request(env.base, '/v1/backups/' + pending.manifest.backupId + '/chunks/0', {
+    method: 'PUT', token: ticket.token,
+    body: { ciphertext: pending.chunks[0].ciphertext }
+  });
+  assert.equal(lateUpload.status, 410);
   const newTicket = await request(env.base, '/__poc/tickets', {
     method: 'POST', body: { datasetId, scopes: allScopes, ttlSeconds: 600 }
   });
@@ -337,4 +345,19 @@ test('服务端拒绝不完整分块和被篡改密文，重复上传同一密�
     method: 'PUT', token: ticket.token, body: { ciphertext: Buffer.from(tampered).toString('base64') }
   });
   assert.equal(tamperedUpload.status, 400);
+});
+
+test('HTTP 下载票据到期后不能继续访问密文', async (t) => {
+  const env = await fixture(t, { downloadTicketTtlMs: 20 });
+  const datasetId = 'http-download-expiry';
+  const ticket = await issueTicket(env.base, datasetId);
+  const encrypted = await createEncryptedBackup({ datasetId, sequence: 1, payload: { value: 'expires' } });
+  await uploadBackup(env.base, ticket, encrypted);
+  const issued = await request(env.base, '/v1/backups/' + encrypted.manifest.backupId + '/download-ticket', {
+    method: 'POST', token: ticket.token, body: {}
+  });
+  assert.equal(issued.status, 201);
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  const expired = await fetch(env.base + issued.body.downloadUrl.replace(/^\\/api/, ''));
+  assert.equal(expired.status, 401);
 });
