@@ -18,6 +18,10 @@
 - [标准书籍包与云端验收协议](docs/book-package-ingestion-contract.md)
 - [决策记录](docs/decision-log.md)
 - [项目审查与验证策略](docs/project-audit.md)、[验证策略](docs/validation-strategy.md)
+- [PC Web 详细技术设计](docs/pc-web-detailed-design.md)
+- [PC Web 技术 PoC 验证计划](docs/pc-web-poc-plan.md)
+- [PC Web 窄屏阅读交互规范](docs/pc-web-interaction-spec.md)
+- [文档验收报告](docs/document-acceptance-report.md)
 
 ## 当前阶段
 产品与技术方案讨论、开源项目调研和架构验证阶段。尚未进入知行业务代码开发，未经明确确认不直接开始业务代码开发。
