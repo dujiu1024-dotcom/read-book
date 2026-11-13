@@ -1,5 +1,5 @@
 import './style.css';
-import { createEncryptedBackup, decryptBackup } from './crypto.js';
+import { createDatasetKeyMaterial, createEncryptedBackup, decryptBackup } from './crypto.js';
 
 const datasetId = 'poc-dataset-' + crypto.randomUUID();
 let ticketToken;
@@ -7,6 +7,7 @@ let ticketId;
 let lastBackup;
 let lastDownloadUrl;
 let localRestoredData = null;
+let datasetKeyMaterial;
 const $ = (id) => document.getElementById(id);
 const show = (value) => $('output').textContent = JSON.stringify(value, null, 2);
 
@@ -67,7 +68,8 @@ $('backup').addEventListener('click', async () => {
   try {
     await ensureTicket();
     const payload = JSON.parse($('payload').value);
-    const encrypted = await createEncryptedBackup({ datasetId, sequence: 1, payload });
+    datasetKeyMaterial ||= createDatasetKeyMaterial(datasetId);
+    const encrypted = await createEncryptedBackup({ datasetId, sequence: 1, payload, keyMaterial: datasetKeyMaterial });
     const session = await api('/v1/backups/init', {
       method: 'POST',
       body: { manifest: encrypted.manifest, idempotencyKey: 'init-' + encrypted.manifest.backupId }
