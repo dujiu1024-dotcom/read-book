@@ -145,6 +145,18 @@ export function validateGenerationRequest(value: GenerationRequest): void {
   if (value.context.relevant_memory && value.context.relevant_memory.length > 20) {
     throw new GenerationProtocolError("context.relevant_memory must contain at most 20 items.");
   }
+  if (value.context.relevant_memory?.some((item) => !item || typeof item !== "object" || Array.isArray(item))) {
+    throw new GenerationProtocolError("Every relevant_memory item must be an object.");
+  }
+  if (value.context.response_preferences) {
+    const preferences = value.context.response_preferences;
+    if (Object.keys(preferences).some((key) => key !== "language")) {
+      throw new GenerationProtocolError("response_preferences only supports language.");
+    }
+    if (preferences.language !== undefined && typeof preferences.language !== "string") {
+      throw new GenerationProtocolError("response_preferences.language must be a string.");
+    }
+  }
 }
 
 export function validateGenerationAccepted(value: unknown): GenerationAccepted {
@@ -171,8 +183,11 @@ export function validateGenerationSnapshot(value: unknown): GenerationSnapshot {
   let result: GenerationResult | null = null;
   if (item.result !== null && item.result !== undefined) {
     const raw = record(item.result);
+    if (typeof raw.content !== "string") {
+      throw new GenerationProtocolError("Generation result content must be a string.");
+    }
     result = {
-      content: typeof raw.content === "string" ? raw.content : "",
+      content: raw.content,
       ...(typeof raw.content_hash === "string" ? { content_hash: raw.content_hash } : {}),
       ...(raw.usage === undefined ? {} : { usage: raw.usage as Record<string, unknown> | null }),
     };
