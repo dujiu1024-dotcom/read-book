@@ -419,6 +419,7 @@ inaccessible 是访问状态，不代表密文已删除或已损坏；DataSetLif
 4. Message.pending 的持久化语义，以及本地 Message 状态与 GenerationReceipt 状态的映射。
 5. 浏览器安装上下文是否需要独立 Device 标识；第一版不因此引入多设备同步或数据集自动合并。
 6. RecoveryChallenge 的失败次数、速率限制、挑战有效期和重放保护参数，由安全设计确定。
+7. AccountDataSetBinding.account_id 在数据字典中为 TEXT，而服务端 Account.id 为 UUID；需确认它存储 Account UUID 字符串还是平台 opaque subject，确认前不得假定二者可直接关联。
 
 ### 需要 PoC 验证
 - 本地事务并发下主线状态与 Message sequence 一致性。
