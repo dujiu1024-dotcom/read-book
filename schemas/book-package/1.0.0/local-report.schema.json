@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:read-book:book-package:1.0.0:local-report",
+  "title": "Read Book Local Validation Report 1.0.0",
+  "type": "object",
+  "required": [
+    "report_version",
+    "overall_status",
+    "summary",
+    "issues",
+    "created_at"
+  ],
+  "properties": {
+    "report_version": {
+      "const": "1.0.0"
+    },
+    "overall_status": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "needs_rework",
+        "failed"
+      ]
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "error_count",
+        "warning_count"
+      ],
+      "properties": {
+        "error_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warning_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "issue_code",
+          "severity",
+          "stage",
+          "message"
+        ],
+        "properties": {
+          "issue_code": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Z0-9_]+$"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning",
+              "info"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "minLength": 1
+          },
+          "artifact": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "record_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "chapter_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "suggested_action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}
