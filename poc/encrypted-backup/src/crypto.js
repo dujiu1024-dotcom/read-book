@@ -123,3 +123,82 @@ export async function decryptBackup({ manifest, chunks, recoveryKey }) {
   for (const part of plaintextParts) { plaintext.set(part, offset); offset += part.length; }
   return JSON.parse(decoder.decode(plaintext));
 }
+
+export function applyIncremental(snapshot, incrementalPayload) {
+  if (!snapshot || !Array.isArray(snapshot.records) ||
+      !incrementalPayload || !Array.isArray(incrementalPayload.changes)) {
+    throw new Error('全量快照或增量变更格式非法');
+  }
+  const records = new Map();
+  for (const record of snapshot.records) {
+    if (!record || typeof record.id !== 'string' || !record.id || records.has(record.id)) {
+      throw new Error('全量快照记录 ID 非法或重复');
+    }
+    records.set(record.id, record);
+  }
+  for (const change of incrementalPayload.changes) {
+    if (change?.op === 'upsert') {
+      if (!change.record || typeof change.record.id !== 'string' || !change.record.id) {
+        throw new Error('增量 upsert 记录非法');
+      }
+      records.set(change.record.id, change.record);
+    } else if (change?.op === 'delete') {
+      if (typeof change.id !== 'string' || !change.id) throw new Error('增量 delete 记录 ID 非法');
+      records.delete(change.id);
+    } else {
+      throw new Error('不支持的增量操作');
+    }
+  }
+  return { ...snapshot, records: [...records.values()] };
+}
+
+export async function restoreBackupChain({ backupId, fetchBackup, recoveryKey, maxDepth = 100 }) {
+  if (typeof backupId !== 'string' || !backupId || typeof fetchBackup !== 'function') {
+    throw new Error('恢复入口参数非法');
+  }
+  if (!Number.isSafeInteger(maxDepth) || maxDepth < 1) throw new Error('最大恢复链深度非法');
+  const visited = new Set();
+  const chain = [];
+  let currentId = backupId;
+  let expectedDatasetId;
+  let expectedSequence;
+  while (currentId) {
+    if (visited.has(currentId)) throw new Error('备份父链存在循环');
+    if (chain.length >= maxDepth) throw new Error('备份父链超过最大恢复深度');
+    visited.add(currentId);
+    const backup = await fetchBackup(currentId);
+    const manifest = backup?.manifest;
+    if (!manifest || manifest.backupId !== currentId) throw new Error('恢复备份 ID 与请求不匹配');
+    if (expectedDatasetId !== undefined && manifest.datasetId !== expectedDatasetId) {
+      throw new Error('备份父链跨数据集');
+    }
+    if (expectedSequence !== undefined && manifest.sequence !== expectedSequence) {
+      throw new Error('备份父链序号不连续');
+    }
+    if (expectedDatasetId === undefined) expectedDatasetId = manifest.datasetId;
+    const payload = await decryptBackup({ ...backup, recoveryKey });
+    chain.push({ manifest, payload });
+    if (manifest.backupType === 'full') {
+      if (manifest.parentBackupId) throw new Error('全量根备份不能有父备份');
+      break;
+    }
+    if (manifest.backupType !== 'incremental' || !manifest.parentBackupId) {
+      throw new Error('增量备份缺少合法父备份');
+    }
+    expectedSequence = manifest.sequence - 1;
+    currentId = manifest.parentBackupId;
+  }
+  if (!chain.length || chain[chain.length - 1].manifest.backupType !== 'full') {
+    throw new Error('备份父链缺少全量根节点');
+  }
+  let snapshot = chain[chain.length - 1].payload;
+  for (let index = chain.length - 2; index >= 0; index--) {
+    snapshot = applyIncremental(snapshot, chain[index].payload);
+  }
+  return {
+    snapshot,
+    backupIds: chain.map((item) => item.manifest.backupId),
+    depth: chain.length,
+    datasetId: expectedDatasetId
+  };
+}
