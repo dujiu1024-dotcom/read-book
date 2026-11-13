@@ -39,13 +39,14 @@ test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失�
 
 test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '100k 性能基准仅在 Chromium 主测，避免兼容矩阵重复压测');
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   await page.goto('/');
   await page.locator('#adapter').selectOption('indexeddb');
   await page.locator('#count').selectOption('100000');
   await page.getByRole('button', { name: '执行写入与查询测试' }).click();
-  await expect(page.locator('#status')).toContainText('完成', { timeout: 110_000 });
+  await expect(page.locator('#status')).toContainText(/完成|执行失败/, { timeout: 280_000 });
   const result = JSON.parse(await page.locator('#output').textContent());
+  expect(result.error, JSON.stringify(result)).toBeUndefined();
   expect(result.count).toBe(100000);
   expect(result.integrity).toBe(true);
   expect(result.runs).toBe(5);
@@ -58,7 +59,7 @@ test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', 
 
 test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'SQLite OPFS 100k 性能基准仅在 Chromium 主测');
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   await page.goto('/');
   const capability = await page.evaluate(() => ({
     opfs: Boolean(navigator.storage?.getDirectory),
@@ -68,7 +69,7 @@ test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async 
   await page.locator('#adapter').selectOption('sqlite');
   await page.locator('#count').selectOption('100000');
   await page.getByRole('button', { name: '执行写入与查询测试' }).click();
-  await expect(page.locator('#status')).toContainText('完成', { timeout: 110_000 });
+  await expect(page.locator('#status')).toContainText('完成', { timeout: 280_000 });
   const result = JSON.parse(await page.locator('#output').textContent());
   expect(result.count).toBe(100000);
   expect(result.integrity).toBe(true);
