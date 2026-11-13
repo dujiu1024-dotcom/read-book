@@ -74,3 +74,12 @@
 - 原因：2026-11-13 第 3 次 CI 运行中，Core tests 与移动端 tests 通过，但移动端 Biome 检查报告 191 errors、78 warnings，导致 Reader 构建和 Expo 配置检查被跳过。该结果反映固定上游代码的既有质量基线，不应通过批量修改上游文件来掩盖。
 - 约束：Lint 结果仍需保留在日志中；后续如对 ReadAny Fork 自有改动，应建立独立的变更范围 Lint / 类型检查门槛。非阻断不等于忽略代码质量。
 - CI 修订 commit：b82608ef75458f0cdd797a4dcbb7126fe81a62e8；第 4 次运行进行中，结果待补充。
+
+
+### D-018：ReadAny 移动端 Fork 的适配边界（阶段性）
+- 状态：已形成源码级建议，待真机验证后冻结
+- 决策建议：继续以 ReadAny Expo 移动端为 Fork 起点；优先保留阅读器、导航、消息列表、输入框、Markdown 和引用定位组件；将正式 Thread/Message、Agent、RAG、笔记和书籍处理迁移至云端 API。
+- 必须改造：一书多 Thread 改为数据库约束保证的一书一 Thread；本地 SQLite 从业务权威库改为缓存/草稿/待同步队列；客户端模型直连改为服务端模型调用；WebDAV/S3/LAN 整库同步改为 API 级实体同步。
+- 依据：固定 ReadAny commit `fce44689e1377df1ae99a35e8e71d5e8b3a639d1` 的 `BookChatScreen`、chat Store、thread/message 查询、Agent、上下文管线、记忆压缩、RAG 检索和移动端同步适配器源码。
+- 详细文件级映射见 [ReadAny 逐文件适配清单](readany-adaptation-matrix.md)。
+- 约束：本决策不授权直接开始大规模业务代码改造；先完成 M0 真机验证，再建立 API/Repository 边界，逐步实施。
