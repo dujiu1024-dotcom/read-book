@@ -226,3 +226,50 @@ test('分块重复上传不同密文时拒绝覆盖，缺块时拒绝提交', as
   expect(result.incompleteCommitRejected).toBe(true);
   expect(result.missing.length).toBeGreaterThan(0);
 });
+
+
+test('服务端拒绝 Manifest 分块数量/序号错误与 nonce 重用', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    const backup = await createEncryptedBackup({
+      datasetId: 'manifest-validation', sequence: 1,
+      payload: { text: 'm'.repeat(150_000) }
+    });
+    const server = new MockBackupServer();
+    const badCount = structuredClone(backup.manifest);
+    badCount.chunkCount += 1;
+    let countRejected = false;
+    try { server.init(badCount, 'bad-count'); } catch { countRejected = true; }
+    const badNonce = structuredClone(backup.manifest);
+    badNonce.chunks[1].nonce = badNonce.chunks[0].nonce;
+    let nonceRejected = false;
+    try { server.init(badNonce, 'bad-nonce'); } catch { nonceRejected = true; }
+    const badIndex = structuredClone(backup.manifest);
+    badIndex.chunks[1].chunkIndex = 9;
+    let indexRejected = false;
+    try { server.init(badIndex, 'bad-index'); } catch { indexRejected = true; }
+    return { countRejected, nonceRejected, indexRejected };
+  });
+  expect(result).toEqual({ countRejected: true, nonceRejected: true, indexRejected: true });
+});
+
+test('上传会话固定 Manifest 快照，不受调用方后续对象修改影响', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    const backup = await createEncryptedBackup({
+      datasetId: 'manifest-snapshot', sequence: 1, payload: { value: 'stable' }
+    });
+    const server = new MockBackupServer();
+    const callerManifest = structuredClone(backup.manifest);
+    server.init(callerManifest, 'snapshot-key');
+    callerManifest.datasetId = 'attacker-changed-dataset';
+    for (const chunk of backup.chunks) server.putPart(backup.manifest.backupId, chunk);
+    await server.complete(backup.manifest.backupId);
+    return server.get(backup.manifest.backupId).manifest.datasetId;
+  });
+  expect(result).toBe('manifest-snapshot');
+});
