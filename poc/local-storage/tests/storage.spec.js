@@ -203,6 +203,34 @@ test('清理站点数据后 IndexedDB 不残留原数据', async ({ page, browse
   }
 });
 
+test('IndexedDB 检测缺失的关联记录，不静默修复或误报完整', async ({ page }) => {
+  await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+  const result = await page.evaluate(async () => {
+    const { runIndexedDb, checkIndexedDb } = await import('/src/indexeddb.js');
+    const datasetId = 'indexeddb-corruption-fixture';
+    await runIndexedDb(10, datasetId);
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('read-book-poc-a', 4);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('memories', 'readwrite');
+      tx.objectStore('memories').delete(datasetId + ':memory:0');
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('损坏样本注入事务中止'));
+    });
+    db.close();
+    return checkIndexedDb(datasetId);
+  });
+  expect(result.integrity).toBe(false);
+  expect(result.relatedThreadCount).toBe(9);
+  expect(result.entityCounts.memories).toBe(9);
+});
+
 test('Web Locks 不可用时 fail-closed，不能创建或写入数据集', async ({ page }) => {
   await page.goto('/');
   await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
