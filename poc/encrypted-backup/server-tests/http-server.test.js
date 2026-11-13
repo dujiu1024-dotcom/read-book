@@ -358,6 +358,6 @@ test('HTTP 下载票据到期后不能继续访问密文', async (t) => {
   });
   assert.equal(issued.status, 201);
   await new Promise((resolve) => setTimeout(resolve, 35));
-  const expired = await fetch(env.base + issued.body.downloadUrl.replace(/^\\/api/, ''));
+  const expired = await fetch(env.base + issued.body.downloadUrl.replace(/^\/api/, ''));
   assert.equal(expired.status, 401);
 });
