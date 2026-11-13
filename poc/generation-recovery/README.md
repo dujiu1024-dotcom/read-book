@@ -26,18 +26,30 @@ Playwright 配置会自动启动 Mock Server 与 Vite；本地手工运行时需
 
 - 用户消息先写入 IndexedDB，再发起 POST 请求。
 - 使用 Idempotency-Key 创建 generation_id；重复提交复用原任务。
-- Mock Server 独立运行，生成任务不依赖浏览器 SSE 连接。
-- SSE 事件带 event_id、sequence、generation_id。
+- Mock Server 任务独立于浏览器 SSE 连接。
+- SSE 事件带 event_id、sequence、generation_id；支持按 after 序号重放事件。
 - GET generation 返回状态与最终结果；客户端刷新后根据本地 job 重新查询/订阅。
 - 流式 delta 只用于临时展示；只有 GET 最终状态为 completed 且包含 final_result 时，才写入本地 Assistant Message。
-- 取消请求在服务端形成 cancelled 终态；取消后不创建 Assistant Message。
-- 服务端只在内存保存短暂任务数据，日志不打印消息正文。
+- 取消请求形成 cancelled 终态；取消后不创建 Assistant Message。
+- 服务端任务状态、幂等键映射、事件序列和最终结果写入原子替换的本地 JSON 状态文件；进程重启后恢复任务并从已持久化的增量位置继续模拟生成。
+- 状态文件默认位于当前工作目录的 `.poc-generation-state.json`，可通过 `GENERATION_STATE_FILE` 指定路径；文件权限设置为仅当前用户可读写。
+- 监听端口可通过 `PORT` 配置。默认 4177。
+
+## 新增进程重启验证
+
+Playwright 会启动独立 Mock Server 子进程并使用临时状态文件：
+1. 创建任务并等待至少两个事件持久化；
+2. 终止服务进程；
+3. 使用相同状态文件重启服务；
+4. 验证原 generation_id 和幂等键映射仍有效；
+5. 验证任务继续执行至唯一最终结果；
+6. 从指定序号重放事件，检查序号连续。
 
 ## 已知限制
 
-- Mock Server 使用内存状态；服务进程重启后任务丢失，尚未验证 Worker/进程重启后的任务持久化恢复。
+- 本地 JSON 状态文件只用于单进程 PoC，不是生产级持久化队列；没有多实例并发协调、文件锁、WAL、数据库事务和备份恢复。
+- 进程强制终止时，最后一个尚未完成原子替换的事件可能尚未持久化；验收只承诺已确认写入状态文件的事件。
 - 生成过程由固定 token 模拟，不调用真实模型。
-- SSE 事件目前是内存事件队列，没有 Redis/数据库等持久化队列。
-- 尚未覆盖事件乱序/重复注入、代理缓冲、心跳超时、自然完成与取消的高并发竞态、任务 TTL 和服务端日志自动审计。
+- 尚未覆盖事件重复/乱序注入、代理缓冲、心跳超时、任务 TTL、服务端日志自动审计和高并发取消/完成压力测试。
 - 用户消息已持久化，但任务创建请求失败后的 UI 重试入口还需补充。
 - 该 PoC 不等于正式 Generation API，也不代表所有故障场景通过。
