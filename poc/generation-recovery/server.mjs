@@ -28,8 +28,8 @@ function snapshot() {
   };
 }
 function persist() {
-  const data = JSON.stringify(snapshot());
   persistQueue = persistQueue.then(async () => {
+    const data = JSON.stringify(snapshot());
     await mkdir(dirname(STATE_FILE), { recursive: true });
     const temporary = STATE_FILE + '.tmp';
     await writeFile(temporary, data, { mode: 0o600 });
