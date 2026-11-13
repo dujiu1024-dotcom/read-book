@@ -143,7 +143,7 @@ $('clear').addEventListener('click', async () => {
       downloadUrlRejected = !response.ok;
     } catch { downloadUrlRejected = true; }
     $('status').textContent = '清除墓碑已生效；旧备份和下载票据均不可访问。';
-    show({ ...result, oldBackupRejected, downloadUrlRejected, localDataStillPresent: localRestoredData !== null });
+    show({ ...result, oldBackupRejected, downloadUrlRejected, oldAccessRejected: oldBackupRejected && downloadUrlRejected, localDataStillPresent: localRestoredData !== null });
   } catch (error) {
     $('status').textContent = '服务端清除失败';
     show({ error: error.message });
