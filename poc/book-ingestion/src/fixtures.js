@@ -52,7 +52,14 @@ export function getFixture(id) {
   if (id.startsWith('pdf-')) {
     const samples = {
       'pdf-1': [[{ text: 'Single column PDF sample', y: 740 }, { text: 'A paragraph with stable text offsets.', y: 710 }]],
-      'pdf-2': [[{ text: 'Left column text', x: 50, y: 740 }, { text: 'Right column text', x: 330, y: 740 }]],
+      'pdf-2': [[
+        { text: 'Left column text', x: 50, y: 740 },
+        { text: 'Left column second line', x: 50, y: 700 },
+        { text: 'Left column third line', x: 50, y: 660 },
+        { text: 'Right column text', x: 330, y: 740 },
+        { text: 'Right column second line', x: 330, y: 700 },
+        { text: 'Right column third line', x: 330, y: 660 }
+      ]],
       'pdf-3': [[{ text: 'Header - Sample Book', y: 770 }, { text: 'Body paragraph on page one.', y: 710 }, { text: 'Footer - Sample Book', y: 30 }], [{ text: 'Header - Sample Book', y: 770 }, { text: 'Body paragraph on page two.', y: 710 }, { text: 'Footer - Sample Book', y: 30 }]]
     };
     const bytes = pdfFixture(samples[id]);
