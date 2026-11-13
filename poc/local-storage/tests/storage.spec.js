@@ -430,7 +430,8 @@ test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async 
   expect(result.error, JSON.stringify(result)).toBeUndefined();
   console.log('SQLite OPFS 100k benchmark:', JSON.stringify({
     writeMs: result.writeMs, queryMs: result.queryMs,
-    relationQueryMs: result.relationQueryMs, writerCoordination: result.writerCoordination
+    relationQueryMs: result.relationQueryMs, memory: result.memory,
+    storage: result.storage, writerCoordination: result.writerCoordination
   }));
   expect(result.count).toBe(100000);
   expect(result.integrity).toBe(true);
