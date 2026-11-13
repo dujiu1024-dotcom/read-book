@@ -46,31 +46,31 @@ npm run build
 | 验收项 | 状态 | 说明 |
 |---|---|---|
 | 工程独立运行 | 待本地执行 | 尚未生成 lockfile |
-| IndexedDB 1k/10k/100k | 六实体 100k 自动化通过 | Run 43427818798：Chromium 五轮六实体写入/查询/Thread→Source 关联查询通过（1.4 分钟）；最新十条关系链完整性检查待 CI |
+| IndexedDB 1k/10k/100k | 六实体 100k 自动化通过 | Run 43428146017：Chromium 五轮六实体写入/查询/Thread→Source 关联查询通过（1.4 分钟）；最新十条关系链完整性检查待 CI |
 | SQLite OPFS 1k/10k/100k | CI 环境未具备 VFS | Run 43424902738：Worker 中 `sqlite3.opfs` 不可用；不能标记通过，新增实际 VFS 探测并跳过机制，需在支持 OPFS 的 Chrome/Edge 环境单独实测 |
 | Chrome 与 Edge 实测 | 未执行 | Playwright Chromium 不等于两个正式浏览器版本验收 |
-| 六实体关系与关联查询 | 已实现，待新 CI | 两种适配器均建立六实体关系；IndexedDB 关系索引与 SQLite 多表 JOIN 已接入性能基准，校验 10 条完整 Thread→Source 关系链 |
+| 六实体关系与关联查询 | CI 通过 | Run 43428146017：IndexedDB 校验 10 条完整 Thread→Source 关系链及跨实体 ID 一致性；SQLite 多表 JOIN 已实现，但 OPFS VFS 未在 CI 暴露 |
 | 多标签页单写者与锁交接 | CI 通过 | Run 43424902738：Chromium 跨标签页竞争、阻止第二标签页写入、释放后交接并成功写入通过 |
 | Worker 崩溃/页面关闭恢复 | 未执行 | 需故障注入 |
 | 配额不足与 persist 拒绝 | 未执行 | 需模拟与真实浏览器测试 |
 | 迁移与批量一致性快照 | 未实现 | 后续迭代 |
 | P50/P95、内存、存储体积 | 已加入采集 | 尚未在目标 Chrome/Edge 环境完成实测与报告 |
 
-## 六实体模型 Chromium CI 100k 基准结果（Run 43427818798）
+## 六实体模型 Chromium CI 100k 基准结果（Run 43428146017）
 
 测试环境：GitHub Actions Linux headless Chromium；100,000 条消息；每轮同时写入 10 条 Thread、10 条 ReadingRound、10 条 Note、10 条 Memory、1 条 Source；五轮；Web Locks 单写者协调已启用。
 
 | 指标 | P50 | P95 |
 |---|---:|---:|
-| IndexedDB 六实体批量写入 | 3,805 ms | 3,897 ms |
-| IndexedDB 数据集查询（getAll） | 2,058 ms | 2,424 ms |
-| IndexedDB Thread→Source 关联查询 | 224 ms | 291 ms |
+| IndexedDB 六实体批量写入 | 8,209 ms | 9,234 ms |
+| IndexedDB 数据集查询（getAll） | 3,336 ms | 5,135 ms |
+| IndexedDB Thread→Source 关联查询 | 355 ms | 582 ms |
 
 - JS Heap：约 103 MB。
 - Storage Estimate：usage 约 114.0 MB；quota 约 10.85 GB；usageDetails.indexedDB 约 114.0 MB。
 - persisted() 与 persist() 均为 false：当前 CI 环境未授予持久化存储权限。
 - SQLite OPFS 100k：Worker 未暴露 OPFS VFS，明确跳过，没有 SQLite 性能数据。
-- 本次六实体性能基准通过；随后补充的十条 Thread→Source 关系链完整性及跨实体 ID 一致性检查，最新代码等待下一轮 CI。
+- 本次六实体性能基准与十条 Thread→Source 关系链完整性、跨实体 ID 一致性检查均通过；Run 43428146017 构建成功，Chromium 15 项中 6 通过、9 按浏览器能力/主测范围跳过，无失败；100k 基准用时约 2.7 分钟。
 
 ## 两实体模型历史基线（Run 43425500315；不代表当前六实体模型）
 
