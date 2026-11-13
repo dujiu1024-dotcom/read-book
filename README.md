@@ -12,6 +12,7 @@
 
 - [产品原则与功能边界](docs/product-principles.md)
 - [技术架构与关键设计](docs/architecture.md)
+- [核心数据模型与 API 契约草案](docs/core-data-model.md)
 - [开源项目拆解与复用评估](docs/opensource-review.md)
 - [ReadAny + TextSage 深度复用评估](docs/reuse-assessment.md)
 - [决策记录](docs/decision-log.md)
