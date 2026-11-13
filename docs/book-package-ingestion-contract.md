@@ -294,3 +294,43 @@ Revision 总状态：
 - 超大书籍包的分片上传、断点续传和保留策略。
 
 V1 优先冻结包结构、版本标识、阶段状态和失败报告四个契约。质量阈值和具体解析器实现应通过真实样本验证后再冻结。
+
+
+## 13. V1.0.0 机器可读 Schema 与校验器约定
+
+V1.0.0 JSON Schema 使用 JSON Schema Draft 2020-12，版本化存放于：
+
+`schemas/book-package/1.0.0/`
+
+| 文件 | 校验对象 |
+|---|---|
+| `manifest.schema.json` | 包清单、源文件、元数据、处理器版本、产物路径和计数 |
+| `book.schema.json` | `content/book.json` |
+| `chapters.schema.json` | `content/chapters.json`；根节点为章节数组 |
+| `chunk.schema.json` | `content/chunks.jsonl` 的每一行 |
+| `embeddings.schema.json` | `manifest.artifacts.embeddings` 指向的向量元数据 JSON |
+| `local-report.schema.json` | 可选本地自检报告 |
+| `failure-report.schema.json` | 云端结构化失败报告 |
+
+约定补充：
+
+- `manifest.artifacts.embeddings` 指向 `embeddings/` 下的元数据 JSON；元数据中的 `file` 字段再指向实际向量文件。若没有向量产物，manifest 中该字段为 null。
+- `manifest.artifacts.local_report` 为可选路径；本地报告只提供诊断信息，不改变云端验收结论。
+- `chapters.json` 是章节对象数组；每个章节必须包含 chapter_id、parent_chapter_id、title、level、order_index、start_locator 和 end_locator。
+- `chunks.jsonl` 每一非空行必须独立符合 chunk Schema；content_sha256 必须是 UTF-8 编码后的 content 字节的 SHA-256。
+- manifest 中的 chapters/chunks/assets 计数由校验器重新统计，不信任包内声明值。
+- 所有包内路径必须为相对 POSIX 路径；禁止绝对路径、反斜杠路径和路径穿越片段。
+
+### 独立 CLI
+
+入口：`tools/book_package_validator/book_package_validator.py`
+
+支持目录包和 ZIP 包；ZIP 不落盘解压。校验顺序为：
+
+1. 检查包路径、目录/ZIP 条目、重复路径、软链接、加密条目、可执行/脚本文件类型和资源限制。
+2. 校验 manifest Schema、源文件存在性、大小和 SHA-256。
+3. 校验 book、chapters、chunks、embeddings 元数据及 local-report。
+4. 校验 chunk 内容哈希、章节引用完整性、唯一 ID 和 manifest 计数。
+5. 输出符合 local-report Schema 的机器可读结果和非零失败退出码。
+
+CLI 资源限制通过参数配置（单文件大小、总解压大小、压缩比、文件数）。当前默认值属于安全保护默认值，不是最终业务限制；应结合真实书籍样本和部署资源测试后再冻结。技术验收通过不代表版权审核或发布通过。
