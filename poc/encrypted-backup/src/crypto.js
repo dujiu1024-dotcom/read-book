@@ -36,8 +36,12 @@ export function createDatasetKeyMaterial(datasetId) {
 
 export async function createEncryptedBackup({ datasetId, sequence, parentBackupId = null, backupType = parentBackupId ? 'incremental' : 'full', payload, keyMaterial }) {
   if (!['full', 'incremental'].includes(backupType)) throw new Error('不支持的备份类型');
+  if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error('备份序号非法');
   if (backupType === 'full' && parentBackupId) throw new Error('全量备份不能指定父备份');
   if (backupType === 'incremental' && !parentBackupId) throw new Error('增量备份必须指定父备份');
+  if (!keyMaterial && (backupType !== 'full' || sequence !== 1)) {
+    throw new Error('增量备份与后续全量检查点必须复用数据集密钥材料');
+  }
   const backupId = crypto.randomUUID();
   const material = keyMaterial || createDatasetKeyMaterial(datasetId);
   if (material.datasetId !== datasetId || !(material.dekRaw instanceof Uint8Array) ||
