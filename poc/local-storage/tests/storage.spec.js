@@ -20,6 +20,35 @@ test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ p
   expect(afterReload.count).toBe(1000);
   expect(afterReload.integrity).toBe(true);
   expect(afterReload.longTextIntegrity).toBe(true);
+  const context = page.context();
+  await page.close();
+  const reopened = await context.newPage();
+  await reopened.goto('/');
+  const afterClose = await reopened.evaluate(async (datasetId) => {
+    const { checkIndexedDb } = await import('/src/indexeddb.js');
+    return checkIndexedDb(datasetId);
+  }, first.datasetId);
+  expect(afterClose.count).toBe(1000);
+  expect(afterClose.integrity).toBe(true);
+  await reopened.close();
+});
+
+test('persist() 被拒绝时仍报告状态，不影响 IndexedDB 事务正确性', async ({ page }) => {
+  await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.storage, 'persist', {
+      configurable: true, value: async () => false
+    });
+  });
+  await page.locator('#adapter').selectOption('indexeddb');
+  await page.locator('#count').selectOption('1000');
+  await page.getByRole('button', { name: '执行写入与查询测试' }).click();
+  await expect(page.locator('#status')).toContainText('完成', { timeout: 60_000 });
+  const result = JSON.parse(await page.locator('#output').textContent());
+  expect(result.integrity).toBe(true);
+  expect(result.storage.persistRequest).toBe('false');
 });
 
 test('IndexedDB v1 升级到 v3 后保留原数据并补齐六实体结构', async ({ page }) => {
