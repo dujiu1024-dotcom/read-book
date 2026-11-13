@@ -72,9 +72,32 @@ $('file').addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
   if (file) { try { await importFile(file); } catch (error) { $('status').textContent = '导入失败：' + error.message; show({ error: error.message }); } }
 });
+function resolveCitationSource(citation) {
+  if (!current || !citation) return { unit: null, text: '' };
+  if (current.parsed.format === 'EPUB') {
+    const chapter = current.parsed.chapters.find((item) => item.href === citation.detail);
+    return { unit: chapter ? chapter.title : citation.detail, text: chapter?.text || '' };
+  }
+  if (current.parsed.format === 'PDF') {
+    const page = current.parsed.pages.find((item) => item.physicalPage === citation.detail);
+    return {
+      unit: page ? '物理页 ' + page.physicalPage + (page.printedPage ? '（印刷页 ' + page.printedPage + '）' : '') : citation.detail,
+      text: page?.text || ''
+    };
+  }
+  return { unit: 'TXT 字符偏移 ' + citation.detail.startOffset, text: citation.detail.text || '' };
+}
 $('jump').addEventListener('click', () => {
   const citation = citations[Number($('citation').value)];
   if (!citation) return;
-  $('source').textContent = JSON.stringify({ locator: citation.locator, detail: citation.detail, quotedText: citation.text }, null, 2);
+  const source = resolveCitationSource(citation);
+  $('source').textContent = [
+    '定位记录：' + citation.locator,
+    '原文位置：' + source.unit,
+    '引用片段：' + citation.text,
+    '',
+    '所在原文单元：',
+    source.text
+  ].join('\\n');
 });
 await renderSaved();
