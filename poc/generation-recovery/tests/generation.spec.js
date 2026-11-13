@@ -119,3 +119,67 @@ test('服务进程重启后恢复任务、事件序号与幂等映射', async ()
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+
+test('同一幂等键绑定请求正文，正文不同时拒绝复用', async () => {
+  const port = 4189;
+  const stateDir = await mkdtemp(join(tmpdir(), 'read-book-idempotency-'));
+  const child = launchServer(port, join(stateDir, 'state.json'));
+  try {
+    await waitForHealth(port, child);
+    const base = `http://127.0.0.1:${port}`;
+    const send = (message) => fetch(base + '/api/generations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'payload-bound-key' },
+      body: JSON.stringify({ message })
+    });
+    const first = await send('first payload');
+    expect(first.status).toBe(202);
+    const firstReceipt = await first.json();
+    const same = await send('first payload');
+    expect(same.status).toBe(200);
+    expect((await same.json()).generation_id).toBe(firstReceipt.generation_id);
+    const different = await send('different payload');
+    expect(different.status).toBe(409);
+    expect((await different.json()).error).toContain('different request payload');
+  } finally {
+    await stopServer(child);
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('事件重连回放保持 event_id 唯一且序号连续', async () => {
+  const port = 4190;
+  const stateDir = await mkdtemp(join(tmpdir(), 'read-book-event-replay-'));
+  const child = launchServer(port, join(stateDir, 'state.json'));
+  try {
+    await waitForHealth(port, child);
+    const base = `http://127.0.0.1:${port}`;
+    const created = await fetch(base + '/api/generations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'event-replay-key' },
+      body: JSON.stringify({ message: 'event replay fixture' })
+    });
+    const receipt = await created.json();
+    let state;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      state = await (await fetch(base + '/api/generations/' + receipt.generation_id)).json();
+      if (state.status === 'completed') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(state.status).toBe('completed');
+    const readEvents = async (after) => (await fetch(base + '/api/generations/' + receipt.generation_id + '/events?after=' + after)).text();
+    const firstReplay = await readEvents(0);
+    const reconnectReplay = await readEvents(2);
+    const parse = (raw) => [...raw.matchAll(/data: (\\{[^\\n]+\\})/g)].map((match) => JSON.parse(match[1]));
+    const all = parse(firstReplay);
+    const resumed = parse(reconnectReplay);
+    expect(all.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(new Set(all.map((event) => event.event_id)).size).toBe(all.length);
+    expect(resumed.map((event) => event.sequence)).toEqual([3, 4, 5, 6, 7]);
+    expect(resumed.every((event, index) => event.sequence === all[index + 2].sequence)).toBe(true);
+  } finally {
+    await stopServer(child);
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
