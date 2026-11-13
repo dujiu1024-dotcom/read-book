@@ -237,6 +237,12 @@ test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失�
     expect(output.count).toBe(1000);
     expect(output.integrity).toBe(true);
     expect(output.longTextIntegrity).toBe(true);
+    const constraints = await page.evaluate(async (datasetId) => {
+      const { checkSqliteConstraints } = await import('/src/sqlite.js');
+      return checkSqliteConstraints(datasetId);
+    }, output.datasetId);
+    expect(constraints.integrity).toBe(true);
+    expect(Object.values(constraints.rejected).every(Boolean)).toBe(true);
     await page.evaluate(async () => {
       const { terminateSqliteWorkerForTest } = await import('/src/sqlite.js');
       terminateSqliteWorkerForTest();
