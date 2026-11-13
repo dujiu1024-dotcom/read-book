@@ -121,3 +121,22 @@ P0/P1 的结果明确后，提交最终技术方案、工作量和开发计划�
 ## 7. 当前判断
 
 知行目前不需要再增加一层宏观架构。最重要的下一步是完成 ReadAny / TextSage 的真实运行验证，同时把“本地加工—云端验收—定向返工”固化成可执行协议。之后再开始业务实现，能显著降低选错底座和反复返工的风险。
+
+
+## 8. 平台入口与 ReadAny 复用路线调整（2026-11-13）
+
+此前项目审查将 ReadAny 作为移动端 Fork 起点，并把 Android/iOS 运行验证列为主要 P0。用户已明确当前不要求真机验证，未来可能采用微信小程序或服务号。现阶段修订如下：
+
+- Android/iOS 真机验证暂停，不作为当前放行条件。
+- ReadAny 固定版本的 GitHub CI 已完成：Core/App 测试、Reader 构建、Expo 配置和 Android Debug APK 构建均成功；这仅证明上游 Expo 工程构建能力。
+- ReadAny 的 ReaderScreen 依赖 React Native WebView、Expo 文件能力、本机 HTTP 文件服务器和 WebView 原生桥接，不适合作为小程序客户端直接 Fork。
+- Foliate/foliate-js、部分 HTML/JS 阅读逻辑、EPUB CFI 和 Citation/Chunk 数据结构仍可继续研究复用。
+- 微信小程序作为主入口候选，服务号作为辅助入口候选，Web/H5 保留为备用；账号资质、类目、实际接口权限、审核和真实运行能力未验证。
+- 下一步优先验证平台无关的数据模型/API、外部身份映射、唯一 Thread、Message 幂等与恢复、传输层适配、Citation locator 和真实书籍 RAG 质量。
+
+详见：
+- docs/validation-strategy.md 第 8-10 节
+- docs/readany-adaptation-matrix.md 第 13 节
+- docs/decision-log.md D-019、D-020
+
+本轮仍处于验证阶段，不授权开始知行业务代码开发。
