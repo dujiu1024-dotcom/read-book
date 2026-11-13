@@ -24,8 +24,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22.12.0"
-          cache: npm
-          cache-dependency-path: poc/local-storage/package-lock.json
       - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium firefox webkit
       - run: npm run build
