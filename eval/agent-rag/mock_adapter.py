@@ -51,6 +51,7 @@ def build_predictions(corpus: list[dict], questions: list[dict], top_k: int) -> 
                 "run_kind": "mock_retrieval_only",
                 "answer_generation": "none",
                 "citation_generation": "none",
+                "agent_policy_events": "none",
                 "gold_labels_used_for_retrieval": False
             }
         })
