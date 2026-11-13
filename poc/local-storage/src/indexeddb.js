@@ -147,7 +147,7 @@ async function queryDataset(db, datasetId, count) {
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error('关联查询事务中止'));
   });
-  return { rows, queryMs, relationQueryMs: performance.now() - joinStart, relationCount: relation.relationCount };
+  return { rows, queryMs, relationQueryMs: performance.now() - joinStart, relationCount: relation.relationCount, relatedThreadCount: relation.relatedThreadCount };
 }
 async function runIndexedDbUnlocked(count, datasetId) {
   const db = await openDb();
@@ -160,7 +160,8 @@ async function runIndexedDbUnlocked(count, datasetId) {
       querySamples.push(query.queryMs);
       relationSamples.push(query.relationQueryMs);
       finalCount = query.rows.length;
-      relationCount = query.relationCount;\n      relatedThreadCount = query.relatedThreadCount;
+      relationCount = query.relationCount;
+      relatedThreadCount = query.relatedThreadCount;
     }
     return {
       adapter: 'IndexedDB', datasetId, count: finalCount, relationCount,
