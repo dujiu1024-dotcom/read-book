@@ -290,6 +290,22 @@ paths:
         '409': { $ref: '#/components/responses/ApiError' }
         '410': { $ref: '#/components/responses/ApiError' }
         default: { $ref: '#/components/responses/ApiError' }
+  /v1/backups/{backup_id}/session:
+    get:
+      tags: [Backups]
+      summary: 查询上传会话状态和已接收分块
+      operationId: getBackupUploadSession
+      parameters:
+        - $ref: '#/components/parameters/BackupId'
+      responses:
+        '200':
+          description: 上传会话状态；仅返回当前账号可访问的会话
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupUploadSession' }
+        '404': { $ref: '#/components/responses/ApiError' }
+        '410': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
   /v1/backups/{backup_id}/parts/{part_no}:
     put:
       tags: [Backups]
@@ -726,7 +742,7 @@ components:
       required: [generation_id, status, expires_at]
       properties:
         generation_id: { type: string }
-        status: { type: string, enum: [queued, running, completed, failed, cancelled, expired] }
+        status: { type: string, enum: [queued, running, cancel_requested, completed, failed, cancelled, expired] }
         expires_at: { type: string, format: date-time }
         result:
           type: [object, 'null']
@@ -754,9 +770,10 @@ components:
         part_count: { type: integer, minimum: 1, maximum: 10000 }
     BackupUploadSession:
       type: object
-      required: [backup_id, upload_expires_at, part_size_limit, received_parts]
+      required: [backup_id, status, upload_expires_at, part_size_limit, received_parts]
       properties:
         backup_id: { type: string, format: uuid }
+        status: { type: string, enum: [open, completing, completed, expired, rejected] }
         upload_expires_at: { type: string, format: date-time }
         part_size_limit: { type: integer, minimum: 1 }
         received_parts:
