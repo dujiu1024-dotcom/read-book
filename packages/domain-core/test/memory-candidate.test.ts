@@ -23,6 +23,7 @@ const candidate: MemoryCandidate = {
   },
   sourceMessageIds: ["message-1"],
   sourceReferences: [],
+  requiresBookCitation: false,
 };
 
 const policy: MemoryCandidatePolicy = {
@@ -77,4 +78,31 @@ test("rejects invalid scores and policy thresholds", () => {
   assert.throws(() => evaluateMemoryCandidate({ ...candidate, confidence: 1.2 }, policy), DomainRuleError);
   assert.throws(() => evaluateMemoryCandidate(candidate, { ...policy, minimumValueScore: 2 }), DomainRuleError);
   assert.throws(() => evaluateMemoryCandidate(candidate, { ...policy, weights: { ...policy.weights, novelty: -1 } }), DomainRuleError);
+});
+
+test("requires a verifiable citation when a candidate is based on book content", () => {
+  const missing = evaluateMemoryCandidate({ ...candidate, requiresBookCitation: true }, policy);
+  assert.equal(missing.decision, "reject");
+  assert.ok(missing.reasons.includes("missing_book_citation"));
+
+  const cited = evaluateMemoryCandidate({
+    ...candidate,
+    requiresBookCitation: true,
+    sourceReferences: [{
+      bookRevisionId: "revision-1",
+      structureNodeId: "node-3",
+      locator: "epubcfi(/6/4!/4/2)",
+    }],
+  }, policy);
+  assert.equal(cited.decision, "accept");
+});
+
+test("rejects duplicate source message ids and incomplete book locators", () => {
+  assert.throws(() => evaluateMemoryCandidate({
+    ...candidate, sourceMessageIds: ["message-1", "message-1"],
+  }, policy), DomainRuleError);
+  assert.throws(() => evaluateMemoryCandidate({
+    ...candidate,
+    sourceReferences: [{ bookRevisionId: "revision-1", structureNodeId: "", locator: "page:2" }],
+  }, policy), DomainRuleError);
 });
