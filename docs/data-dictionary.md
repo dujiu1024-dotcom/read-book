@@ -256,11 +256,17 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 
 约束：cleared 为不可逆状态；普通账号登录、数据修复、备份上传或授权流程不得恢复 active。所有下载、恢复、重新关联、上传完成和授权签发路径都必须先检查该状态。
 
-### 4.6 GenerationJob
+### 4.6 RecoveryChallenge
 
-字段：id UUID PK；client_generation_id TEXT NOT NULL；request_id TEXT NOT NULL；account_id UUID NOT NULL FK；status TEXT NOT NULL（queued / running / completed / failed / cancelled / expired）；created_at TIMESTAMP NOT NULL；expires_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL；result_payload_ciphertext TEXT NULL；result_hash TEXT NULL；error_code TEXT NULL。
+字段：id UUID PK；recovery_key_id_hash TEXT NOT NULL；challenge_nonce_hash TEXT NOT NULL；status TEXT NOT NULL（issued / consumed / expired）；created_at TIMESTAMP NOT NULL；expires_at TIMESTAMP NOT NULL；consumed_at TIMESTAMP NULL；failed_attempts INTEGER NOT NULL DEFAULT 0。
 
-约束：(account_id, client_generation_id) UNIQUE；短 TTL；服务端只暂存生成任务必需的输入输出，不成为 Thread/Message 历史主库。不得在通用日志中记录正文。
+约束：挑战一次性消费；同一 challenge_id 不得重复签发 BackupAuthorization；过期或已消费挑战为终态。recovery_key_id_hash 与 challenge_nonce_hash 的具体算法、是否使用带密钥摘要、失败次数阈值和保留期限由安全设计冻结；不得存储恢复凭证明文或可直接重放的 challenge proof。API 的 recovery_key_id 是外部标识，不等同恢复凭证秘密。
+
+### 4.7 GenerationJob
+
+字段：id UUID PK；client_generation_id TEXT NOT NULL；request_id TEXT NOT NULL；account_id UUID NOT NULL FK；status TEXT NOT NULL（queued / running / cancel_requested / completed / failed / cancelled / expired）；created_at TIMESTAMP NOT NULL；expires_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL；result_payload_ciphertext TEXT NULL；result_hash TEXT NULL；error_code TEXT NULL。
+
+约束：(account_id, client_generation_id) UNIQUE；短 TTL；服务端只暂存生成任务必需的输入输出，不成为 Thread/Message 历史主库。cancel_requested 是非终态；取消与自然完成/失败竞态由服务端原子提交唯一终态。不得在通用日志中记录正文。
 
 ## 5. 关键唯一约束与索引
 
@@ -271,6 +277,7 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 | BookChunk | (book_revision_id, chunk_index) UNIQUE；(structure_node_id) |
 | ShelfEntry | (local_dataset_id, book_revision_id) UNIQUE；(local_dataset_id, shelf_status) |
 | Thread | (local_dataset_id, book_revision_id) UNIQUE |
+| AccountDataSetBinding | (local_dataset_id) WHERE binding_status='active' UNIQUE；(account_id, local_dataset_id) |
 | Message | (thread_id, sequence) UNIQUE；(thread_id, idempotency_key) UNIQUE |
 | ReadingRound | (thread_id, round_number) UNIQUE；活动轮次部分唯一索引 |
 | PresentedSource | (reading_round_id, presentation_type, presented_at) |
@@ -281,6 +288,7 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 | BackupUploadSession | (dataset_id, idempotency_key) UNIQUE |
 | ExternalIdentity | (provider, provider_subject) UNIQUE |
 | GenerationJob | (account_id, client_generation_id) UNIQUE |
+| RecoveryChallenge | (status, expires_at)；(recovery_key_id_hash, created_at) |
 
 部分唯一索引、外键延迟策略和 JSON 校验方式须在目标 SQLite / 服务端数据库 PoC 中确认，不能只依赖 ORM 层校验。
 
