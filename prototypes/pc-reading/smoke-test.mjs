@@ -39,6 +39,10 @@ try {
   await page.getByRole("button", { name: "回到当前主线" }).click();
   if (!(await page.locator("#sourceHeading").textContent()).includes("协同效率与沟通")) throw new Error("return to mainline failed");
 
+  await page.locator('[data-citation="unit-1"]').click();
+  if (!(await page.locator("#viewNoticeText").textContent()).includes("引用")) throw new Error("citation view was not identified");
+  await page.getByRole("button", { name: "回到当前主线" }).click();
+
   await page.getByRole("button", { name: "复习上一单元" }).click();
   if (!(await page.locator("#sourceHeading").textContent()).includes("共同目标")) throw new Error("review did not show previous unit");
   await page.getByRole("button", { name: "回到当前主线" }).click();
@@ -70,6 +74,10 @@ try {
   await page.getByRole("button", { name: "重试" }).waitFor({ timeout: 3000 });
   await page.getByRole("button", { name: "重试" }).last().click();
   await page.getByText("重试完成 · 演示状态").waitFor({ timeout: 3000 });
+
+  await page.locator("#messageInput").fill("键盘快捷发送测试。");
+  await page.locator("#messageInput").press("Control+Enter");
+  await page.getByText("生成完成 · 演示状态").waitFor({ timeout: 3000 });
 
   await page.getByRole("button", { name: /切换当前单元讨论状态/ }).click();
   page.once("dialog", dialog => dialog.accept());
