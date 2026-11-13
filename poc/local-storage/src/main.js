@@ -34,8 +34,12 @@ async function storageStatus() {
   ]);
   let persistRequest = 'not available';
   if (navigator.storage?.persist) {
-    try { persistRequest = String(await navigator.storage.persist()); }
-    catch (error) { persistRequest = 'error: ' + error.message; }
+    try {
+      persistRequest = await Promise.race([
+        navigator.storage.persist().then((granted) => String(granted)).catch((error) => 'error: ' + error.message),
+        new Promise((resolve) => setTimeout(() => resolve('timed out / permission unresolved'), 2500))
+      ]);
+    } catch (error) { persistRequest = 'error: ' + error.message; }
   }
   return { estimate, persisted, persistRequest };
 }
