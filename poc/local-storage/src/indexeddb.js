@@ -341,14 +341,31 @@ export async function runMigrationProbe() {
       });
       tx.onerror = () => reject(tx.error);
     });
+    const multipleRoundsAllowed = await new Promise((resolve, reject) => {
+      const tx = v3Db.transaction('readingRounds', 'readwrite');
+      tx.objectStore('readingRounds').put({
+        id: 'v3-round-2', datasetId: 'v3', threadId: 'v3-thread', sequence: 8
+      });
+      tx.oncomplete = () => resolve(true);
+      tx.onabort = () => reject(tx.error || new Error('同一 Thread 的不同阅读轮次写入失败'));
+    });
+    const duplicateSequenceRejected = await new Promise((resolve) => {
+      const tx = v3Db.transaction('readingRounds', 'readwrite');
+      tx.objectStore('readingRounds').put({
+        id: 'v3-round-duplicate', datasetId: 'v3', threadId: 'v3-thread', sequence: 8
+      });
+      tx.oncomplete = () => resolve(false);
+      tx.onabort = () => resolve(true);
+    });
     const v3RoundIndexCorrect = v3RoundMigration.preserved &&
-      v3RoundMigration.compositeUnique && v3RoundMigration.oldUniqueIndexRemoved;
+      v3RoundMigration.compositeUnique && v3RoundMigration.oldUniqueIndexRemoved &&
+      multipleRoundsAllowed && duplicateSequenceRejected;
     return {
       adapter: 'IndexedDB', migration: 'v1/v3-to-v4',
       legacyThreadPreserved: migrated.thread?.title === 'Legacy Thread',
       legacyMessagePreserved: migrated.message?.content === '迁移前原文',
       expectedStores, expectedIndexes,
-      v1RoundIndexCorrect, v3RoundIndexCorrect,
+      v1RoundIndexCorrect, v3RoundIndexCorrect, multipleRoundsAllowed, duplicateSequenceRejected,
       integrity: migrated.thread?.title === 'Legacy Thread' &&
         migrated.message?.content === '迁移前原文' && expectedStores &&
         expectedIndexes && v1RoundIndexCorrect && v3RoundIndexCorrect
