@@ -68,11 +68,11 @@ export class MockBackupServer {
     this.assertAuthorization(token, backup.manifest.datasetId, 'download');
     if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error('下载票据有效期非法');
     const ticket = crypto.randomUUID();
+    const expiresAt = this.now() + ttlMs;
     this.downloadTickets.set(ticket, {
-      ticket, backupId, datasetId: backup.manifest.datasetId,
-      expiresAt: this.now() + ttlMs
+      ticket, backupId, datasetId: backup.manifest.datasetId, expiresAt
     });
-    return { ticket, expiresAt: this.now() + ttlMs };
+    return { ticket, expiresAt };
   }
   downloadByTicket(ticket) {
     const record = this.downloadTickets.get(ticket);
