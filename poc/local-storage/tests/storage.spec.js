@@ -1,7 +1,9 @@
 import { test, expect } from '@playwright/test';
 
-test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ page }) => {\n  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));\n  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ page }) => {
   await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
   await expect(page.getByRole('heading', { name: '本地数据存储与浏览器可靠性' })).toBeVisible();
   await page.locator('#adapter').selectOption('indexeddb');
   await page.locator('#count').selectOption('1000');
@@ -36,9 +38,11 @@ test('Web Locks 不可用时 fail-closed，不能创建或写入数据集', asyn
   });
 });
 
-test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失败', async ({ page, browserName }) => {\n  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));\n  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
-  test.skip(browserName !== 'chromium', 'SQLite OPFS 先在 Chromium 主测，Firefox/WebKit 兼容性另行记录');
+test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失败', async ({ page, browserName }) => {
   await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+  test.skip(browserName !== 'chromium', 'SQLite OPFS 先在 Chromium 主测，Firefox/WebKit 兼容性另行记录');
   await page.locator('#adapter').selectOption('sqlite');
   await page.locator('#count').selectOption('1000');
   await page.getByRole('button', { name: '执行写入与查询测试' }).click();
@@ -55,10 +59,12 @@ test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失�
   }
 });
 
-test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', async ({ page, browserName }) => {\n  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));\n  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', async ({ page, browserName }) => {
+  await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
   test.skip(browserName !== 'chromium', '100k 性能基准仅在 Chromium 主测，避免兼容矩阵重复压测');
   test.setTimeout(300_000);
-  await page.goto('/');
   await page.locator('#adapter').selectOption('indexeddb');
   await page.locator('#count').selectOption('100000');
   await page.getByRole('button', { name: '执行写入与查询测试' }).click();
