@@ -36,11 +36,11 @@ presented 与 awaiting_user 可以在同一事务中连续发生，但保留两�
 | presented | 展示事务完成 | awaiting_user | Agent 停止主动输出，等待用户 |
 | awaiting_user | 用户发出实质性讨论内容 | discussion_active | 只识别交互意图，不评价理解正确与否 |
 | discussion_active | 用户继续提问/解释/质疑/补充 | discussion_active | 继续围绕本单元讨论 |
-| discussion_active | 用户明确表示本段讨论到此并继续 | discussed | 不做理解评分或达标判断 |
+| discussion_active | 用户在已有实质讨论后发出继续阅读/推进指令，或自然表达本段讨论已结束 | discussed | 由 Agent 结合上下文判断交互是否已收束；不要求用户手动切换讨论模式 |
 | awaiting_user | 用户要求继续，但本单元尚无实质讨论 | awaiting_user | 先询问是否已理解并希望略读；不得直接推进 |
 | awaiting_user | 用户确认已理解并选择略读 | skipped | 记录用户确认事件 |
 | awaiting_user | 用户选择继续讨论 | discussion_active | 留在当前单元 |
-| discussion_active | 用户主动结束讨论并继续 | discussed | 记录本轮结束事件 |
+| discussion_active | 用户发出继续阅读/推进指令 | discussed | 记录本轮结束事件；不额外要求用户点击“结束讨论” |
 | discussed / skipped | 用户要求重新讨论当前单元 | discussion_active | 若当前轮仍活动，允许重新打开；保留既有事件 |
 | 任意状态 | 临时查看其他章节 | 不变 | 创建 temporary PresentedSource，不改主线状态 |
 | 任意状态 | 复习已读单元 | 不变 | 创建 review PresentedSource，不改主线状态 |
@@ -217,7 +217,7 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 ## 10. 尚待确认与验证
 
 ### 需要产品确认
-1. 简短回应（如“确实”“不对”）是否可由 Agent 结合上下文判定为实质性讨论，建议允许上下文判断，但不得依赖字数阈值。
+1. 简短回应（如“确实”“不对”）是否可由 Agent 结合上下文判定为实质性讨论；建议允许上下文判断，但不得依赖字数阈值。
 2. 用户在主线已完成后要求重新深入讨论某个 skipped 单元，是否只作为 review，不改变已完成轮次状态；建议默认如此，除非用户主动开启新一轮。
 3. abandoned 轮次是否允许继续恢复；建议第一版先不提供恢复 abandoned 的入口，避免和二刷语义混淆。
 
