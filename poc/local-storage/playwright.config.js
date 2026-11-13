@@ -7,6 +7,8 @@ export default defineConfig({
   use: { baseURL: 'http://127.0.0.1:4173', headless: true },
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' } },
+    { name: 'chrome-stable', use: { browserName: 'chromium', channel: 'chrome' } },
+    { name: 'edge-stable', use: { browserName: 'chromium', channel: 'msedge' } },
     { name: 'firefox', use: { browserName: 'firefox' } },
     { name: 'webkit', use: { browserName: 'webkit' } }
   ],
