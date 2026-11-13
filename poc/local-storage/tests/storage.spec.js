@@ -20,6 +20,27 @@ test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ p
   expect(afterReload.integrity).toBe(true);
 });
 
+test('批量替换事务中断时回滚，原数据集保持完整', async ({ page }) => {
+  await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+  const result = await page.evaluate(async () => {
+    const { runIndexedDb, checkIndexedDb } = await import('/src/indexeddb.js');
+    await runIndexedDb(1000, 'atomic-replacement-fixture');
+    let failure;
+    try {
+      await runIndexedDb(100000, 'atomic-replacement-fixture', { failureInjection: 'abort-after-clear' });
+    } catch (error) { failure = { name: error.name, message: error.message }; }
+    return { failure, check: await checkIndexedDb('atomic-replacement-fixture') };
+  });
+  expect(result.failure).toBeTruthy();
+  expect(result.check.count).toBe(1000);
+  expect(result.check.integrity).toBe(true);
+  expect(result.check.entityCounts).toEqual({
+    threads: 10, messages: 1000, readingRounds: 10, notes: 10, memories: 10, sources: 1
+  });
+});
+
 test('Web Locks 不可用时 fail-closed，不能创建或写入数据集', async ({ page }) => {
   await page.goto('/');
   await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
