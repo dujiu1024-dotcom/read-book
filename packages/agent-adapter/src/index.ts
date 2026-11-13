@@ -186,6 +186,31 @@ export function authoritativeFinalResult(snapshot: GenerationSnapshot): Generati
   return snapshot.status === "completed" ? snapshot.result : null;
 }
 
+export function validateGenerationEvent(value: unknown): GenerationEvent {
+  const item = validateGenerationEvent(value);
+  const eventId = item.event_id;
+  const generationId = item.generation_id;
+  if (!Number.isInteger(item.sequence) || (item.sequence as number) < 1) {
+    throw new GenerationProtocolError("Generation event sequence must be a positive integer.");
+  }
+  switch (item.type) {
+    case "started":
+      return { event_id: eventId, generation_id: generationId, sequence: item.sequence as number, type: "started" };
+    case "delta":
+      if (typeof item.text !== "string") throw new GenerationProtocolError("Delta event text must be a string.");
+      return { event_id: eventId, generation_id: generationId, sequence: item.sequence as number, type: "delta", text: item.text };
+    case "completed":
+      if (item.result_available !== true) throw new GenerationProtocolError("Completed event must signal result availability.");
+      return { event_id: eventId, generation_id: generationId, sequence: item.sequence as number, type: "completed", result_available: true };
+    case "failed":
+      return { event_id: eventId, generation_id: generationId, sequence: item.sequence as number, type: "failed", code: requiredString(item.code, "code") };
+    case "cancelled":
+      return { event_id: eventId, generation_id: generationId, sequence: item.sequence as number, type: "cancelled" };
+    default:
+      throw new GenerationProtocolError("Unknown generation event type.");
+  }
+}
+
 export function advanceGenerationEventCursor(
   cursor: GenerationEventCursor,
   value: unknown,
@@ -196,12 +221,12 @@ export function advanceGenerationEventCursor(
   if (generationId !== cursor.generationId) {
     throw new GenerationProtocolError("Generation event belongs to a different generation.");
   }
-  if (!Number.isInteger(item.sequence) || (item.sequence as number) < 1) {
-    throw new GenerationProtocolError("Generation event sequence must be a positive integer.");
-  }
-  const sequence = item.sequence as number;
-  if (sequence <= cursor.lastSequence || eventId === cursor.lastEventId) {
+  const sequence = item.sequence;
+  if (sequence < cursor.lastSequence || eventId === cursor.lastEventId) {
     return { cursor, duplicate: true };
+  }
+  if (sequence === cursor.lastSequence) {
+    throw new GenerationProtocolError("Conflicting generation events share the same sequence.");
   }
   if (sequence !== cursor.lastSequence + 1) {
     throw new GenerationProtocolError("Generation event sequence gap detected.");
@@ -233,15 +258,18 @@ export function createGenerationClient(transport: GenerationTransport) {
       cursor: GenerationEventCursor,
       signal: AbortSignal,
       onEvent: (event: GenerationEvent) => void,
-    ): Promise<void> {
+    ): Promise<GenerationEventCursor> {
       if (cursor.generationId !== generationId) {
         throw new GenerationProtocolError("Event cursor belongs to a different generation.");
       }
-      await transport.streamEvents(generationId, cursor.lastSequence, signal, (raw) => {
-        const item = record(raw);
-        advanceGenerationEventCursor(cursor, item);
-        onEvent(item as unknown as GenerationEvent);
+      let currentCursor = { ...cursor };
+      await transport.streamEvents(generationId, currentCursor.lastSequence, signal, (raw) => {
+        const result = advanceGenerationEventCursor(currentCursor, raw);
+        if (result.duplicate) return;
+        currentCursor = result.cursor;
+        onEvent(validateGenerationEvent(raw));
       });
+      return currentCursor;
     },
   });
 }
@@ -254,6 +282,8 @@ export async function persistUserMessageBeforeGeneration(
   request: GenerationRequest,
   idempotencyKey: string,
 ): Promise<GenerationAccepted> {
+  validateGenerationRequest(request);
+  requiredString(idempotencyKey, "Idempotency-Key");
   if (message.id !== request.user_message.local_message_id) {
     throw new GenerationProtocolError("Persisted message id must match request.local_message_id.");
   }
