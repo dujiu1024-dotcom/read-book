@@ -156,6 +156,6 @@ ShelfEntry.entitlement_proof 不能只作为客户端自报字段。必须定义
 | 实体字段、类型、必填、关系、唯一约束、删除语义 | [核心数据字典](data-dictionary.md) | 本文档前文保留概念模型；字段实施以数据字典为准 |
 | HTTP API 路径、方法、参数、请求/响应和错误结构 | [OpenAPI 3.1 契约](api-contract.yaml) | 本项目唯一 API 路径权威来源 |
 | PC Web 部署、存储与客户端架构 | [PC Web 详细技术设计](pc-web-detailed-design.md) | 需与 API 契约保持一致 |
-| 阅读主线及消息状态转换 | [状态机契约](state-machines.md) | 待补齐，完成后成为状态转换权威来源 |
+| 阅读主线及消息状态转换 | [状态机契约](state-machines.md) | 状态转换权威来源；讨论语义边界仍有待确认项 |
 
 禁止在其他文档中独立维护一套 API 路径表。若发现冲突，先修改权威契约，再更新引用文档；旧路径必须明确标注废止。
