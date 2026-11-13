@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
@@ -109,7 +109,7 @@ const server = http.createServer(async (req, res) => {
       if (typeof input.message !== 'string' || !input.message.trim()) return json(res, 400, { error: 'message required' });
       const task = { id: randomUUID(), idempotencyKey, status: 'queued', message: input.message, sequence: 0, events: [], finalResult: null };
       tasks.set(task.id, task);
-      const receipt = { generation_id: task.id, status: task.status, idempotency_key: idempotencyKey };
+      const receipt = { generation_id: task.id, status: task.status, idempotency_key: idempotencyKey, request_hash: requestHash };
       idempotency.set(idempotencyKey, receipt);
       await persist();
       json(res, 202, receipt);
