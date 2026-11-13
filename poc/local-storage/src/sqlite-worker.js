@@ -3,6 +3,7 @@ import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 let db;
 let sqlite3;
 const RUNS = 5;
+const LONG_TEXT = '长文本'.repeat(16384);
 
 async function initialize() {
   if (db) return;
@@ -106,9 +107,9 @@ function writeBatch(count, datasetId) {
       INSERT INTO message(id,dataset_id,thread_id,sequence,role,content,created_at)
       SELECT ? || ':' || i, ?, ? || ':thread:' || (i % 10), CAST(i / 10 AS INTEGER),
         CASE WHEN i % 2 = 1 THEN 'assistant' ELSE 'user' END,
-        '测试消息 ' || i || ' / ' || ?, i
+        CASE WHEN i = 0 THEN ? ELSE '测试消息 ' || i || ' / ' || ? END, i
       FROM seq
-    `, [count - 1, datasetId, datasetId, datasetId, '知行阅读与思考内容。'.repeat(8)]);
+    `, [count - 1, datasetId, datasetId, datasetId, LONG_TEXT, '知行阅读与思考内容。'.repeat(8)]);
     db.exec({ sql: 'COMMIT' });
   } catch (error) {
     db.exec({ sql: 'ROLLBACK' });
@@ -133,6 +134,8 @@ function queryBatch(count, datasetId) {
     [datasetId, datasetId + ':thread:0']
   );
   const relationQueryMs = performance.now() - relationStart;
+  const longText = execute('SELECT content FROM message WHERE id = ?', [datasetId + ':0']);
+  const longTextIntegrity = longText[0]?.content === LONG_TEXT;
   const graph = execute(`
     SELECT COUNT(*) AS count FROM thread t
     JOIN reading_round rr ON rr.thread_id = t.id AND rr.dataset_id = t.dataset_id
@@ -143,12 +146,12 @@ function queryBatch(count, datasetId) {
   `, [datasetId]);
   return {
     count: Number(rows[0].count), relationCount: Number(relation[0].count),
-    relatedThreadCount: Number(graph[0].count), queryMs, relationQueryMs
+    relatedThreadCount: Number(graph[0].count), longTextIntegrity, queryMs, relationQueryMs
   };
 }
 async function run(count, datasetId) {
   const writeSamples = [], querySamples = [], relationSamples = [];
-  let finalCount = 0, relationCount = 0, relatedThreadCount = 0;
+  let finalCount = 0, relationCount = 0, relatedThreadCount = 0, longTextIntegrity = false;
   for (let run = 0; run < RUNS; run++) {
     writeSamples.push(writeBatch(count, datasetId));
     const result = queryBatch(count, datasetId);
@@ -157,10 +160,11 @@ async function run(count, datasetId) {
     finalCount = result.count;
     relationCount = result.relationCount;
     relatedThreadCount = result.relatedThreadCount;
+    longTextIntegrity = result.longTextIntegrity;
   }
   return {
     adapter: 'SQLite WASM + OPFS', datasetId, count: finalCount, relationCount,
-    runs: RUNS, integrity: finalCount === count && relationCount === Math.ceil(count / 10) && relatedThreadCount === 10, relatedThreadCount,
+    runs: RUNS, integrity: finalCount === count && relationCount === Math.ceil(count / 10) && relatedThreadCount === 10 && longTextIntegrity, relatedThreadCount, longTextIntegrity,
     writeMs: { p50: percentile(writeSamples, 0.5), p95: percentile(writeSamples, 0.95), samples: writeSamples },
     queryMs: { p50: percentile(querySamples, 0.5), p95: percentile(querySamples, 0.95), samples: querySamples },
     relationQueryMs: { p50: percentile(relationSamples, 0.5), p95: percentile(relationSamples, 0.95), samples: relationSamples }
@@ -170,6 +174,8 @@ async function run(count, datasetId) {
 function check(datasetId) {
   const integrity = execute('PRAGMA integrity_check');
   const count = execute('SELECT COUNT(*) AS count FROM message WHERE dataset_id = ?', [datasetId]);
+  const longText = execute('SELECT content FROM message WHERE id = ?', [datasetId + ':0']);
+  const longTextIntegrity = longText[0]?.content === LONG_TEXT;
   const relations = execute(`
     SELECT COUNT(*) AS count FROM message m
     JOIN thread t ON t.id = m.thread_id AND t.dataset_id = m.dataset_id
@@ -190,7 +196,8 @@ function check(datasetId) {
   return {
     adapter: 'SQLite WASM + OPFS', datasetId, count: Number(count[0].count),
     relationCount: Number(relations[0].count), relatedThreadCount: Number(graph[0].count),
-    integrity: integrity[0]?.integrity_check === 'ok' &&
+    longTextIntegrity,
+    integrity: integrity[0]?.integrity_check === 'ok' && longTextIntegrity &&
       Number(relations[0].count) === Number(count[0].count) && Number(graph[0].count) === 10,
     integrityDetail: integrity[0]?.integrity_check
   };
