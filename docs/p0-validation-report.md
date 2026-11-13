@@ -166,3 +166,43 @@ TextSage 最小验证：
 - 真实书籍质量评测通过。
 
 只有后几项逐步完成后，才能确认项目具备实际复用价值。
+
+
+## 7. GitHub 云端 CI 验证补充（2026-11-13）
+
+本节是对固定 ReadAny commit 的补充验证。CI 运行的是上游源码，不代表知行改造版已经完成验证。
+
+### 第 3 次运行：Lint 阻断
+
+- Run：43358621013
+- Workflow commit：32495f6e590f1ad2622af5ac8d279c7eae6b6605
+- Core tests：通过
+- Mobile app tests：通过
+- Mobile app lint：失败，Biome 报告 191 errors、78 warnings
+- Reader build、Expo config：因 Lint 失败而跳过
+- Android APK：构建过程中被取消，未完成
+
+结论：将整个移动端包作为 Lint 范围仍会遇到大量上游既有诊断。不能据此判断测试或 Android 工程不可运行，也不应批量改动上游源码来制造绿色状态。
+
+### CI 策略调整
+
+- 将上游 Lint 调整为非阻断诊断项，仍执行并保留结果。
+- Core tests、Mobile app tests、Reader build、Expo config 和 Android APK 构建继续作为主要验证项。
+- 同一分支的并发运行改为排队，避免新运行自动取消正在执行的验证。
+- Workflow 修订 commit：b82608ef75458f0cdd797a4dcbb7126fe81a62e8。
+
+### 第 4 次运行：当前状态
+
+- Run：43359000578
+- Workflow commit：b82608ef75458f0cdd797a4dcbb7126fe81a62e8
+- 依赖安装：通过
+- Core tests：通过
+- Mobile app tests：通过
+- Lint advisory step：已执行，步骤未阻断后续任务
+- Reader build：通过
+- Expo config：通过
+- Android APK：Gradle assembleDebug 正在执行；最终结果和 APK Artifact 待补充
+
+运行链接：https://github.com/dujiu1024-dotcom/read-book/actions/runs/43359000578
+
+注意：当前仅是上游源码在 GitHub Linux runner 上的构建验证。APK 成功仍不等于真机安装、启动、导入 EPUB、发起对话和引用定位端到端通过。
