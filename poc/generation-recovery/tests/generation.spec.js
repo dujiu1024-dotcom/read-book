@@ -210,11 +210,11 @@ test('接近自然完成时取消仍产生唯一终态，不暴露最终结果',
     });
     const receipt = await created.json();
     let state;
+    // sequence 1 is "started"; sequence >= 5 means four deltas are durable.
+    // Do not poll the SSE endpoint here: an active SSE response intentionally stays open.
     for (let attempt = 0; attempt < 80; attempt++) {
       state = await (await fetch(base + '/api/generations/' + receipt.generation_id)).json();
-      const events = await (await fetch(base + '/api/generations/' + receipt.generation_id + '/events?after=0')).text();
-      const deltaCount = [...events.matchAll(/"type":"delta"/g)].length;
-      if (deltaCount >= 4) break;
+      if (state.sequence >= 5 || ['completed', 'cancelled', 'failed'].includes(state.status)) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     const cancelled = await fetch(base + '/api/generations/' + receipt.generation_id + '/cancel', { method: 'POST' });
