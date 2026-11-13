@@ -11,6 +11,7 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
     await expect(page.locator('#status')).toContainText('导入成功', { timeout: 20_000 });
     const result = JSON.parse(await page.locator('#output').textContent());
     expect(result.id).toMatch(/^[a-f0-9]{64}$/);
+    console.log('fixture SHA-256:', fixture, result.id);
     expect(result.id).toBe(fixtureHashes[fixture]);
     expect(result.citationCount).toBeGreaterThan(0);
     if (fixture === 'epub-3') {
@@ -20,8 +21,11 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
     }
     if (fixture === 'pdf-2') {
       const text = result.parsed.pages[0].text;
-      expect(text.indexOf('Left column text')).toBeLessThan(text.indexOf('Right column text'));
-      expect(result.parsed.pages[0].textItems[0].x).toBeLessThan(result.parsed.pages[0].textItems[1].x);
+      expect(result.parsed.pages[0].columnCount).toBe(2);
+      expect(text.indexOf('Left column text')).toBeLessThan(text.indexOf('Left column second line'));
+      expect(text.indexOf('Left column third line')).toBeLessThan(text.indexOf('Right column text'));
+      expect(text.indexOf('Right column text')).toBeLessThan(text.indexOf('Right column third line'));
+      expect(result.parsed.pages[0].textItems[0].x).toBeLessThan(result.parsed.pages[0].textItems.at(-1).x);
     }
     if (fixture === 'pdf-3') {
       expect(result.parsed.repeatedEdgeText).toContain('Header - Sample Book');
