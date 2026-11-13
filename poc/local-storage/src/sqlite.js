@@ -54,3 +54,8 @@ export async function checkSqliteConstraints(datasetId) {
   await request('init');
   return request('constraints', { datasetId });
 }
+
+export async function corruptSqliteDatasetForTest(datasetId) {
+  await request('init');
+  return request('corrupt', { datasetId });
+}
