@@ -1,6 +1,6 @@
 # 知行 PC 窄屏阅读交互原型
 
-独立、静态、模拟数据原型。无真实账号、数据库、模型服务、业务 API 或持久化依赖。
+独立阅读交互页面，当前使用明确标注的 Demo BookContentProvider。无真实账号、数据库、模型服务、业务 API 或持久化依赖。
 
 ## 启动
 
@@ -34,3 +34,16 @@ CI 使用 Chromium 和 Playwright 验证折叠/展开、临时查看、复习、
 额外使用 Playwright 的 iPhone 13、Pixel 7 设备配置模拟触控视口，检查触控能力、44 CSS px 点击区域、折叠、章节选择、消息发送与停止。**设备配置模拟不是真实 iOS/Android 硬件测试**，不能验证系统键盘、Safari/Chrome 原生缩放、浏览器地址栏动态视口、操作系统字体渲染或真实触控延迟。
 
 本原型仍是交互验证工具，不是正式 UI 设计稿。自动化通过不等于真实用户可用性研究通过；若需验证实际理解成本，应另行组织目标用户任务评审。项目不要求实体手机/平板真机测试，移动端适配通过 Playwright 设备配置模拟和响应式视口自动化验证。
+
+
+## BookContentProvider 边界（Issue #25）
+
+页面通过 `BookContentProvider.loadBookRevision(bookRevisionId)` 加载书籍版本，不再在页面脚本中内嵌章节与原文 fixtures。Provider 对返回内容执行结构校验：版本 ID、书籍元数据、初始主线单元、单元唯一 ID、章节、定位和正文均须有效。
+
+当前接入的是 `createDemoBookContentProvider()`，仅用于开发与自动化测试；它不是真实书籍服务，也不代表 EPUB/PDF/TXT 导入已接通。后续可替换为本地书籍包或公共书籍 API Provider，而不改变阅读页面。真实内容接入仍是 Issue #25 的未完成验收项。
+
+运行 Provider 契约测试：
+
+```bash
+node --test prototypes/pc-reading/book-content-provider.test.mjs
+```
