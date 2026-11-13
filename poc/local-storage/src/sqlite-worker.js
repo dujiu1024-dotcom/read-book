@@ -43,14 +43,19 @@ function writeBatch(count, datasetId) {
   try {
     execute('DELETE FROM message WHERE dataset_id = ?', [datasetId]);
     execute('DELETE FROM thread WHERE dataset_id = ?', [datasetId]);
-    for (let i = 0; i < count; i++) {
-      const threadId = datasetId + ':thread:' + (i % 10);
-      execute('INSERT OR IGNORE INTO thread(id,dataset_id) VALUES (?,?)', [threadId, datasetId]);
-      execute(
-        'INSERT INTO message(id,dataset_id,thread_id,sequence,role,content,created_at) VALUES (?,?,?,?,?,?,?)',
-        [datasetId + ':' + i, datasetId, threadId, Math.floor(i / 10), i % 2 ? 'assistant' : 'user', '测试消息 ' + i + ' / ' + '知行阅读与思考内容。'.repeat(8), i]
-      );
+    for (let thread = 0; thread < 10; thread++) {
+      execute('INSERT OR IGNORE INTO thread(id,dataset_id) VALUES (?,?)', [datasetId + ':thread:' + thread, datasetId]);
     }
+    execute(`
+      WITH RECURSIVE seq(i) AS (
+        SELECT 0 UNION ALL SELECT i + 1 FROM seq WHERE i < ?
+      )
+      INSERT INTO message(id,dataset_id,thread_id,sequence,role,content,created_at)
+      SELECT ? || ':' || i, ?, ? || ':thread:' || (i % 10), CAST(i / 10 AS INTEGER),
+        CASE WHEN i % 2 = 1 THEN 'assistant' ELSE 'user' END,
+        '测试消息 ' || i || ' / ' || ?, i
+      FROM seq
+    `, [count - 1, datasetId, datasetId, datasetId, '知行阅读与思考内容。'.repeat(8)]);
     db.exec({ sql: 'COMMIT' });
   } catch (error) {
     db.exec({ sql: 'ROLLBACK' });
