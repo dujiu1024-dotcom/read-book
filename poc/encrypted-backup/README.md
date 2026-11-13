@@ -19,7 +19,7 @@ npm run build
 
 ### 端侧加密与备份协议
 
-- 每个数据集通过 `createDatasetKeyMaterial(datasetId)` 随机生成一份 256-bit DEK 和独立 256-bit 恢复凭证；同一数据集的全量/增量备份复用该密钥材料，不同数据集之间禁止复用。每个备份使用独立 wrapNonce 包装同一 DEK。
+- 每个数据集通过 `createDatasetKeyMaterial(datasetId)` 随机生成一份 256-bit DEK 和独立 256-bit 恢复凭证；同一数据集的全量/增量备份复用该密钥材料，不同数据集之间禁止复用。每个备份使用独立 wrapNonce 包装同一 DEK；全量与多级增量均使用同一恢复凭证完成解密校验。
 - 使用 AES-256-GCM 包装 DEK 与加密数据块；每块使用随机 96-bit nonce。
 - AAD 绑定 dataset_id、backup_id、sequence、parent_backup_id、backup_type、chunk_index、schema_version 和算法套件。
 - Manifest 只包含协议字段、密文哈希、块大小、父备份 ID 和被包装的 DEK；不包含备份明文和恢复密钥。
@@ -46,8 +46,8 @@ npm run build
 
 ## 最新自动化验证
 
-GitHub Actions Run 43437879688：构建成功。
-- Playwright Chromium：17/17 通过。
+GitHub Actions Run 43438959152：构建成功。
+- Playwright Chromium：18/18 通过。
 - Node HTTP Server 集成：8/8 通过。
 - 覆盖加密恢复、错误恢复密钥、密文篡改、分块续传、服务重启、全量/多级增量父链、票据范围/撤销/过期、下载 URL 过期、清除墓碑持久化、清除与完成竞态、晚到上传拒绝和密文文件不含明文。
 
