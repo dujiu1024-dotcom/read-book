@@ -97,8 +97,14 @@ export class MockBackupServer {
     for (const [id, session] of this.sessions) {
       if (session.manifest.datasetId === datasetId) {
         session.state = 'cleared';
+        session.parts.clear();
         this.sessions.delete(id);
       }
+    }
+    // Drop idempotency references too; otherwise they retain manifests and
+    // ciphertext parts in memory after the dataset has been tombstoned.
+    for (const [key, session] of this.idempotency) {
+      if (session.manifest.datasetId === datasetId) this.idempotency.delete(key);
     }
   }
   isCleared(datasetId) { return this.tombstones.has(datasetId); }
