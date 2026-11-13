@@ -18,8 +18,18 @@ export class MockBackupServer {
   init(manifest, idempotencyKey) {
     if (typeof idempotencyKey !== 'string' || !idempotencyKey) throw new Error('幂等键不能为空');
     if (this.tombstones.has(manifest.datasetId)) throw new Error('数据集已清除');
+    if (typeof manifest.backupId !== 'string' || !manifest.backupId || typeof manifest.datasetId !== 'string' || !manifest.datasetId) throw new Error('数据集或备份 ID 非法');
     if (!Number.isSafeInteger(manifest.sequence) || manifest.sequence < 1) throw new Error('备份序号非法');
     if (!['full', 'incremental'].includes(manifest.backupType)) throw new Error('备份类型非法');
+    if (!Array.isArray(manifest.chunks) || !Number.isSafeInteger(manifest.chunkCount) || manifest.chunkCount < 1 || manifest.chunks.length !== manifest.chunkCount) {
+      throw new Error('Manifest 分块数量与清单不一致');
+    }
+    const chunkIndexes = manifest.chunks.map((chunk) => chunk.chunkIndex);
+    const nonces = manifest.chunks.map((chunk) => chunk.nonce);
+    if (chunkIndexes.some((index, position) => index !== position)) throw new Error('Manifest 分块序号必须从 0 连续排列');
+    if (nonces.some((nonce) => typeof nonce !== 'string' || !nonce) || new Set(nonces).size !== nonces.length) {
+      throw new Error('同一备份内分块 nonce 必须唯一');
+    }
     if (manifest.backupType === 'full' && manifest.parentBackupId) throw new Error('全量备份不能指定父备份');
     if (manifest.backupType === 'incremental' && !manifest.parentBackupId) throw new Error('增量备份必须指定父备份');
     const prior = this.idempotency.get(idempotencyKey);
@@ -34,7 +44,7 @@ export class MockBackupServer {
       if (manifest.sequence !== parent.manifest.sequence + 1) throw new Error('备份序号必须紧邻父备份');
       if (parent.manifest.backupType === 'incremental' && !parent.manifest.parentBackupId) throw new Error('父备份链不完整');
     }
-    const session = { backupId: manifest.backupId, manifest, parts: new Map(), state: 'uploading' };
+    const session = { backupId: manifest.backupId, manifest: structuredClone(manifest), parts: new Map(), state: 'uploading' };
     this.sessions.set(manifest.backupId, session);
     this.idempotency.set(idempotencyKey, session);
     return session;
