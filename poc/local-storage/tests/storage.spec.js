@@ -152,7 +152,7 @@ test('真实浏览器配额不足时中止事务并保留旧数据', async ({ pa
   const origin = 'http://127.0.0.1:4173';
   try {
     try {
-      await session.send('Storage.overrideQuotaForOrigin', { origin, quotaSize: 200000 });
+      await session.send('Storage.overrideQuotaForOrigin', { origin, quotaSize: 500000 });
     } catch {
       test.skip(true, '当前 Chromium CDP 不支持 Storage.overrideQuotaForOrigin');
     }
