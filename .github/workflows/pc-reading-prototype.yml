@@ -1,0 +1,44 @@
+name: PC reading prototype
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "prototypes/pc-reading/**"
+      - ".github/workflows/pc-reading-prototype.yml"
+  pull_request:
+    paths:
+      - "prototypes/pc-reading/**"
+      - ".github/workflows/pc-reading-prototype.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pc-reading-prototype-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check prototype JavaScript syntax
+        run: node --check prototypes/pc-reading/app.js
+      - name: Install pinned browser test dependency
+        run: npm install --no-save playwright@1.55.0
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run browser interaction smoke tests
+        run: node prototypes/pc-reading/smoke-test.mjs
