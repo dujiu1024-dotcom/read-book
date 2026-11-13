@@ -152,7 +152,30 @@ test("client delegates create, get, cancel and resumes events after the saved se
   await client.cancel("generation-1", "cancel-key-0001");
   const cursor = { generationId: "generation-1", lastSequence: 0, lastEventId: null };
   const seen: unknown[] = [];
-  await client.stream("generation-1", cursor, new AbortController().signal, (item) => seen.push(item));
+  const nextCursor = await client.stream("generation-1", cursor, new AbortController().signal, (item) => seen.push(item));
   assert.deepEqual(fake.calls, ["create", "get", "cancel", "stream:0"]);
   assert.equal(seen.length, 1);
+  assert.equal(nextCursor.lastSequence, 1);
+});
+
+test("stream cursor advances across multiple events and rejects unknown event types", async () => {
+  const events = [
+    { event_id: "generation-1:1", generation_id: "generation-1", sequence: 1, type: "started" },
+    { event_id: "generation-1:2", generation_id: "generation-1", sequence: 2, type: "delta", text: "答" },
+  ];
+  const fake = fakeTransport(events);
+  const client = createGenerationClient(fake.transport);
+  const seen: unknown[] = [];
+  const next = await client.stream(
+    "generation-1",
+    { generationId: "generation-1", lastSequence: 0, lastEventId: null },
+    new AbortController().signal,
+    (event) => seen.push(event),
+  );
+  assert.equal(next.lastSequence, 2);
+  assert.equal(seen.length, 2);
+  assert.throws(() => advanceGenerationEventCursor(
+    { generationId: "generation-1", lastSequence: 0, lastEventId: null },
+    { event_id: "e1", generation_id: "generation-1", sequence: 1, type: "unknown" },
+  ), /Unknown generation event type/);
 });
