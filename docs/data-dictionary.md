@@ -126,6 +126,8 @@ item_type：key_point / concept / author_claim / argument / evidence / case / cr
 
 字段：id UUID PK；account_id TEXT NOT NULL；local_dataset_id UUID NOT NULL FK；binding_status TEXT NOT NULL（active / inactive / revoked）；bound_at TIMESTAMP NOT NULL；last_selected_at TIMESTAMP NULL。
 
+待确认：account_id 当前为 TEXT，而服务端 Account.id 为 UUID。必须明确本地字段存储服务端 Account UUID 的字符串形式，还是平台侧 opaque account subject；在语义确认前不得将其与 ExternalIdentity.provider_subject 或 Account.id 直接做数据库外键关联。
+
 约束：同一数据集最多一个 active account binding；同一账号可有多个历史绑定，但用户必须显式选择。切换账号不得自动选择其他账号的数据集。该表只表达当前设备上的显式关联，不授予跨账号云端恢复权。
 
 ### 3.3 ShelfEntry
