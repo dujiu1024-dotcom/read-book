@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:read-book:book-package:1.0.0:embeddings",
+  "title": "Read Book Embedding Manifest 1.0.0",
+  "type": "object",
+  "required": [
+    "file",
+    "format",
+    "embedding_model",
+    "embedding_model_version",
+    "embedding_dimension",
+    "normalization",
+    "distance_metric",
+    "preprocessing_version",
+    "chunk_id_mapping",
+    "sha256"
+  ],
+  "properties": {
+    "file": {
+      "type": "string",
+      "pattern": "^embeddings/(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+    },
+    "format": {
+      "type": "string",
+      "minLength": 1
+    },
+    "embedding_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "embedding_model_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "embedding_dimension": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "normalization": {
+      "type": "string",
+      "minLength": 1
+    },
+    "distance_metric": {
+      "type": "string",
+      "minLength": 1
+    },
+    "preprocessing_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "chunk_id_mapping": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    }
+  },
+  "additionalProperties": false
+}
