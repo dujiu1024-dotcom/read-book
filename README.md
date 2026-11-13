@@ -12,6 +12,7 @@
 - [技术架构与关键设计](docs/architecture.md)
 - [核心数据模型概览](docs/core-data-model.md)
 - [核心数据字典（字段与约束权威来源）](docs/data-dictionary.md)
+- [核心状态机（主线、轮次、生成与备份）](docs/state-machines.md)
 - [OpenAPI 3.1 接口契约（API 路径权威来源）](docs/api-contract.yaml)
 - [全书知识库与管理员加工工作台](docs/book-knowledge-base.md)
 - [阅读 Agent 交互与主线机制](docs/reading-agent.md)
