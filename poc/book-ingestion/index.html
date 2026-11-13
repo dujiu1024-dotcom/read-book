@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>知行 · 书籍导入 PoC</title></head>
+<body><main>
+<header><p>READ-BOOK / TECHNICAL POC C</p><h1>书籍导入与原文定位</h1><p>EPUB / PDF / TXT 解析、语义单元与引用定位验证。</p></header>
+<section><h2>固定测试样本</h2><div class="actions"><select id="fixture"><option value="epub-1">EPUB · 章节、脚注样本</option><option value="epub-2">EPUB · 多章节样本</option><option value="epub-3">EPUB · 图片引用样本</option><option value="pdf-1">PDF · 单栏文本样本</option><option value="pdf-2">PDF · 双栏文本样本</option><option value="pdf-3">PDF · 页眉页脚/多页样本</option><option value="txt-1">TXT · UTF-8 样本</option><option value="txt-2">TXT · 长段落样本</option><option value="txt-3">TXT · 编码回退样本</option></select><button id="import-fixture">导入固定样本</button></div>
+<label class="upload">或选择本地文件 <input id="file" type="file" accept=".epub,.pdf,.txt"></label>
+<p id="status" role="status">等待导入。</p><pre id="output"></pre></section>
+<section><h2>已导入文件（本地恢复）</h2><ul id="saved-books"></ul></section>
+<section><h2>原文引用回跳</h2><label>选择定位记录 <select id="citation"></select></label><button id="jump">定位到原文</button><pre id="source"></pre></section>
+</main><script type="module" src="/src/main.js"></script></body></html>
