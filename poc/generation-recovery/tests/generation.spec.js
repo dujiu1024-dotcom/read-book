@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createNetServer } from 'node:net';
@@ -258,4 +258,36 @@ test('创建任务请求失败后可在刷新后使用原幂等键重试', async
   await expect(page.locator('#messages').locator('li')).toHaveCount(2);
   await expect(page.locator('#messages')).toContainText('retry fixture: do not duplicate user message');
   await expect(page.locator('#messages')).toContainText('这是一条模拟生成结果。');
+});
+
+
+test('服务端持久化状态不包含用户消息明文', async () => {
+  const port = await freePort();
+  const stateDir = await mkdtemp(join(tmpdir(), 'read-book-private-payload-'));
+  const stateFile = join(stateDir, 'state.json');
+  const child = launchServer(port, stateFile);
+  const privateMessage = 'private-message-fixture-DO-NOT-PERSIST';
+  try {
+    await waitForHealth(port, child);
+    const base = `http://127.0.0.1:${port}`;
+    const created = await fetch(base + '/api/generations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'private-payload-key' },
+      body: JSON.stringify({ message: privateMessage })
+    });
+    expect(created.status).toBe(202);
+    const receipt = await created.json();
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const state = await (await fetch(base + '/api/generations/' + receipt.generation_id)).json();
+      if (state.status === 'completed') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const persisted = await readFile(stateFile, 'utf8');
+    expect(persisted).not.toContain(privateMessage);
+    expect(persisted).toContain(receipt.generation_id);
+    expect(persisted).toContain('requestHash');
+  } finally {
+    await stopServer(child);
+    await rm(stateDir, { recursive: true, force: true });
+  }
 });
