@@ -9,11 +9,77 @@ async function sha256Base64(bytes) {
 }
 
 export class MockBackupServer {
-  constructor() {
+  constructor({ now = () => Date.now() } = {}) {
+    this.now = now;
     this.sessions = new Map();
     this.backups = new Map();
     this.tombstones = new Set();
     this.idempotency = new Map();
+    this.authorizations = new Map();
+    this.downloadTickets = new Map();
+  }
+  issueAuthorization(datasetId, { scopes = ['upload', 'download'], ttlMs = 60_000 } = {}) {
+    if (typeof datasetId !== 'string' || !datasetId) throw new Error('数据集 ID 非法');
+    if (this.tombstones.has(datasetId)) throw new Error('数据集已清除');
+    if (!Array.isArray(scopes) || scopes.length === 0 || scopes.some((scope) => !['upload', 'download'].includes(scope))) {
+      throw new Error('授权范围非法');
+    }
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error('授权有效期非法');
+    const token = crypto.randomUUID();
+    const authorization = { token, datasetId, scopes: [...new Set(scopes)], expiresAt: this.now() + ttlMs };
+    this.authorizations.set(token, authorization);
+    return { token, expiresAt: authorization.expiresAt };
+  }
+  assertAuthorization(token, datasetId, scope) {
+    const authorization = this.authorizations.get(token);
+    if (!authorization || authorization.datasetId !== datasetId ||
+        authorization.expiresAt <= this.now() || !authorization.scopes.includes(scope) ||
+        this.tombstones.has(datasetId)) {
+      throw new Error('授权无效、过期、范围不足或数据集已清除');
+    }
+    return authorization;
+  }
+  revokeAuthorization(token) { return this.authorizations.delete(token); }
+  authorizedInit(token, manifest, idempotencyKey) {
+    this.assertAuthorization(token, manifest.datasetId, 'upload');
+    return this.init(manifest, idempotencyKey);
+  }
+  authorizedPutPart(token, backupId, chunk) {
+    const session = this.sessions.get(backupId);
+    if (!session) throw new Error('上传会话不存在');
+    this.assertAuthorization(token, session.manifest.datasetId, 'upload');
+    return this.putPart(backupId, chunk);
+  }
+  authorizedMissingParts(token, backupId) {
+    const session = this.sessions.get(backupId);
+    if (!session) throw new Error('上传会话不存在');
+    this.assertAuthorization(token, session.manifest.datasetId, 'upload');
+    return this.missingParts(backupId);
+  }
+  async authorizedComplete(token, backupId) {
+    const session = this.sessions.get(backupId);
+    if (!session) throw new Error('上传会话不存在');
+    this.assertAuthorization(token, session.manifest.datasetId, 'upload');
+    return this.complete(backupId);
+  }
+  issueDownloadTicket(token, backupId, ttlMs = 30_000) {
+    const backup = this.backups.get(backupId);
+    if (!backup) throw new Error('备份不存在');
+    this.assertAuthorization(token, backup.manifest.datasetId, 'download');
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error('下载票据有效期非法');
+    const ticket = crypto.randomUUID();
+    this.downloadTickets.set(ticket, {
+      ticket, backupId, datasetId: backup.manifest.datasetId,
+      expiresAt: this.now() + ttlMs
+    });
+    return { ticket, expiresAt: this.now() + ttlMs };
+  }
+  downloadByTicket(ticket) {
+    const record = this.downloadTickets.get(ticket);
+    if (!record || record.expiresAt <= this.now() || this.tombstones.has(record.datasetId)) {
+      throw new Error('下载票据无效、过期或已撤销');
+    }
+    return this.get(record.backupId);
   }
   init(manifest, idempotencyKey) {
     if (typeof idempotencyKey !== 'string' || !idempotencyKey) throw new Error('幂等键不能为空');
@@ -105,6 +171,12 @@ export class MockBackupServer {
     // ciphertext parts in memory after the dataset has been tombstoned.
     for (const [key, session] of this.idempotency) {
       if (session.manifest.datasetId === datasetId) this.idempotency.delete(key);
+    }
+    for (const [token, authorization] of this.authorizations) {
+      if (authorization.datasetId === datasetId) this.authorizations.delete(token);
+    }
+    for (const [ticket, record] of this.downloadTickets) {
+      if (record.datasetId === datasetId) this.downloadTickets.delete(ticket);
     }
   }
   isCleared(datasetId) { return this.tombstones.has(datasetId); }
