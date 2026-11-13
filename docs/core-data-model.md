@@ -66,8 +66,14 @@
 - 本地记录 last_backup_at、last_backup_id、last_backup_status、pending_change_marker；应用每次打开时检查是否存在待备份变更。
 - 只保存密文和最小必要元数据，不保存可读私人内容。
 ### BackupAuthorization
-- backup_id、authorization_method、created_at、expires_at、used_at。
-- 账号注销后仍可通过独立恢复凭证授权下载。
+- backup_id、authorization_method、created_at、expires_at、used_at、status、deleted_at。
+- 账号注销后仍可通过独立恢复凭证授权下载；数据集被清除后，所有相关授权必须失效化，不能再签发新授权。
+
+### DataSetLifecycle / DataSetTombstone
+- local_dataset_id、status（active/cleared/inactive）、cleared_at、clear_reason、audit_ref。
+- 服务端仅保留最小必要的生命周期状态和审计信息，用于阻断已清除数据集的访问；不保存可读私人内容。
+- 清除个人数据时，原始加密备份密文、解密密钥材料及其他原始数据不做物理删除或改写；用户关联索引和可用授权信息软删除/失效化。
+- `cleared` 状态不可由普通账号登录、恢复或数据修复流程自动逆转。
 
 ## 5. 备份与恢复 API 草案
 
@@ -81,6 +87,7 @@
 | POST | /recovery/authorize | 使用独立恢复凭证授权恢复 |
 | GET | /recovery/backups | 查询恢复凭证可访问的备份 |
 | POST | /account/deletion | 注销账号，不删除备份数据 |
+| POST | /data-set/{id}/clear | 清除个人数据：本地删除，服务端数据集标记清除并软删除关联索引/授权 |
 
 ## 6. 一致性与生命周期约束
 1. 书架权益绑定 BookRevision，而不是可变的 Book 当前版本。
@@ -90,9 +97,12 @@
 5. 临时展示、复习不改变 ReadingRoundState。
 6. Message、PresentedSource、Citation、Note、Memory 保留来源关系。
 7. 认知演变创建新记录并关联旧记录，不覆盖旧记录。
-8. 账号注销不得级联删除 LocalDataSet 或 BackupManifest。
-9. 切换账号不自动迁移、合并或同步；恢复必须经显式备份下载流程。
-10. 新 BookRevision 不继承旧版本 Thread、Citation 或访问权益。
+8. 账号注销不得级联删除 LocalDataSet 或 BackupManifest.
+9. 用户清除个人数据时，服务器保留 BackupManifest 对应的原始密文和密钥材料；仅软删除用户关联索引和可用授权，并将数据集标记为不可用。
+10. 已清除数据集不得通过常规业务流程重新关联、读取、下载或恢复。
+11. 切换账号不自动迁移、合并或同步；恢复必须经显式备份下载流程。同设备数据集必须按账号上下文隔离。
+12. 离线可查看已缓存内容；AI 对话、跨章节检索和未缓存内容获取需要联网，离线编辑先写入本地。
+13. 新 BookRevision 不继承旧版本 Thread、Citation 或访问权益。
 
 ## 7. 待验证
 - 小程序本地数据库容量、事务、后台任务和加密能力。
