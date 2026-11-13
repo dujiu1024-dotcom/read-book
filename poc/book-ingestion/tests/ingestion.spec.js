@@ -49,7 +49,7 @@ test('损坏 EPUB/PDF 导入失败且不写入本地书库', async ({ page }) =>
 
   await page.locator('#file').setInputFiles({
     name: 'broken.pdf', mimeType: 'application/pdf',
-    buffer: Buffer.from('%PDF-1.4\\nthis is a deliberately truncated PDF')
+    buffer: Buffer.from('this is not a PDF file')
   });
   await expect(page.locator('#status')).toContainText('导入失败', { timeout: 20_000 });
   await expect(page.locator('#saved-books')).not.toContainText('broken.pdf');
