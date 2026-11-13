@@ -39,7 +39,7 @@ npm run build
 - IndexedDB 和 SQLite 分别使用不同数据库，测试运行时一次只选择一个写入；两者不是同一数据集的双写主库。
 - OPFS 不可用时 SQLite 方案明确失败，不降级为内存数据库。
 - `persist()` 是浏览器申请，不代表永久存储；申请结果和配额仅作为观测数据。
-- 当前 SQLite 方案尚未实现 Web Locks 单写者协调，不能据此宣称多标签页安全。
+- 已增加 Web Locks 单写者协调器与 BroadcastChannel 状态广播：无法获得写锁的标签页进入只读模式，释放后允许锁交接；该协调器目前为独立 PoC 组件，尚未接入 IndexedDB/SQLite 的正式写入口。
 
 ## 测试结果状态
 
@@ -50,7 +50,7 @@ npm run build
 | SQLite OPFS 1k/10k/100k | 待实测 | 自动化先覆盖 1k；手工界面支持三种规模、5 轮 P50/P95 |
 | Chrome 与 Edge 实测 | 未执行 | Playwright Chromium 不等于两个正式浏览器版本验收 |
 | 复杂关系查询与唯一约束 | 部分实现 | SQLite 约束已定义，需补充负向用例 |
-| 多标签页单写者与锁交接 | 未实现 | 不可标记通过 |
+| 多标签页单写者与锁交接 | PoC 组件已实现 | 新增跨标签页锁竞争/只读降级/锁交接测试，等待 CI；尚未接入正式写入口 |
 | Worker 崩溃/页面关闭恢复 | 未执行 | 需故障注入 |
 | 配额不足与 persist 拒绝 | 未执行 | 需模拟与真实浏览器测试 |
 | 迁移与批量一致性快照 | 未实现 | 后续迭代 |
@@ -64,6 +64,6 @@ SQLite 官方 WASM npm 包说明：OPFS 后端只能在 Worker 中使用；示�
 
 1. 生成 lockfile 并在 Chromium/Chrome/Edge 实际环境执行 1k/10k/100k。
 2. 补充完整领域 Schema、关联查询、迁移、批量快照和多轮统计。
-3. 实现 Web Locks + BroadcastChannel 单写者策略及只读降级。
+3. 将 Web Locks + BroadcastChannel 单写者策略接入两种存储适配器的真实写入口，并补充故障释放测试。
 4. 增加崩溃、刷新、关闭、配额、persist 拒绝、多标签页和损坏恢复故障注入。
 5. 汇总实测数据后再形成存储选型结论；未完成前不放行正式数据库选型。
