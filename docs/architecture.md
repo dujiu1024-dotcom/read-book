@@ -228,3 +228,17 @@ book-package/
 ### 12.5 当前架构决策
 
 暂不决定原生小程序、跨端框架或 H5 容器。先验证平台无关的 API、身份、消息可靠性和阅读定位契约，再根据阅读器兼容性、交互体验、发布限制和维护成本选择入口。此修订不授权开始业务代码开发。
+
+
+### 12.6 微信小程序流式响应补充
+
+微信小程序 wx.request 提供 enableChunked 与 RequestTask.onChunkReceived，可接收服务端分块数据；onChunkReceived 返回 ArrayBuffer。它提供了实现 SSE 文本流的基础，但不是浏览器 EventSource 的直接等价物。
+
+若选择小程序：
+- 可优先验证 HTTP chunked + 自定义 SSE parser。
+- 客户端需做增量 UTF-8 解码和事件帧缓冲，不能假设一个网络 chunk 对应一条完整 SSE event。
+- 服务端与代理层需关闭不必要的响应缓冲，并设置合理心跳。
+- 断线后仍以 message_id 查询服务端最终状态为准。
+- WebSocket 和短轮询作为备选传输，不影响领域 API。
+
+该能力有平台 API 文档依据，但尚未在知行真实小程序环境验证。详见验证策略第 10 节。
