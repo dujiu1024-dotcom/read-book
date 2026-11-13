@@ -30,7 +30,7 @@ test('清除墓碑阻止旧备份访问', async ({ page }) => {
   await expect(page.locator('#status')).toContainText('备份完成');
   await page.getByRole('button', { name: '写入清除墓碑' }).click();
   const output = JSON.parse(await page.locator('#output').textContent());
-  expect(output.cleared).toBe(true);
+  console.log('HTTP clear result:', JSON.stringify(output));\n  expect(output.cleared, JSON.stringify(output)).toBe(true);
   expect(output.oldAccessRejected).toBe(true);
 });
 
