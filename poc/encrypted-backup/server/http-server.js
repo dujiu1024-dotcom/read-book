@@ -112,7 +112,7 @@ function createLock() {
   };
 }
 
-export async function createBackupHttpServer({ dataDir }) {
+export async function createBackupHttpServer({ dataDir, uploadSessionTtlMs = 30 * 60 * 1000 }) {
   if (!dataDir) throw new Error('必须提供持久化数据目录');
   const root = path.resolve(dataDir);
   const stateFile = path.join(root, 'state.json');
@@ -286,7 +286,7 @@ export async function createBackupHttpServer({ dataDir }) {
           parts: {},
           state: 'uploading',
           createdAt: Date.now(),
-          expiresAt: Date.now() + 30 * 60 * 1000,
+          expiresAt: Date.now() + uploadSessionTtlMs,
           idempotencyKey
         };
         state.sessions[manifest.backupId] = session;
