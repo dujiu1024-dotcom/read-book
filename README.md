@@ -21,6 +21,7 @@
 - [验证策略与验收清单](docs/validation-strategy.md)
 - [标准书籍包与云端验收协议](docs/book-package-ingestion-contract.md)
 - [ReadAny 逐文件适配清单](docs/readany-adaptation-matrix.md)
+- [ReadAny 自动化测试覆盖审查](docs/readany-test-coverage-audit.md)
 
 ## 当前阶段
 
