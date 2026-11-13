@@ -37,8 +37,8 @@
 - 决策建议：ReadAny 作为手机端工程与书籍对话能力的 Fork 起点；TextSage 仅拆解 PDF 处理流水线和局部算法，不整体作为后端底座。
 - 原因：ReadAny 具备 Expo 客户端、书籍聊天、原文定位、切片和混合检索，但数据层以本地 SQLite 为主；TextSage 具备阶段化 PDF 处理、章节页码对齐和恢复机制，但面向教材 PDF，依赖特定目录结构和 Qdrant 等组件。
 - 约束：尚未完成本地安装、构建、端到端运行及真实书籍检索评测。不得将源码抽查结论视为已验证可运行。
-- 本轮结果（2026-11-13）：已固定 ReadAny commit `fce44689e1377df1ae99a35e8e71d5e8b3a639d1`、TextSage commit `c2363f6f8df74c703536bf717d9c3178bf4260d7` 并完成关键源码复核；当前执行容器访问 github.com DNS 失败，无法 clone、安装或运行，详见 [P0 验证报告](p0-validation-report.md)。
-- 下一步：在可访问 GitHub 的开发环境完成依赖安装、构建和真实书籍端到端验证，再确定 Fork 改造范围。
+- 本轮结果（2026-11-13）：ReadAny 固定 commit `fce44689e1377df1ae99a35e8e71d5e8b3a639d1` 的 GitHub CI 已通过，生成 Android Debug APK；仅证明上游 Expo 工程可构建，不证明真机运行或知行迁移成功。TextSage 固定 commit `c2363f6f8df74c703536bf717d9c3178bf4260d7` 仍未完成真实 PDF 处理。
+- 路线调整：ReadAny 不再作为小程序客户端直接 Fork 起点，当前仅作为阅读引擎、数据结构和宿主无关代码参考；详见 D-019、D-020 与 [ReadAny 适配清单](readany-adaptation-matrix.md)。
 
 ## 待验证 / 待决策
 
@@ -72,7 +72,7 @@
 - 决策：ReadAny 固定上游 commit 的全量移动端 Lint 作为非阻断诊断项；单元测试、Reader 构建、Expo 配置检查和 Android APK 构建仍作为主要验证门槛。
 - 原因：2026-11-13 第 3 次 CI 运行中，Core tests 与移动端 tests 通过，但移动端 Biome 检查报告 191 errors、78 warnings，导致 Reader 构建和 Expo 配置检查被跳过。该结果反映固定上游代码的既有质量基线，不应通过批量修改上游文件来掩盖。
 - 约束：Lint 结果仍需保留在日志中；后续如对 ReadAny Fork 自有改动，应建立独立的变更范围 Lint / 类型检查门槛。非阻断不等于忽略代码质量。
-- CI 修订 commit：b82608ef75458f0cdd797a4dcbb7126fe81a62e8；第 4 次运行进行中，结果待补充。
+- CI 修订 commit：b82608ef75458f0cdd797a4dcbb7126fe81a62e8；第 4 次运行 Run `43359000578` 的 Quality Job 与 Android Build Job 均成功，详见 [P0 验证报告](p0-validation-report.md)。
 
 
 ### D-018：ReadAny 移动端 Fork 的适配边界（阶段性，数据存储部分已被 D-030 替代）
@@ -81,7 +81,7 @@
 - 必须改造：一书多 Thread 改为同一书籍版本唯一 Thread；客户端模型直连改为服务端模型调用；WebDAV/S3/LAN 整库同步改为 API 级服务调用。关于本地 SQLite 的角色，原建议已被 D-030 替代，不再要求改为缓存。
 - 依据：固定 ReadAny commit `fce44689e1377df1ae99a35e8e71d5e8b3a639d1` 的 `BookChatScreen`、chat Store、thread/message 查询、Agent、上下文管线、记忆压缩、RAG 检索和移动端同步适配器源码。
 - 详细文件级映射见 [ReadAny 逐文件适配清单](readany-adaptation-matrix.md)。
-- 约束：本决策不授权直接开始大规模业务代码改造；先完成 M0 真机验证，再建立 API/Repository 边界，逐步实施。
+- 约束：本决策不授权直接开始知行业务代码改造。早期“先完成 M0 真机验证”的要求已被 D-019、D-020 的平台路线调整替代；当前先完成小程序适配验证和平台无关 API 契约评审。
 
 
 ### D-019：用户端入口暂不锁定，优先验证微信小程序
