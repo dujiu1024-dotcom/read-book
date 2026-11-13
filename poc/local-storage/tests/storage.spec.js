@@ -57,7 +57,7 @@ test('IndexedDB v1 升级到 v3 后保留原数据并补齐六实体结构', asy
     const { runMigrationProbe } = await import('/src/indexeddb.js');
     return runMigrationProbe();
   });
-  expect(result.migration).toBe('v1-to-v3');
+  expect(result.migration).toBe('v1/v3-to-v4');
   expect(result.legacyThreadPreserved).toBe(true);
   expect(result.legacyMessagePreserved).toBe(true);
   expect(result.expectedStores).toBe(true);
