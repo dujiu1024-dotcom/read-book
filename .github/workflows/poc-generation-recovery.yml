@@ -1,0 +1,30 @@
+name: PoC D - Generation Recovery
+
+on:
+  pull_request:
+    paths:
+      - "poc/generation-recovery/**"
+      - ".github/workflows/poc-generation-recovery.yml"
+  push:
+    branches:
+      - "poc/issue-4-generation-recovery"
+    paths:
+      - "poc/generation-recovery/**"
+      - ".github/workflows/poc-generation-recovery.yml"
+
+jobs:
+  browser-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: poc/generation-recovery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm test
