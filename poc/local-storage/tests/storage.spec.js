@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, chromium } from '@playwright/test';
 
 test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ page }) => {
   await page.goto('/');
@@ -31,6 +31,63 @@ test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ p
   expect(afterClose.count).toBe(1000);
   expect(afterClose.integrity).toBe(true);
   await reopened.close();
+});
+
+test('关闭浏览器进程后重新打开，恢复 IndexedDB 与 SQLite OPFS 数据', async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', '浏览器进程重启使用 Playwright Chromium 持久化配置目录');
+  const userDataDir = testInfo.outputPath('browser-restart-profile');
+  const firstContext = await chromium.launchPersistentContext(userDataDir, { headless: true });
+  let sqliteSupported = false;
+  let sqliteError;
+  const datasetIds = {
+    indexeddb: 'browser-restart-indexeddb',
+    sqlite: 'browser-restart-sqlite'
+  };
+  try {
+    const firstPage = await firstContext.newPage();
+    await firstPage.goto('http://127.0.0.1:4173');
+    await firstPage.evaluate(async (datasetId) => {
+      const { runIndexedDb } = await import('/src/indexeddb.js');
+      await runIndexedDb(10, datasetId);
+    }, datasetIds.indexeddb);
+    const sqlite = await firstPage.evaluate(async (datasetId) => {
+      const { runSqlite } = await import('/src/sqlite.js');
+      try {
+        await runSqlite(10, datasetId);
+        return { supported: true };
+      } catch (error) { return { supported: false, error: error.message }; }
+    }, datasetIds.sqlite);
+    sqliteSupported = sqlite.supported;
+    sqliteError = sqlite.error;
+  } finally {
+    await firstContext.close();
+  }
+
+  const secondContext = await chromium.launchPersistentContext(userDataDir, { headless: true });
+  try {
+    const secondPage = await secondContext.newPage();
+    await secondPage.goto('http://127.0.0.1:4173');
+    const recovered = await secondPage.evaluate(async (ids) => {
+      const { checkIndexedDb } = await import('/src/indexeddb.js');
+      const indexeddb = await checkIndexedDb(ids.indexeddb);
+      let sqlite;
+      if (ids.sqliteSupported) {
+        const { checkSqlite } = await import('/src/sqlite.js');
+        sqlite = await checkSqlite(ids.sqlite);
+      }
+      return { indexeddb, sqlite };
+    }, { ...datasetIds, sqliteSupported });
+    expect(recovered.indexeddb.count).toBe(10);
+    expect(recovered.indexeddb.integrity).toBe(true);
+    if (sqliteSupported) {
+      expect(recovered.sqlite.count).toBe(10);
+      expect(recovered.sqlite.integrity).toBe(true);
+    } else {
+      console.log('SQLite OPFS browser-restart probe skipped:', sqliteError);
+    }
+  } finally {
+    await secondContext.close();
+  }
 });
 
 test('persist() 被拒绝时仍报告状态，不影响 IndexedDB 事务正确性', async ({ page }) => {
