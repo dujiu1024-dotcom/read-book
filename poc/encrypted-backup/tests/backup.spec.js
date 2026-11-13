@@ -273,3 +273,28 @@ test('上传会话固定 Manifest 快照，不受调用方后续对象修改影�
   });
   expect(result).toBe('manifest-snapshot');
 });
+
+
+test('清除墓碑同时清理备份、上传分块与幂等引用', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    const backup = await createEncryptedBackup({
+      datasetId: 'tombstone-memory-purge', sequence: 1,
+      payload: { text: 'sensitive ciphertext fixture' }
+    });
+    const server = new MockBackupServer();
+    server.init(backup.manifest, 'tombstone-purge-key');
+    server.putPart(backup.manifest.backupId, backup.chunks[0]);
+    await server.complete(backup.manifest.backupId);
+    server.clearDataset('tombstone-memory-purge');
+    return {
+      tombstone: server.isCleared('tombstone-memory-purge'),
+      backups: server.backups.size,
+      sessions: server.sessions.size,
+      idempotency: server.idempotency.size
+    };
+  });
+  expect(result).toEqual({ tombstone: true, backups: 0, sessions: 0, idempotency: 0 });
+});
