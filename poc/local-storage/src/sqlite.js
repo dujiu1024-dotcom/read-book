@@ -41,3 +41,11 @@ export async function checkSqlite(datasetId) {
   await request('init');
   return request('check', { datasetId });
 }
+
+export function terminateSqliteWorkerForTest() {
+  if (!worker) return;
+  worker.terminate();
+  worker = undefined;
+  for (const item of pending.values()) item.reject(new Error('SQLite Worker 已由故障注入终止'));
+  pending.clear();
+}
