@@ -276,6 +276,34 @@ test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async 
   expect(result.relationQueryMs.p95).toBeGreaterThan(0);
 });
 
+test('SQLite OPFS 多标签页串行打开同一数据库并受 Web Locks 写入协调', async ({ page }, testInfo) => {
+  test.skip(!['chromium', 'chrome-stable', 'edge-stable'].includes(testInfo.project.name),
+    'SQLite OPFS 多标签页主测在 Chromium 系列');
+  await page.goto('/');
+  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
+  const capability = await page.evaluate(async () => {
+    const { runSqlite } = await import('/src/sqlite.js');
+    try { await runSqlite(1, 'sqlite-multitab-capability'); return { supported: true }; }
+    catch (error) { return { supported: false, error: error.message }; }
+  });
+  test.skip(!capability.supported, 'SQLite OPFS VFS 不可用：' + capability.error);
+  const second = await page.context().newPage();
+  await second.goto('/');
+  const firstResult = await page.evaluate(async () => {
+    const { runSqlite } = await import('/src/sqlite.js');
+    return runSqlite(10, 'sqlite-multitab-shared-dataset');
+  });
+  const secondResult = await second.evaluate(async () => {
+    const { runSqlite } = await import('/src/sqlite.js');
+    return runSqlite(10, 'sqlite-multitab-shared-dataset');
+  });
+  expect(firstResult.count).toBe(10);
+  expect(secondResult.count).toBe(10);
+  expect(secondResult.integrity).toBe(true);
+  await second.close();
+});
+
 test('多标签页通过 Web Locks 单写者与只读降级，并支持锁交接', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'Web Locks 跨标签页主测在 Chromium');
   await page.goto('/');
