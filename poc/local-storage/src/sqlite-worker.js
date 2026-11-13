@@ -5,8 +5,17 @@ let sqlite3;
 const RUNS = 5;
 
 async function initialize() {
+  if (db) return;
   sqlite3 = await sqlite3InitModule();
-  if (!('opfs' in sqlite3)) throw new Error('当前浏览器/上下文不支持 SQLite OPFS VFS；为避免双主库，不降级到内存库');
+  if (!sqlite3.oo1?.OpfsDb) {
+    const registered = sqlite3.capi?.sqlite3_vfs_find?.('opfs');
+    throw new Error(
+      '当前 Worker 未注册 SQLite OPFS VFS；为避免双主库，不降级到内存库。' +
+      ' crossOriginIsolated=' + String(self.crossOriginIsolated) +
+      ', OPFS API=' + String(typeof navigator.storage?.getDirectory === 'function') +
+      ', VFS=' + String(Boolean(registered))
+    );
+  }
   db = new sqlite3.oo1.OpfsDb('/read-book-poc-a-v2.sqlite3');
   db.exec({ sql: `
     PRAGMA journal_mode = WAL;
