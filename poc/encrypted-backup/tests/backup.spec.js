@@ -408,3 +408,100 @@ test('下载票据过期与清除墓碑均撤销旧下载能力', async ({ page 
   expect(result.remainingTickets).toBe(0);
   expect(result.remainingAuthorizations).toBe(0);
 });
+
+test('多级增量可从全量根恢复，完整检查点可截断旧恢复链', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createDatasetKeyMaterial, createEncryptedBackup, restoreBackupChain } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    const datasetId = 'checkpoint-chain';
+    const keyMaterial = createDatasetKeyMaterial(datasetId);
+    const server = new MockBackupServer();
+    async function commit(backup, key) {
+      server.init(backup.manifest, key);
+      for (const chunk of backup.chunks) server.putPart(backup.manifest.backupId, chunk);
+      await server.complete(backup.manifest.backupId);
+    }
+    const full = await createEncryptedBackup({
+      datasetId, sequence: 1, payload: { records: [{ id: 'a', value: 'A' }] }, keyMaterial
+    });
+    await commit(full, 'full');
+    const incremental2 = await createEncryptedBackup({
+      datasetId, sequence: 2, parentBackupId: full.manifest.backupId,
+      payload: { changes: [{ op: 'upsert', record: { id: 'b', value: 'B' } }] }, keyMaterial
+    });
+    await commit(incremental2, 'incremental-2');
+    const incremental3 = await createEncryptedBackup({
+      datasetId, sequence: 3, parentBackupId: incremental2.manifest.backupId,
+      payload: { changes: [{ op: 'delete', id: 'a' }, { op: 'upsert', record: { id: 'c', value: 'C' } }] }, keyMaterial
+    });
+    await commit(incremental3, 'incremental-3');
+    const restoreBeforeCheckpoint = await restoreBackupChain({
+      backupId: incremental3.manifest.backupId,
+      fetchBackup: async (id) => server.get(id),
+      recoveryKey: keyMaterial.recoveryKey
+    });
+    const checkpoint = await createEncryptedBackup({
+      datasetId, sequence: 4, backupType: 'full', payload: restoreBeforeCheckpoint.snapshot, keyMaterial
+    });
+    await commit(checkpoint, 'checkpoint');
+    const incremental5 = await createEncryptedBackup({
+      datasetId, sequence: 5, parentBackupId: checkpoint.manifest.backupId,
+      payload: { changes: [{ op: 'upsert', record: { id: 'd', value: 'D' } }] }, keyMaterial
+    });
+    await commit(incremental5, 'incremental-5');
+    const restoreAfterCheckpoint = await restoreBackupChain({
+      backupId: incremental5.manifest.backupId,
+      fetchBackup: async (id) => server.get(id),
+      recoveryKey: keyMaterial.recoveryKey
+    });
+    return {
+      before: restoreBeforeCheckpoint.snapshot.records.map((record) => record.id),
+      beforeDepth: restoreBeforeCheckpoint.depth,
+      after: restoreAfterCheckpoint.snapshot.records.map((record) => record.id),
+      afterDepth: restoreAfterCheckpoint.depth,
+      afterBackupIds: restoreAfterCheckpoint.backupIds
+    };
+  });
+  expect(result.before).toEqual(['b', 'c']);
+  expect(result.beforeDepth).toBe(3);
+  expect(result.after).toEqual(['b', 'c', 'd']);
+  expect(result.afterDepth).toBe(2);
+  expect(result.afterBackupIds).toHaveLength(2);
+});
+
+test('增量恢复拒绝超深父链且不修改调用方现有数据', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createDatasetKeyMaterial, createEncryptedBackup, restoreBackupChain } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    const datasetId = 'restore-depth-limit';
+    const keyMaterial = createDatasetKeyMaterial(datasetId);
+    const server = new MockBackupServer();
+    const full = await createEncryptedBackup({ datasetId, sequence: 1, payload: { records: [] }, keyMaterial });
+    server.init(full.manifest, 'full');
+    for (const chunk of full.chunks) server.putPart(full.manifest.backupId, chunk);
+    await server.complete(full.manifest.backupId);
+    const incremental = await createEncryptedBackup({
+      datasetId, sequence: 2, parentBackupId: full.manifest.backupId,
+      payload: { changes: [{ op: 'upsert', record: { id: 'x' } }] }, keyMaterial
+    });
+    server.init(incremental.manifest, 'incremental');
+    for (const chunk of incremental.chunks) server.putPart(incremental.manifest.backupId, chunk);
+    await server.complete(incremental.manifest.backupId);
+    const localData = { records: [{ id: 'local', value: 'keep' }] };
+    let rejected = false;
+    try {
+      await restoreBackupChain({
+        backupId: incremental.manifest.backupId,
+        fetchBackup: async (id) => server.get(id),
+        recoveryKey: keyMaterial.recoveryKey,
+        maxDepth: 1
+      });
+    } catch { rejected = true; }
+    return { rejected, localData };
+  });
+  expect(result.rejected).toBe(true);
+  expect(result.localData).toEqual({ records: [{ id: 'local', value: 'keep' }] });
+});
+
