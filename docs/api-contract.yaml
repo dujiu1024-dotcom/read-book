@@ -1,0 +1,785 @@
+openapi: 3.1.0
+info:
+  title: 知行核心 API
+  version: 0.1.0-draft
+  description: >
+    知行第一阶段 PC Web 的公共书籍、权益、生成任务与加密备份 API 草案。
+    用户私人阅读历史以本地数据库为主存储；服务端生成任务仅短暂处理，不作为私人历史主库。
+    本契约为设计基线，须经安全评审与 PoC 验证后冻结。
+servers:
+  - url: https://api.example.invalid
+    description: 占位地址；生产域名尚未确定
+tags:
+  - name: PublicBooks
+  - name: Entitlements
+  - name: Generations
+  - name: Backups
+  - name: Recovery
+  - name: Account
+security:
+  - bearerAuth: []
+paths:
+  /v1/books:
+    get:
+      tags: [PublicBooks]
+      summary: 查询已发布书目
+      operationId: listBooks
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 200 }
+        - name: category_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 书目列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/BookSummary' }
+                  next_cursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/books/{book_id}/revisions:
+    get:
+      tags: [PublicBooks]
+      summary: 查询书目已发布版本
+      operationId: listBookRevisions
+      parameters:
+        - $ref: '#/components/parameters/BookId'
+      responses:
+        '200':
+          description: 版本列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/BookRevisionSummary' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/book-revisions/{revision_id}:
+    get:
+      tags: [PublicBooks]
+      summary: 获取书籍版本详情
+      operationId: getBookRevision
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+      responses:
+        '200':
+          description: 版本详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookRevision' }
+        '404': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/book-revisions/{revision_id}/structure:
+    get:
+      tags: [PublicBooks]
+      summary: 获取版本目录与主线结构
+      operationId: getBookStructure
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+      responses:
+        '200':
+          description: 结构树
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [book_revision_id, nodes]
+                properties:
+                  book_revision_id: { type: string, format: uuid }
+                  nodes:
+                    type: array
+                    items: { $ref: '#/components/schemas/StructureNode' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/book-revisions/{revision_id}/nodes/{node_id}/content:
+    get:
+      tags: [PublicBooks]
+      summary: 获取论述单元原文及定位
+      operationId: getStructureNodeContent
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+        - name: node_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 原文内容
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeContent' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '404': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/book-revisions/{revision_id}/knowledge/search:
+    post:
+      tags: [PublicBooks]
+      summary: 在公共书籍知识库中检索
+      operationId: searchBookKnowledge
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/KnowledgeSearchRequest' }
+      responses:
+        '200':
+          description: 检索结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KnowledgeSearchResponse' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/entitlements:
+    post:
+      tags: [Entitlements]
+      summary: 为指定书籍版本领取或购买访问权益
+      operationId: createEntitlement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [book_revision_id, acquisition_method]
+              properties:
+                book_revision_id: { type: string, format: uuid }
+                acquisition_method:
+                  type: string
+                  enum: [purchase, free_claim, admin_grant]
+                transaction_reference: { type: [string, 'null'], maxLength: 200 }
+      responses:
+        '201':
+          description: 权益凭证
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EntitlementProof' }
+        '409': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/entitlements/verify:
+    post:
+      tags: [Entitlements]
+      summary: 在线验证版本访问权益
+      operationId: verifyEntitlement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [proof]
+              properties:
+                proof: { $ref: '#/components/schemas/EntitlementProof' }
+      responses:
+        '200':
+          description: 校验结果
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [valid, book_revision_id, permanent]
+                properties:
+                  valid: { type: boolean }
+                  book_revision_id: { type: string, format: uuid }
+                  permanent: { type: boolean }
+                  reason: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/generations:
+    post:
+      tags: [Generations]
+      summary: 创建一次对话生成任务
+      operationId: createGeneration
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GenerationRequest' }
+      responses:
+        '202':
+          description: 任务已接受
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenerationAccepted' }
+        '409': { $ref: '#/components/responses/ApiError' }
+        '422': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/generations/{generation_id}:
+    get:
+      tags: [Generations]
+      summary: 查询生成任务状态及最终结果
+      operationId: getGeneration
+      parameters:
+        - $ref: '#/components/parameters/GenerationId'
+      responses:
+        '200':
+          description: 任务状态
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenerationStatus' }
+        '404': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/generations/{generation_id}/events:
+    get:
+      tags: [Generations]
+      summary: 获取生成事件流
+      operationId: streamGenerationEvents
+      parameters:
+        - $ref: '#/components/parameters/GenerationId'
+        - name: after
+          in: query
+          description: 最后已处理的事件序号；事件流不作为最终结果权威来源
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Server-sent events
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/generations/{generation_id}/cancel:
+    post:
+      tags: [Generations]
+      summary: 请求取消生成
+      operationId: cancelGeneration
+      parameters:
+        - $ref: '#/components/parameters/GenerationId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: 取消请求已接受；最终状态以任务查询为准
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenerationAccepted' }
+        '404': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/backups/init:
+    post:
+      tags: [Backups]
+      summary: 创建加密备份上传会话
+      operationId: initBackup
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupInitRequest' }
+      responses:
+        '201':
+          description: 上传会话
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupUploadSession' }
+        '409': { $ref: '#/components/responses/ApiError' }
+        '410': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/backups/{backup_id}/parts/{part_no}:
+    put:
+      tags: [Backups]
+      summary: 上传单个加密分块
+      operationId: uploadBackupPart
+      parameters:
+        - $ref: '#/components/parameters/BackupId'
+        - name: part_no
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - name: X-Part-SHA256
+          in: header
+          required: true
+          schema: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '204': { description: 分块已保存或幂等确认 }
+        '409': { $ref: '#/components/responses/ApiError' }
+        '410': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/backups/{backup_id}/complete:
+    post:
+      tags: [Backups]
+      summary: 完成备份上传并提交密文校验
+      operationId: completeBackup
+      parameters:
+        - $ref: '#/components/parameters/BackupId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [part_count, ciphertext_hash]
+              properties:
+                part_count: { type: integer, minimum: 1 }
+                ciphertext_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+      responses:
+        '200':
+          description: 备份已提交
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupRecord' }
+        '409': { $ref: '#/components/responses/ApiError' }
+        '410': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/backups:
+    get:
+      tags: [Backups]
+      summary: 查询当前账号可访问的备份清单
+      operationId: listBackups
+      parameters:
+        - name: dataset_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 备份清单
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/BackupRecord' }
+                  next_cursor: { type: [string, 'null'] }
+        '410': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/backups/{backup_id}/download:
+    get:
+      tags: [Backups]
+      summary: 下载加密备份密文
+      operationId: downloadBackup
+      parameters:
+        - $ref: '#/components/parameters/BackupId'
+      responses:
+        '200':
+          description: 密文流或短时下载地址封装
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            application/json:
+              schema:
+                type: object
+                required: [download_url, expires_at]
+                properties:
+                  download_url: { type: string, format: uri }
+                  expires_at: { type: string, format: date-time }
+        '410': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/recovery/challenges:
+    post:
+      tags: [Recovery]
+      summary: 为独立恢复凭证创建挑战
+      operationId: createRecoveryChallenge
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recovery_key_id]
+              properties:
+                recovery_key_id: { type: string, minLength: 16, maxLength: 128 }
+      responses:
+        '200':
+          description: 一次性挑战
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [challenge_id, challenge, expires_at]
+                properties:
+                  challenge_id: { type: string, format: uuid }
+                  challenge: { type: string, minLength: 32 }
+                  expires_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/recovery/authorize:
+    post:
+      tags: [Recovery]
+      summary: 验证恢复凭证并签发短时恢复授权
+      operationId: authorizeRecovery
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id, proof]
+              properties:
+                challenge_id: { type: string, format: uuid }
+                proof:
+                  type: string
+                  description: 客户端基于恢复凭证生成的挑战响应；具体算法由安全设计冻结
+      responses:
+        '200':
+          description: 恢复授权
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorization_id, dataset_id, expires_at]
+                properties:
+                  authorization_id: { type: string, format: uuid }
+                  dataset_id: { type: string, format: uuid }
+                  expires_at: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/ApiError' }
+        '410': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/recovery/backups:
+    get:
+      tags: [Recovery]
+      summary: 查询恢复授权对应的备份
+      operationId: listRecoveryBackups
+      security:
+        - recoveryAuthorization: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 可恢复备份
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/BackupRecord' }
+                  next_cursor: { type: [string, 'null'] }
+        '410': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/data-sets/{dataset_id}/clear:
+    post:
+      tags: [Account]
+      summary: 写入不可逆的数据集清除墓碑
+      operationId: clearDataSet
+      parameters:
+        - name: dataset_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation]
+              properties:
+                confirmation: { type: string, const: CLEAR_DATASET }
+      responses:
+        '200':
+          description: 墓碑已写入；原始密文与密钥材料保持不动
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dataset_id, status, cleared_at]
+                properties:
+                  dataset_id: { type: string, format: uuid }
+                  status: { type: string, const: cleared }
+                  cleared_at: { type: string, format: date-time }
+        '409': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /v1/account/deletion:
+    post:
+      tags: [Account]
+      summary: 注销当前账号身份
+      operationId: deleteAccount
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation]
+              properties:
+                confirmation: { type: string, const: DELETE_ACCOUNT }
+      responses:
+        '202':
+          description: 注销已受理；不删除本地数据或加密备份
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, request_id]
+                properties:
+                  status: { type: string, enum: [accepted, completed] }
+                  request_id: { type: string, format: uuid }
+        default: { $ref: '#/components/responses/ApiError' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    recoveryAuthorization:
+      type: apiKey
+      in: header
+      name: X-Recovery-Authorization
+  parameters:
+    BookId:
+      name: book_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RevisionId:
+      name: revision_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    GenerationId:
+      name: generation_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 16, maxLength: 128 }
+    BackupId:
+      name: backup_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: [string, 'null'] }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 16, maxLength: 128 }
+  schemas:
+    BookSummary:
+      type: object
+      required: [id, title, author, status]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        author: { type: string }
+        description: { type: [string, 'null'] }
+        cover_url: { type: [string, 'null'], format: uri }
+        status: { type: string, const: published }
+    BookRevisionSummary:
+      type: object
+      required: [id, book_id, language, status]
+      properties:
+        id: { type: string, format: uuid }
+        book_id: { type: string, format: uuid }
+        edition: { type: [string, 'null'] }
+        translator: { type: [string, 'null'] }
+        publisher: { type: [string, 'null'] }
+        language: { type: string }
+        status: { type: string, const: published }
+    BookRevision:
+      allOf:
+        - $ref: '#/components/schemas/BookRevisionSummary'
+        - type: object
+          required: [source_hash, processing_version, published_at]
+          properties:
+            source_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+            processing_version: { type: string }
+            published_at: { type: string, format: date-time }
+    StructureNode:
+      type: object
+      required: [id, book_revision_id, node_type, title, order_index, source_locator]
+      properties:
+        id: { type: string, format: uuid }
+        book_revision_id: { type: string, format: uuid }
+        parent_id: { type: [string, 'null'], format: uuid }
+        node_type:
+          type: string
+          enum: [part, chapter, section, subsection, argument_unit]
+        title: { type: string }
+        order_index: { type: integer, minimum: 0 }
+        source_locator: { type: object, additionalProperties: true }
+    NodeContent:
+      type: object
+      required: [book_revision_id, structure_node_id, content, source_locator, content_hash]
+      properties:
+        book_revision_id: { type: string, format: uuid }
+        structure_node_id: { type: string, format: uuid }
+        content: { type: string }
+        source_locator: { type: object, additionalProperties: true }
+        content_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+    KnowledgeSearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query: { type: string, minLength: 1, maxLength: 4000 }
+        top_k: { type: integer, minimum: 1, maximum: 30, default: 8 }
+        structure_node_ids:
+          type: array
+          items: { type: string, format: uuid }
+          maxItems: 100
+    KnowledgeSearchResponse:
+      type: object
+      required: [book_revision_id, results]
+      properties:
+        book_revision_id: { type: string, format: uuid }
+        results:
+          type: array
+          items:
+            type: object
+            required: [chunk_id, structure_node_id, excerpt, source_locator, score]
+            properties:
+              chunk_id: { type: string, format: uuid }
+              structure_node_id: { type: string, format: uuid }
+              excerpt: { type: string }
+              source_locator: { type: object, additionalProperties: true }
+              score: { type: number }
+    EntitlementProof:
+      type: object
+      required: [entitlement_id, account_id, book_revision_id, issued_at, permanent, signature_version, signature]
+      properties:
+        entitlement_id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        book_revision_id: { type: string, format: uuid }
+        issued_at: { type: string, format: date-time }
+        permanent: { type: boolean, const: true }
+        signature_version: { type: integer, minimum: 1 }
+        signature: { type: string }
+    GenerationRequest:
+      type: object
+      required: [client_generation_id, thread_id, book_revision_id, user_message, context]
+      properties:
+        client_generation_id: { type: string, minLength: 16, maxLength: 128 }
+        thread_id: { type: string, format: uuid, description: 客户端本地 Thread ID，仅用于关联，不代表服务端保存 Thread }
+        book_revision_id: { type: string, format: uuid }
+        user_message:
+          type: object
+          required: [local_message_id, content]
+          properties:
+            local_message_id: { type: string, format: uuid }
+            content: { type: string, minLength: 1, maxLength: 50000 }
+        context:
+          type: object
+          required: [current_source, recent_messages]
+          properties:
+            current_source:
+              type: object
+              required: [structure_node_id, excerpt]
+              properties:
+                structure_node_id: { type: string, format: uuid }
+                excerpt: { type: string, maxLength: 30000 }
+            recent_messages:
+              type: array
+              maxItems: 30
+              items:
+                type: object
+                required: [role, content]
+                properties:
+                  role: { type: string, enum: [user, assistant] }
+                  content: { type: string, maxLength: 50000 }
+            relevant_memory:
+              type: array
+              maxItems: 20
+              items: { type: object, additionalProperties: true }
+            response_preferences:
+              type: object
+              additionalProperties: false
+              properties:
+                language: { type: string, default: zh-CN }
+    GenerationAccepted:
+      type: object
+      required: [generation_id, status, expires_at]
+      properties:
+        generation_id: { type: string }
+        status: { type: string, enum: [queued, running, cancel_requested] }
+        expires_at: { type: string, format: date-time }
+    GenerationStatus:
+      type: object
+      required: [generation_id, status, expires_at]
+      properties:
+        generation_id: { type: string }
+        status: { type: string, enum: [queued, running, completed, failed, cancelled, expired] }
+        expires_at: { type: string, format: date-time }
+        result:
+          type: [object, 'null']
+          properties:
+            content: { type: string }
+            content_hash: { type: string }
+            usage:
+              type: [object, 'null']
+              additionalProperties: true
+        error_code: { type: [string, 'null'] }
+    BackupInitRequest:
+      type: object
+      required: [dataset_id, backup_id, backup_sequence, backup_type, schema_version, cipher_suite, key_version, ciphertext_size, ciphertext_hash, part_count]
+      properties:
+        dataset_id: { type: string, format: uuid }
+        backup_id: { type: string, format: uuid }
+        backup_sequence: { type: integer, minimum: 1 }
+        parent_backup_id: { type: [string, 'null'], format: uuid }
+        backup_type: { type: string, enum: [full, incremental] }
+        schema_version: { type: integer, minimum: 1 }
+        cipher_suite: { type: string, const: AES-256-GCM }
+        key_version: { type: integer, minimum: 1 }
+        ciphertext_size: { type: integer, minimum: 1 }
+        ciphertext_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+        part_count: { type: integer, minimum: 1, maximum: 10000 }
+    BackupUploadSession:
+      type: object
+      required: [backup_id, upload_expires_at, part_size_limit, received_parts]
+      properties:
+        backup_id: { type: string, format: uuid }
+        upload_expires_at: { type: string, format: date-time }
+        part_size_limit: { type: integer, minimum: 1 }
+        received_parts:
+          type: array
+          items: { type: integer, minimum: 0 }
+    BackupRecord:
+      type: object
+      required: [backup_id, dataset_id, backup_sequence, backup_type, schema_version, ciphertext_hash, ciphertext_size, created_at, status]
+      properties:
+        backup_id: { type: string, format: uuid }
+        dataset_id: { type: string, format: uuid }
+        backup_sequence: { type: integer }
+        parent_backup_id: { type: [string, 'null'], format: uuid }
+        backup_type: { type: string, enum: [full, incremental] }
+        schema_version: { type: integer }
+        ciphertext_hash: { type: string }
+        ciphertext_size: { type: integer }
+        created_at: { type: string, format: date-time }
+        status: { type: string, const: committed }
+    ApiError:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            retryable: { type: boolean }
+            details: { type: [object, 'null'], additionalProperties: true }
+        request_id: { type: string, format: uuid }
