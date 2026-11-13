@@ -29,6 +29,7 @@ test('清除墓碑阻止旧备份访问', async ({ page }) => {
   await page.getByRole('button', { name: '加密并上传' }).click();
   await expect(page.locator('#status')).toContainText('备份完成');
   await page.getByRole('button', { name: '写入清除墓碑' }).click();
+  await expect(page.locator('#status')).toContainText('清除墓碑已生效');
   const output = JSON.parse(await page.locator('#output').textContent());
   console.log('HTTP clear result:', JSON.stringify(output));
   expect(output.cleared, JSON.stringify(output)).toBe(true);
