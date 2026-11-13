@@ -1,0 +1,126 @@
+name: ReadAny upstream validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/readany-upstream-validation.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/readany-upstream-validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readany-upstream-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  READANY_REPOSITORY: codedogQBY/ReadAny
+  READANY_REF: fce44689e1377df1ae99a35e8e71d5e8b3a639d1
+
+jobs:
+  quality:
+    name: Install, lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: upstream
+    steps:
+      - name: Checkout pinned ReadAny source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.READANY_REPOSITORY }}
+          ref: ${{ env.READANY_REF }}
+          path: upstream
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: upstream/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run core tests
+        run: pnpm test
+
+      - name: Run mobile app tests
+        run: pnpm --filter @readany/app-expo test
+
+      - name: Run repository lint
+        run: pnpm lint
+
+      - name: Build embedded reader
+        run: pnpm --filter @readany/app-expo build:reader
+
+      - name: Validate Expo configuration
+        run: pnpm --filter @readany/app-expo exec expo config --type public
+
+  android-build:
+    name: Generate Android debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: upstream
+    steps:
+      - name: Checkout pinned ReadAny source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.READANY_REPOSITORY }}
+          ref: ${{ env.READANY_REF }}
+          path: upstream
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: upstream/pnpm-lock.yaml
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build embedded reader assets
+        run: pnpm --filter @readany/app-expo build:reader
+
+      - name: Generate Android native project
+        run: pnpm --filter @readany/app-expo exec expo prebuild --platform android --no-install --clean
+
+      - name: Build Android debug APK
+        working-directory: upstream/packages/app-expo/android
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Upload Android debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: readany-android-debug-${{ env.READANY_REF }}
+          path: upstream/packages/app-expo/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
