@@ -1,0 +1,42 @@
+{
+  "schema_name": "read-book-package",
+  "schema_version": "1.0.0",
+  "package_id": "550e8400-e29b-41d4-a716-446655440000",
+  "created_at": "2026-11-13T00:00:00Z",
+  "source": {
+    "file": "source/original.epub",
+    "format": "epub",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size_bytes": 123456
+  },
+  "book": {
+    "title": "示例书籍",
+    "authors": [
+      "示例作者"
+    ],
+    "language": "zh-CN",
+    "isbn": null,
+    "edition": null,
+    "translator": null,
+    "publisher": null
+  },
+  "processing": {
+    "processor_name": "read-book-processor",
+    "processor_version": "0.1.0",
+    "rules_version": "0.1.0",
+    "parser": "epub-parser",
+    "parser_version": "1.2.3"
+  },
+  "artifacts": {
+    "book": "content/book.json",
+    "chapters": "content/chapters.json",
+    "chunks": "content/chunks.jsonl",
+    "embeddings": null,
+    "local_report": null
+  },
+  "counts": {
+    "chapters": 1,
+    "chunks": 1,
+    "assets": 0
+  }
+}
