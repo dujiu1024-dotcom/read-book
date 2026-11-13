@@ -32,7 +32,7 @@ Playwright 配置会自动启动 Mock Server 与 Vite；本地手工运行时需
 - 流式 delta 只用于临时展示；只有 GET 最终状态为 completed 且包含 final_result 时，才写入本地 Assistant Message。
 - 取消请求形成 cancelled 终态；取消后不创建 Assistant Message。
 - 服务端任务状态、幂等键映射、事件序列和最终结果写入原子替换的本地 JSON 状态文件；进程重启后恢复任务并从已持久化的增量位置继续模拟生成。
-- 状态文件默认位于当前工作目录的 `.poc-generation-state.json`，可通过 `GENERATION_STATE_FILE` 指定路径；文件权限设置为仅当前用户可读写。
+- 状态文件默认位于当前工作目录的 `.poc-generation-state.json`，可通过 `GENERATION_STATE_FILE` 指定路径；文件权限设置为仅当前用户可读写。服务端只持久化请求正文 SHA-256，不保存用户消息明文；消息正文只在客户端 IndexedDB 保存。
 - 监听端口可通过 `PORT` 配置。默认 4177。
 
 ## 新增进程重启验证
