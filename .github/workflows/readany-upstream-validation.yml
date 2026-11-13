@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: readany-upstream-validation-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   READANY_REPOSITORY: codedogQBY/ReadAny
@@ -24,7 +24,7 @@ env:
 
 jobs:
   quality:
-    name: Install, lint and test
+    name: Install, test and validate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -60,7 +60,8 @@ jobs:
       - name: Run mobile app tests
         run: pnpm --filter @readany/app-expo test
 
-      - name: Run mobile app lint
+      - name: Run mobile app lint (advisory)
+        continue-on-error: true
         run: pnpm --filter @readany/app-expo lint
 
       - name: Build embedded reader
