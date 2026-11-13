@@ -7,6 +7,7 @@
 - 12 个合成 chunk fixture：模拟 EPUB 结构定位、PDF 页码/栏位定位、TXT 行号定位。
 - 30 道标注问题：原文事实、跨段综合、概念解释、反驳作者、书中无依据、引用定位六类。
 - 评测脚本：Recall@K、Citation Precision、Citation Coverage、人工 Groundedness、Locator Accuracy、拒答行为、Agent 规则事件、耗时和 Token 成本。
+- Gold-blind lexical mock adapter：只根据问题文本和 chunk 文本检索，不读取 gold evidence 或 answerable 标签；CI 会运行并归档 mock predictions 与测量报告。
 - 自动化测试：评测计算、输入完整性、未知引用、重复 ID 和数据集一致性。
 - **尚无真实书籍样本和真实模型/检索器结果。当前 fixture 只验证评测工具，不构成真实质量基线。**
 
@@ -16,6 +17,8 @@ Python 3.11+，无第三方依赖：
 
 ```bash
 python -m unittest discover -s eval/agent-rag -p 'test_*.py' -v
+python eval/agent-rag/mock_adapter.py --corpus eval/agent-rag/fixtures/corpus.jsonl --questions eval/agent-rag/fixtures/questions.jsonl --output /tmp/mock-predictions.jsonl
+python eval/agent-rag/evaluator.py evaluate --corpus eval/agent-rag/fixtures/corpus.jsonl --questions eval/agent-rag/fixtures/questions.jsonl --predictions /tmp/mock-predictions.jsonl --output /tmp/mock-report.json
 python eval/agent-rag/evaluator.py evaluate \
   --corpus eval/agent-rag/fixtures/corpus.jsonl \
   --questions eval/agent-rag/fixtures/questions.jsonl \
