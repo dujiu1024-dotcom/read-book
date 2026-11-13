@@ -146,7 +146,8 @@ async function run(count, datasetId) {
     querySamples.push(result.queryMs);
     relationSamples.push(result.relationQueryMs);
     finalCount = result.count;
-    relationCount = result.relationCount;\n    relatedThreadCount = result.relatedThreadCount;
+    relationCount = result.relationCount;
+    relatedThreadCount = result.relatedThreadCount;
   }
   return {
     adapter: 'SQLite WASM + OPFS', datasetId, count: finalCount, relationCount,
