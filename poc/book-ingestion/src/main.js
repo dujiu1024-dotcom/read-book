@@ -1,13 +1,24 @@
 import './style.css';
 import { getFixture } from './fixtures.js';
 import { parseBook } from './parsers.js';
-import { saveBook, listBooks } from './storage.js';
+import { saveBook, getBook, listBooks } from './storage.js';
 
 const $ = (id) => document.getElementById(id);
 let current = null;
 let citations = [];
 const digest = async (bytes) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((v) => v.toString(16).padStart(2, '0')).join('');
 function show(value) { $('output').textContent = JSON.stringify(value, null, 2); }
+function setCitations(parsed) {
+  citations = buildCitations(parsed);
+  const select = $('citation');
+  select.replaceChildren();
+  for (const [index, item] of citations.entries()) {
+    const option = document.createElement('option');
+    option.value = String(index);
+    option.textContent = item.label + ' · ' + item.locator;
+    select.append(option);
+  }
+}
 function buildCitations(parsed) {
   if (parsed.format === 'EPUB') return parsed.chapters.map((chapter, index) => ({ label: chapter.title, locator: chapter.sampleCfi || chapter.href, text: chapter.text.slice(0, 180), detail: chapter.href }));
   if (parsed.format === 'PDF') return parsed.pages.map((page) => ({ label: '物理页 ' + page.physicalPage, locator: 'pdf:page:' + page.physicalPage, text: page.text.slice(0, 180), detail: page.physicalPage }));
@@ -20,15 +31,38 @@ async function importFile(file) {
   const id = await digest(bytes);
   current = { id, name: file.name, type: file.type, bytes: bytes.buffer, parsed, importedAt: new Date().toISOString() };
   await saveBook(current);
-  citations = buildCitations(parsed);
-  $('citation').innerHTML = citations.map((item, index) => `<option value="${index}">${item.label} · ${item.locator}</option>`).join('');
+  setCitations(parsed);
   show({ id, name: file.name, size: bytes.length, parsed, citationCount: citations.length });
   $('status').textContent = '导入成功，文件与解析结果已保存到 IndexedDB。';
   await renderSaved();
 }
+async function openSavedBook(id) {
+  const book = await getBook(id);
+  if (!book) throw new Error('本地书籍记录不存在');
+  current = book;
+  setCitations(book.parsed);
+  show({
+    id: book.id, name: book.name, size: book.bytes?.byteLength ?? 0,
+    parsed: book.parsed, citationCount: citations.length, restoredFromIndexedDB: true
+  });
+  $('status').textContent = '已从 IndexedDB 恢复原文件、解析结果和定位信息。';
+}
 async function renderSaved() {
   const books = await listBooks();
-  $('saved-books').innerHTML = books.map((book) => `<li>${book.name} · ${book.id.slice(0, 12)} · ${book.parsed.format}</li>`).join('');
+  const list = $('saved-books');
+  list.replaceChildren();
+  for (const book of books) {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = book.name + ' · ' + book.id.slice(0, 12) + ' · ' + book.parsed.format;
+    button.addEventListener('click', async () => {
+      try { await openSavedBook(book.id); }
+      catch (error) { $('status').textContent = '本地恢复失败：' + error.message; }
+    });
+    item.append(button);
+    list.append(item);
+  }
 }
 $('import-fixture').addEventListener('click', async () => {
   try { const fixture = getFixture($('fixture').value); await importFile(new File([fixture.bytes], fixture.name, { type: fixture.type })); }
