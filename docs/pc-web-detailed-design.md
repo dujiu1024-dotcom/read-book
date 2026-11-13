@@ -214,45 +214,49 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 
 服务端保留原始密文和密钥材料不动。墓碑必须比普通索引具有更高的访问判定优先级，所有读写/签发接口统一检查。若上传与清除并发，清除墓碑优先；晚到的上传完成请求必须拒绝提交为可恢复备份。
 
-## 6. 服务端 API 契约建议
+## 6. 服务端 API 契约
 
-### 6.1 备份接口
-| 方法 | 路径 | 作用 |
-|---|---|---|
-| POST | /v1/backups/init | 创建备份会话，提交密文 manifest |
-| PUT | /v1/backups/{backup_id}/parts/{part_no} | 上传密文分块 |
-| POST | /v1/backups/{backup_id}/complete | 完成上传并触发服务端校验 |
-| GET | /v1/backups | 查询当前恢复凭证可访问的备份清单 |
-| POST | /v1/recovery/authorize | 验证恢复凭证并签发短时下载授权 |
-| GET | /v1/backups/{backup_id}/download | 下载密文或获取短时下载地址 |
-| POST | /v1/data-sets/{dataset_id}/clear | 写入不可逆清除墓碑并失效化授权 |
+> API 路径、方法、参数和请求/响应结构的唯一权威来源为 [OpenAPI 3.1 契约](api-contract.yaml)。本节只解释接口分组和实现约束，不独立定义接口。
 
-要求：
-- init/complete 使用幂等键。
-- 分块上传支持断点续传，服务端按块号和哈希去重。
-- 服务端不得解密 manifest 中的私人数据。
-- clear 接口必须幂等；重复调用返回同一清除结果。
-- 清除后的 dataset_id 不允许创建新的恢复授权。
-- 下载地址短时有效，签发前后都检查数据集状态。
+### 6.1 公共书籍与权益
+- `GET /v1/books`：查询已发布书目。
+- `GET /v1/books/{book_id}/revisions`：查询书籍版本。
+- `GET /v1/book-revisions/{revision_id}`：获取版本详情。
+- `GET /v1/book-revisions/{revision_id}/structure`：获取作者原书结构与主线节点。
+- `GET /v1/book-revisions/{revision_id}/nodes/{node_id}/content`：获取论述单元原文及定位。
+- `POST /v1/book-revisions/{revision_id}/knowledge/search`：检索该版本公共知识库。
+- `POST /v1/entitlements`、`POST /v1/entitlements/verify`：签发/校验具体 BookRevision 的访问权益。
 
-### 6.2 对话生成接口
-| 方法 | 路径 | 作用 |
-|---|---|---|
-| POST | /v1/generations | 创建生成任务，包含用户消息引用和最小上下文 |
-| GET | /v1/generations/{generation_id} | 查询任务状态和最终结果 |
-| GET | /v1/generations/{generation_id}/events | 获取流式事件 |
-| POST | /v1/generations/{generation_id}/cancel | 请求停止生成 |
+### 6.2 对话生成
+- `POST /v1/generations`：创建短暂生成任务。
+- `GET /v1/generations/{generation_id}`：查询任务状态和完整最终结果。
+- `GET /v1/generations/{generation_id}/events`：获取流式事件。
+- `POST /v1/generations/{generation_id}/cancel`：请求取消任务。
 
-GenerationJob 至少包含 generation_id、thread_id（客户端本地 ID）、request_id、状态、创建时间、过期时间、结果摘要哈希和错误码。服务端可暂存生成所需输入和输出，但不得把它们作为私人历史主库；设置短 TTL、严格访问控制和日志脱敏。最终结果由客户端持久化到本地。
+约束：
+- 客户端先将用户消息写入本地事务，再发起生成请求。
+- 服务端只暂存完成模型调用所需的最小上下文和结果，设置短 TTL、严格访问控制和日志脱敏；不得作为 Thread/Message 历史主库。
+- 流式 delta 只用于临时展示；最终结果必须可通过 generation_id 查询，客户端写入本地后才成为正式 Assistant Message。
+- 幂等键用于防止网络重试重复创建任务；取消与自然完成竞态以服务端先提交的终态为准。
 
-### 6.3 流式协议
-- 首版优先采用 HTTPS fetch + ReadableStream 或 SSE；传输层只负责体验，不承担消息正确性。
-- 每个事件包含 event_id、generation_id、sequence、event_type、payload。
-- event_type 至少包含 started、delta、completed、failed、cancelled、heartbeat。
-- delta 事件可重复、可丢失；最终结果查询必须返回完整且唯一的正式结果。
-- 客户端断线后按 generation_id 查询状态；不要求服务端永久保存 token 事件历史。
-- 代理/CDN 必须关闭不适当的响应缓冲，设置合理空闲超时。
-- 取消接口幂等；取消与模型自然完成竞态时，以服务端先提交的终态为准。
+### 6.3 加密备份与恢复
+- `POST /v1/backups/init`：创建备份上传会话。
+- `PUT /v1/backups/{backup_id}/parts/{part_no}`：上传密文分块。
+- `POST /v1/backups/{backup_id}/complete`：校验并提交备份。
+- `GET /v1/backups?dataset_id=...`：在当前账号授权范围内查询备份。
+- `GET /v1/backups/{backup_id}/download`：下载密文。
+- `POST /v1/recovery/challenges`、`POST /v1/recovery/authorize`：使用独立恢复凭证完成挑战验证并签发短时授权。
+- `GET /v1/recovery/backups`：通过恢复授权查询可恢复备份。
+- `POST /v1/data-sets/{dataset_id}/clear`：写入不可逆清除墓碑。
+- `POST /v1/account/deletion`：注销账号身份，不删除本地数据或服务器加密备份。
+
+约束：
+- init、complete、clear 和恢复授权使用幂等键或等效重放保护。
+- 分块上传支持断点续传；服务端按块号与密文哈希去重。
+- 服务端只校验密文哈希、大小和最小 manifest，不解密私人备份。
+- 墓碑优先于所有普通索引、上传完成、下载、恢复和授权签发；晚到的上传完成请求不得复活已清除数据集。
+- 账号授权查询与恢复凭证授权查询是两条独立路径；不得把恢复凭证等同于账号登录态。
+- 具体字段、错误结构和安全方案以 OpenAPI 与安全设计为准。
 
 ## 7. 身份、数据集与访问权益
 - Account 只代表认证身份。
