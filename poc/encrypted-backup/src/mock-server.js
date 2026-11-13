@@ -16,10 +16,24 @@ export class MockBackupServer {
     this.idempotency = new Map();
   }
   init(manifest, idempotencyKey) {
+    if (typeof idempotencyKey !== 'string' || !idempotencyKey) throw new Error('幂等键不能为空');
     if (this.tombstones.has(manifest.datasetId)) throw new Error('数据集已清除');
+    if (!Number.isSafeInteger(manifest.sequence) || manifest.sequence < 1) throw new Error('备份序号非法');
+    if (!['full', 'incremental'].includes(manifest.backupType)) throw new Error('备份类型非法');
+    if (manifest.backupType === 'full' && manifest.parentBackupId) throw new Error('全量备份不能指定父备份');
+    if (manifest.backupType === 'incremental' && !manifest.parentBackupId) throw new Error('增量备份必须指定父备份');
     const prior = this.idempotency.get(idempotencyKey);
-    if (prior) return prior;
-    if (manifest.parentBackupId && !this.backups.has(manifest.parentBackupId)) throw new Error('父备份不存在');
+    if (prior) {
+      if (prior.backupId !== manifest.backupId) throw new Error('幂等键已被其他备份请求使用');
+      return prior;
+    }
+    if (manifest.parentBackupId) {
+      const parent = this.backups.get(manifest.parentBackupId);
+      if (!parent) throw new Error('父备份不存在');
+      if (parent.manifest.datasetId !== manifest.datasetId) throw new Error('父备份不属于同一数据集');
+      if (manifest.sequence !== parent.manifest.sequence + 1) throw new Error('备份序号必须紧邻父备份');
+      if (parent.manifest.backupType === 'incremental' && !parent.manifest.parentBackupId) throw new Error('父备份链不完整');
+    }
     const session = { backupId: manifest.backupId, manifest, parts: new Map(), state: 'uploading' };
     this.sessions.set(manifest.backupId, session);
     this.idempotency.set(idempotencyKey, session);
