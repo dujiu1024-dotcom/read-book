@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer as createNetServer } from 'node:net';
 
 test('用户消息先落本地，最终结果确认后才写入 Assistant Message', async ({ page }) => {
   await page.goto('/');
@@ -51,10 +52,20 @@ async function waitForHealth(port, child) {
   }
   throw new Error('Mock server health timeout');
 }
-function launchServer(port, stateFile) {
+async function freePort() {
+  const server = createNetServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = server.address().port;
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return port;
+}
+function launchServer(port, stateFile, extraEnv = {}) {
   return spawn(process.execPath, ['server.mjs'], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), GENERATION_STATE_FILE: stateFile },
+    env: { ...process.env, PORT: String(port), GENERATION_STATE_FILE: stateFile, ...extraEnv },
     stdio: 'ignore'
   });
 }
@@ -65,7 +76,7 @@ async function stopServer(child) {
 }
 
 test('服务进程重启后恢复任务、事件序号与幂等映射', async () => {
-  const port = 4188;
+  const port = await freePort();
   const stateDir = await mkdtemp(join(tmpdir(), 'read-book-generation-'));
   const stateFile = join(stateDir, 'state.json');
   let child = launchServer(port, stateFile);
@@ -122,9 +133,9 @@ test('服务进程重启后恢复任务、事件序号与幂等映射', async ()
 
 
 test('同一幂等键绑定请求正文，正文不同时拒绝复用', async () => {
-  const port = 4189;
+  const port = await freePort();
   const stateDir = await mkdtemp(join(tmpdir(), 'read-book-idempotency-'));
-  const child = launchServer(port, join(stateDir, 'state.json'));
+  const child = launchServer(port, join(stateDir, 'state.json'), { GENERATION_TOKEN_DELAY_MS: '1000' });
   try {
     await waitForHealth(port, child);
     const base = `http://127.0.0.1:${port}`;
@@ -149,7 +160,7 @@ test('同一幂等键绑定请求正文，正文不同时拒绝复用', async ()
 });
 
 test('事件重连回放保持 event_id 唯一且序号连续', async () => {
-  const port = 4190;
+  const port = await freePort();
   const stateDir = await mkdtemp(join(tmpdir(), 'read-book-event-replay-'));
   const child = launchServer(port, join(stateDir, 'state.json'));
   try {
@@ -186,7 +197,7 @@ test('事件重连回放保持 event_id 唯一且序号连续', async () => {
 
 
 test('接近自然完成时取消仍产生唯一终态，不暴露最终结果', async () => {
-  const port = 4191;
+  const port = await freePort();
   const stateDir = await mkdtemp(join(tmpdir(), 'read-book-cancel-race-'));
   const child = launchServer(port, join(stateDir, 'state.json'));
   try {
