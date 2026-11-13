@@ -35,10 +35,6 @@ def build_predictions(corpus: list[dict], questions: list[dict], top_k: int) -> 
         ranked.sort(key=lambda item: (-item[0], item[1]))
         selected = [item for item in ranked[:top_k] if item[0] > 0]
         latency_ms = round((time.perf_counter() - started) * 1000, 3)
-        citations = []
-        if selected:
-            chunk = selected[0][2]
-            citations.append({"chunk_id": chunk["chunk_id"], "locator": chunk["locator"]})
         predictions.append({
             "question_id": question["question_id"],
             "retrieved_chunk_ids": [item[1] for item in ranked[:top_k]],
