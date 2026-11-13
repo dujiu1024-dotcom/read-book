@@ -299,3 +299,87 @@ test('清除墓碑同时清理备份、上传分块与幂等引用', async ({ pa
   });
   expect(result).toEqual({ tombstone: true, backups: 0, sessions: 0, idempotency: 0 });
 });
+
+test('授权范围、过期时间和主动撤销均在上传入口生效', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    let now = 1_000;
+    const server = new MockBackupServer({ now: () => now });
+    const backup = await createEncryptedBackup({
+      datasetId: 'authorization-lifecycle', sequence: 1, payload: { value: 'private' }
+    });
+    const downloadOnly = server.issueAuthorization(backup.manifest.datasetId, {
+      scopes: ['download'], ttlMs: 1_000
+    });
+    let scopeRejected = false;
+    try { server.authorizedInit(downloadOnly.token, backup.manifest, 'scope-key'); }
+    catch { scopeRejected = true; }
+    const expiring = server.issueAuthorization(backup.manifest.datasetId, {
+      scopes: ['upload'], ttlMs: 100
+    });
+    server.authorizedInit(expiring.token, backup.manifest, 'expiring-key');
+    now += 100;
+    let expiredRejected = false;
+    try { server.authorizedPutPart(expiring.token, backup.manifest.backupId, backup.chunks[0]); }
+    catch { expiredRejected = true; }
+    const revocable = server.issueAuthorization(backup.manifest.datasetId, {
+      scopes: ['upload'], ttlMs: 10_000
+    });
+    const second = await createEncryptedBackup({
+      datasetId: 'authorization-lifecycle', sequence: 1, payload: { value: 'second' }
+    });
+    server.authorizedInit(revocable.token, second.manifest, 'revocable-key');
+    server.revokeAuthorization(revocable.token);
+    let revokedRejected = false;
+    try { server.authorizedPutPart(revocable.token, second.manifest.backupId, second.chunks[0]); }
+    catch { revokedRejected = true; }
+    return { scopeRejected, expiredRejected, revokedRejected };
+  });
+  expect(result).toEqual({ scopeRejected: true, expiredRejected: true, revokedRejected: true });
+});
+
+test('下载票据过期与清除墓碑均撤销旧下载能力', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createEncryptedBackup } = await import('/src/crypto.js');
+    const { MockBackupServer } = await import('/src/mock-server.js');
+    let now = 10_000;
+    const server = new MockBackupServer({ now: () => now });
+    const backup = await createEncryptedBackup({
+      datasetId: 'download-ticket-lifecycle', sequence: 1, payload: { value: 'ticket-fixture' }
+    });
+    const authorization = server.issueAuthorization(backup.manifest.datasetId, {
+      scopes: ['upload', 'download'], ttlMs: 10_000
+    });
+    server.authorizedInit(authorization.token, backup.manifest, 'ticket-upload');
+    for (const chunk of backup.chunks) {
+      server.authorizedPutPart(authorization.token, backup.manifest.backupId, chunk);
+    }
+    await server.authorizedComplete(authorization.token, backup.manifest.backupId);
+    const ticket = server.issueDownloadTicket(authorization.token, backup.manifest.backupId, 100);
+    const beforeExpiry = server.downloadByTicket(ticket.ticket).manifest.backupId;
+    now += 100;
+    let expiredTicketRejected = false;
+    try { server.downloadByTicket(ticket.ticket); } catch { expiredTicketRejected = true; }
+    const freshTicket = server.issueDownloadTicket(authorization.token, backup.manifest.backupId, 1_000);
+    server.clearDataset(backup.manifest.datasetId);
+    let tombstonedTicketRejected = false;
+    try { server.downloadByTicket(freshTicket.ticket); } catch { tombstonedTicketRejected = true; }
+    let oldAuthorizationRejected = false;
+    try { server.issueDownloadTicket(authorization.token, backup.manifest.backupId); }
+    catch { oldAuthorizationRejected = true; }
+    return {
+      beforeExpiry, expiredTicketRejected, tombstonedTicketRejected,
+      oldAuthorizationRejected, remainingTickets: server.downloadTickets.size,
+      remainingAuthorizations: server.authorizations.size
+    };
+  });
+  expect(result.beforeExpiry).toBeTruthy();
+  expect(result.expiredTicketRejected).toBe(true);
+  expect(result.tombstonedTicketRejected).toBe(true);
+  expect(result.oldAuthorizationRejected).toBe(true);
+  expect(result.remainingTickets).toBe(0);
+  expect(result.remainingAuthorizations).toBe(0);
+});
