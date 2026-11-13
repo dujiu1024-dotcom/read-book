@@ -7,7 +7,8 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
     await page.getByRole('button', { name: '导入固定样本' }).click();
     await expect(page.locator('#status')).toContainText('导入成功', { timeout: 20_000 });
     const result = JSON.parse(await page.locator('#output').textContent());
-    expect(result.id).toMatch(/^[a-f0-9]{64}$/);\n    console.log('FIXTURE_SHA256', fixture, result.id);
+    expect(result.id).toMatch(/^[a-f0-9]{64}$/);
+    console.log('FIXTURE_SHA256', fixture, result.id);
     expect(result.citationCount).toBeGreaterThan(0);
     if (fixture === 'epub-3') {
       expect(result.parsed.chapters[0].sampleCfi).toContain('epubcfi(');
