@@ -16,6 +16,7 @@
 - [ReadAny + TextSage 深度复用评估](docs/reuse-assessment.md)
 - [决策记录](docs/decision-log.md)
 - [项目记录审查与下一步清单](docs/project-audit.md)
+- [P0 开源项目运行验证记录](docs/p0-validation-report.md)
 
 ## 当前阶段
 
