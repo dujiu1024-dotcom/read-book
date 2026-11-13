@@ -248,3 +248,65 @@ export async function checkIndexedDb(datasetId) {
     return result;
   } finally { db.close(); }
 }
+
+export async function runMigrationProbe() {
+  const name = DB_NAME + '-migration-' + crypto.randomUUID();
+  let db;
+  try {
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.open(name, 1);
+      request.onupgradeneeded = () => {
+        const legacy = request.result;
+        const threads = legacy.createObjectStore('threads', { keyPath: 'id' });
+        threads.createIndex('datasetId', 'datasetId');
+        const messages = legacy.createObjectStore('messages', { keyPath: 'id' });
+        messages.createIndex('datasetId', 'datasetId');
+        messages.createIndex('threadSequence', ['threadId', 'sequence'], { unique: true });
+      };
+      request.onsuccess = () => {
+        const legacy = request.result;
+        const tx = legacy.transaction(['threads', 'messages'], 'readwrite');
+        tx.objectStore('threads').put({ id: 'legacy-thread', datasetId: 'legacy', title: 'Legacy Thread' });
+        tx.objectStore('messages').put({
+          id: 'legacy-message', datasetId: 'legacy', threadId: 'legacy-thread',
+          sequence: 0, role: 'user', content: '迁移前原文', createdAt: 1
+        });
+        tx.oncomplete = () => { legacy.close(); resolve(); };
+        tx.onerror = () => { legacy.close(); reject(tx.error); };
+        tx.onabort = () => { legacy.close(); reject(tx.error || new Error('迁移夹具创建中止')); };
+      };
+      request.onerror = () => reject(request.error);
+    });
+    db = await openDb(name);
+    const migrated = await new Promise((resolve, reject) => {
+      const tx = db.transaction(['threads', 'messages'], 'readonly');
+      const threadRequest = tx.objectStore('threads').get('legacy-thread');
+      const messageRequest = tx.objectStore('messages').get('legacy-message');
+      tx.oncomplete = () => resolve({
+        thread: threadRequest.result,
+        message: messageRequest.result,
+        stores: [...db.objectStoreNames],
+        messageIndexes: [...tx.db.transaction('messages').objectStore('messages').indexNames]
+      });
+      tx.onerror = () => reject(tx.error);
+    });
+    const expectedStores = STORES.every((store) => migrated.stores.includes(store));
+    const expectedIndexes = ['datasetId', 'threadSequence'].every((index) => migrated.messageIndexes.includes(index));
+    return {
+      adapter: 'IndexedDB', migration: 'v1-to-v3',
+      legacyThreadPreserved: migrated.thread?.title === 'Legacy Thread',
+      legacyMessagePreserved: migrated.message?.content === '迁移前原文',
+      expectedStores, expectedIndexes,
+      integrity: migrated.thread?.title === 'Legacy Thread' &&
+        migrated.message?.content === '迁移前原文' && expectedStores && expectedIndexes
+    };
+  } finally {
+    db?.close();
+    await new Promise((resolve) => {
+      const request = indexedDB.deleteDatabase(name);
+      request.onsuccess = resolve;
+      request.onerror = resolve;
+      request.onblocked = resolve;
+    });
+  }
+}
