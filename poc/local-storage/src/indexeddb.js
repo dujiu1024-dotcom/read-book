@@ -129,13 +129,20 @@ async function queryDataset(db, datasetId, count) {
     const result = {};
     for (const [key, request] of Object.entries(requests)) request.onsuccess = () => { result[key] = request.result; };
     tx.oncomplete = () => {
+      const relatedThreadCount = result.threads.filter((thread) => {
+        const round = result.rounds.find((item) => item.threadId === thread.id);
+        const note = result.notes.find((item) => item.readingRoundId === round?.id);
+        const memory = result.memories.find((item) => item.noteId === note?.id);
+        const source = result.sources.find((item) => item.id === note?.sourceId);
+        return Boolean(round && note && memory && source);
+      }).length;
       const thread = result.threads.find((item) => item.id === threadId);
       const round = result.rounds.find((item) => item.threadId === threadId);
       const note = result.notes.find((item) => item.readingRoundId === round?.id);
       const memory = result.memories.find((item) => item.noteId === note?.id);
       const source = result.sources.find((item) => item.id === note?.sourceId);
       const related = Boolean(thread && round && note && memory && source);
-      resolve({ relationCount: related ? result.messages.length : 0 });
+      resolve({ relationCount: related ? result.messages.length : 0, relatedThreadCount });
     };
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error('关联查询事务中止'));
@@ -145,7 +152,7 @@ async function queryDataset(db, datasetId, count) {
 async function runIndexedDbUnlocked(count, datasetId) {
   const db = await openDb();
   const writeSamples = [], querySamples = [], relationSamples = [];
-  let finalCount = 0, relationCount = 0;
+  let finalCount = 0, relationCount = 0, relatedThreadCount = 0;
   try {
     for (let run = 0; run < RUNS; run++) {
       writeSamples.push(await writeBatch(db, count, datasetId));
@@ -153,11 +160,11 @@ async function runIndexedDbUnlocked(count, datasetId) {
       querySamples.push(query.queryMs);
       relationSamples.push(query.relationQueryMs);
       finalCount = query.rows.length;
-      relationCount = query.relationCount;
+      relationCount = query.relationCount;\n      relatedThreadCount = query.relatedThreadCount;
     }
     return {
       adapter: 'IndexedDB', datasetId, count: finalCount, relationCount,
-      runs: RUNS, integrity: finalCount === count && relationCount === Math.ceil(count / 10),
+      runs: RUNS, integrity: finalCount === count && relationCount === Math.ceil(count / 10) && relatedThreadCount === 10, relatedThreadCount,
       writeMs: { p50: percentile(writeSamples, 0.5), p95: percentile(writeSamples, 0.95), samples: writeSamples },
       queryMs: { p50: percentile(querySamples, 0.5), p95: percentile(querySamples, 0.95), samples: querySamples },
       relationQueryMs: { p50: percentile(relationSamples, 0.5), p95: percentile(relationSamples, 0.95), samples: relationSamples },
