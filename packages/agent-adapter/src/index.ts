@@ -99,6 +99,14 @@ function requiredString(value: unknown, field: string): string {
   return value;
 }
 
+function requiredUuid(value: unknown, field: string): string {
+  const text = requiredString(value, field);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) {
+    throw new GenerationProtocolError(`"${field}" must be a UUID.`);
+  }
+  return text;
+}
+
 function validDate(value: unknown, field: string): string {
   const text = requiredString(value, field);
   if (!Number.isFinite(Date.parse(text))) {
@@ -112,14 +120,14 @@ export function validateGenerationRequest(value: GenerationRequest): void {
   if (value.client_generation_id.length < 16 || value.client_generation_id.length > 128) {
     throw new GenerationProtocolError("client_generation_id length must be between 16 and 128.");
   }
-  requiredString(value.thread_id, "thread_id");
-  requiredString(value.book_revision_id, "book_revision_id");
-  requiredString(value.user_message.local_message_id, "user_message.local_message_id");
+  requiredUuid(value.thread_id, "thread_id");
+  requiredUuid(value.book_revision_id, "book_revision_id");
+  requiredUuid(value.user_message.local_message_id, "user_message.local_message_id");
   requiredString(value.user_message.content, "user_message.content");
   if (value.user_message.content.length > 50_000) {
     throw new GenerationProtocolError("user_message.content exceeds 50000 characters.");
   }
-  requiredString(value.context.current_source.structure_node_id, "context.current_source.structure_node_id");
+  requiredUuid(value.context.current_source.structure_node_id, "context.current_source.structure_node_id");
   if (typeof value.context.current_source.excerpt !== "string" || value.context.current_source.excerpt.length > 30_000) {
     throw new GenerationProtocolError("context.current_source.excerpt must be a string up to 30000 characters.");
   }
@@ -188,8 +196,8 @@ export function authoritativeFinalResult(snapshot: GenerationSnapshot): Generati
 
 export function validateGenerationEvent(value: unknown): GenerationEvent {
   const item = record(value);
-  const eventId = item.event_id;
-  const generationId = item.generation_id;
+  const eventId = requiredString(item.event_id, "event_id");
+  const generationId = requiredString(item.generation_id, "generation_id");
   if (!Number.isInteger(item.sequence) || (item.sequence as number) < 1) {
     throw new GenerationProtocolError("Generation event sequence must be a positive integer.");
   }
@@ -284,6 +292,7 @@ export async function persistUserMessageBeforeGeneration(
 ): Promise<GenerationAccepted> {
   validateGenerationRequest(request);
   requiredString(idempotencyKey, "Idempotency-Key");
+  requiredUuid(message.id, "persisted message id");
   if (message.id !== request.user_message.local_message_id) {
     throw new GenerationProtocolError("Persisted message id must match request.local_message_id.");
   }
