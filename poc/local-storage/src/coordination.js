@@ -40,3 +40,23 @@ export async function acquireDatasetWriter(datasetId) {
     close() { channel?.close(); }
   };
 }
+
+
+export async function withDatasetWriter(datasetId, operation) {
+  if (!navigator.locks?.request) {
+    // Keep the adapter runnable for compatibility measurement, but report that
+    // this browser cannot enforce the single-writer guarantee.
+    return { result: await operation(), coordination: 'unsupported' };
+  }
+  const lease = await acquireDatasetWriter(datasetId);
+  if (lease.mode !== 'writer') {
+    lease.close();
+    throw new Error('当前标签页未获得数据集写锁，已阻止写入并降级只读：' + lease.reason);
+  }
+  try {
+    return { result: await operation(), coordination: 'web-locks-single-writer' };
+  } finally {
+    lease.release();
+    lease.close();
+  }
+}
