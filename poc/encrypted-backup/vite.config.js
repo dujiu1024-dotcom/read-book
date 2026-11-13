@@ -6,7 +6,7 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:4180',
         changeOrigin: true,
-        rewrite: (requestPath) => requestPath.replace(/^\\/api/, '')
+        rewrite: (requestPath) => requestPath.replace(/^\/api/, '')
       }
     }
   },
