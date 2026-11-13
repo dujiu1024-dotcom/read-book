@@ -171,7 +171,7 @@ test('HTTP 父链验证、幂等键和全量到多级增量备份', async (t) =>
   assert.equal(incremental.recoveryKey, incremental2.recoveryKey);
 
   const missingParent = await createEncryptedBackup({
-    datasetId, sequence: 2, parentBackupId: 'missing-parent', payload: { value: 'bad-parent' }
+    datasetId, sequence: 2, parentBackupId: 'missing-parent', payload: { value: 'bad-parent' }, keyMaterial
   });
   const missingParentResult = await request(env.base, '/v1/backups/init', {
     method: 'POST', token: ticket.token,
@@ -180,7 +180,7 @@ test('HTTP 父链验证、幂等键和全量到多级增量备份', async (t) =>
   assert.equal(missingParentResult.status, 409);
 
   const sequenceGap = await createEncryptedBackup({
-    datasetId, sequence: 4, parentBackupId: full.manifest.backupId, payload: { value: 'bad-sequence' }
+    datasetId, sequence: 4, parentBackupId: full.manifest.backupId, payload: { value: 'bad-sequence' }, keyMaterial
   });
   const sequenceGapResult = await request(env.base, '/v1/backups/init', {
     method: 'POST', token: ticket.token,
@@ -189,7 +189,7 @@ test('HTTP 父链验证、幂等键和全量到多级增量备份', async (t) =>
   assert.equal(sequenceGapResult.status, 409);
 
   const crossDataset = await createEncryptedBackup({
-    datasetId: 'another-dataset', sequence: 2, parentBackupId: full.manifest.backupId, payload: { value: 'cross-dataset' }
+    datasetId: 'another-dataset', sequence: 2, parentBackupId: full.manifest.backupId, payload: { value: 'cross-dataset' }, keyMaterial: createDatasetKeyMaterial('another-dataset')
   });
   const crossDatasetResult = await request(env.base, '/v1/backups/init', {
     method: 'POST', token: (await issueTicket(env.base, 'another-dataset')).token,
@@ -236,7 +236,8 @@ test('清除墓碑先持久化，再撤销票据、下载 URL、会话和密文�
   const env = await fixture(t);
   const datasetId = 'http-clear-dataset';
   const ticket = await issueTicket(env.base, datasetId, allScopes);
-  const encrypted = await createEncryptedBackup({ datasetId, sequence: 1, payload: { value: 'clear-me' } });
+  const keyMaterial = createDatasetKeyMaterial(datasetId);
+  const encrypted = await createEncryptedBackup({ datasetId, sequence: 1, payload: { value: 'clear-me' }, keyMaterial });
   await uploadBackup(env.base, ticket, encrypted);
   const download = await request(env.base, '/v1/backups/' + encrypted.manifest.backupId + '/download-ticket', {
     method: 'POST', token: ticket.token, body: {}
@@ -248,7 +249,7 @@ test('清除墓碑先持久化，再撤销票据、下载 URL、会话和密文�
   assert.ok(Object.keys(JSON.parse(stateWithDownloadTicket).downloadTickets)
     .every((hash) => /^[a-f0-9]{64}$/.test(hash)));
 
-  const pending = await createEncryptedBackup({ datasetId, sequence: 2, parentBackupId: encrypted.manifest.backupId, payload: { value: 'pending' } });
+  const pending = await createEncryptedBackup({ datasetId, sequence: 2, parentBackupId: encrypted.manifest.backupId, payload: { value: 'pending' }, keyMaterial });
   const pendingInit = await request(env.base, '/v1/backups/init', {
     method: 'POST', token: ticket.token,
     body: { manifest: pending.manifest, idempotencyKey: 'pending-before-clear' }
