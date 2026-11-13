@@ -1,45 +1,49 @@
 import { withDatasetWriter } from './coordination.js';
 
 const DB_NAME = 'read-book-poc-a';
+const DB_VERSION = 3;
 const RUNS = 5;
+const LONG_TEXT = '长文本'.repeat(16384);
 const STORES = ['threads', 'messages', 'readingRounds', 'notes', 'memories', 'sources'];
 
-function openDb() {
+function ensureStore(db, transaction, name, indexes) {
+  const store = db.objectStoreNames.contains(name)
+    ? transaction.objectStore(name)
+    : db.createObjectStore(name, { keyPath: 'id' });
+  for (const [indexName, keyPath, options] of indexes) {
+    if (!store.indexNames.contains(indexName)) store.createIndex(indexName, keyPath, options || {});
+  }
+}
+function upgradeSchema(db, transaction) {
+  ensureStore(db, transaction, 'threads', [
+    ['datasetId', 'datasetId']
+  ]);
+  ensureStore(db, transaction, 'messages', [
+    ['datasetId', 'datasetId'],
+    ['threadSequence', ['threadId', 'sequence'], { unique: true }]
+  ]);
+  ensureStore(db, transaction, 'readingRounds', [
+    ['datasetId', 'datasetId'],
+    ['threadId', 'threadId', { unique: true }]
+  ]);
+  ensureStore(db, transaction, 'notes', [
+    ['datasetId', 'datasetId'],
+    ['readingRoundId', 'readingRoundId', { unique: true }],
+    ['sourceId', 'sourceId']
+  ]);
+  ensureStore(db, transaction, 'memories', [
+    ['datasetId', 'datasetId'],
+    ['noteId', 'noteId', { unique: true }],
+    ['threadId', 'threadId']
+  ]);
+  ensureStore(db, transaction, 'sources', [
+    ['datasetId', 'datasetId']
+  ]);
+}
+function openDb(name = DB_NAME) {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 2);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains('threads')) {
-        const store = db.createObjectStore('threads', { keyPath: 'id' });
-        store.createIndex('datasetId', 'datasetId');
-      }
-      if (!db.objectStoreNames.contains('messages')) {
-        const store = db.createObjectStore('messages', { keyPath: 'id' });
-        store.createIndex('datasetId', 'datasetId');
-        store.createIndex('threadSequence', ['threadId', 'sequence'], { unique: true });
-      }
-      if (!db.objectStoreNames.contains('readingRounds')) {
-        const store = db.createObjectStore('readingRounds', { keyPath: 'id' });
-        store.createIndex('datasetId', 'datasetId');
-        store.createIndex('threadId', 'threadId', { unique: true });
-      }
-      if (!db.objectStoreNames.contains('notes')) {
-        const store = db.createObjectStore('notes', { keyPath: 'id' });
-        store.createIndex('datasetId', 'datasetId');
-        store.createIndex('readingRoundId', 'readingRoundId', { unique: true });
-        store.createIndex('sourceId', 'sourceId');
-      }
-      if (!db.objectStoreNames.contains('memories')) {
-        const store = db.createObjectStore('memories', { keyPath: 'id' });
-        store.createIndex('datasetId', 'datasetId');
-        store.createIndex('noteId', 'noteId', { unique: true });
-        store.createIndex('threadId', 'threadId');
-      }
-      if (!db.objectStoreNames.contains('sources')) {
-        const store = db.createObjectStore('sources', { keyPath: 'id' });
-        store.createIndex('datasetId', 'datasetId');
-      }
-    };
+    const request = indexedDB.open(name, DB_VERSION);
+    request.onupgradeneeded = () => upgradeSchema(request.result, request.transaction);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
     request.onblocked = () => reject(new Error('IndexedDB 升级被其他标签页阻塞'));
@@ -91,7 +95,7 @@ function enqueueDatasetWrites(tx, count, datasetId) {
       threadId: datasetId + ':thread:' + (i % 10),
       sequence: Math.floor(i / 10),
       role: i % 2 ? 'assistant' : 'user',
-      content: '测试消息 ' + i + ' / ' + '知行阅读与思考内容。'.repeat(8),
+      content: i === 0 ? LONG_TEXT : '测试消息 ' + i + ' / ' + '知行阅读与思考内容。'.repeat(8),
       createdAt: i
     });
   }
@@ -217,7 +221,10 @@ export async function checkIndexedDb(datasetId) {
         const messagesValid = data.messages.every((message) =>
           message.datasetId === datasetId && threads.has(message.threadId)
         );
-        const integrity = data.threads.length === 10 &&
+        const longTextIntegrity = data.messages.some((message) =>
+          message.id === datasetId + ':0' && message.content === LONG_TEXT
+        );
+        const integrity = longTextIntegrity && data.threads.length === 10 &&
           data.readingRounds.length === 10 &&
           data.notes.length === 10 &&
           data.memories.length === 10 &&
@@ -231,6 +238,7 @@ export async function checkIndexedDb(datasetId) {
             memories: data.memories.length, sources: data.sources.length
           },
           relatedThreadCount: threadChains.filter(Boolean).length,
+          longTextIntegrity,
           integrity
         });
       };
