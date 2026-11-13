@@ -1,0 +1,30 @@
+name: PoC B - Encrypted Backup
+
+on:
+  pull_request:
+    paths:
+      - "poc/encrypted-backup/**"
+      - ".github/workflows/poc-encrypted-backup.yml"
+  push:
+    branches:
+      - "poc/issue-2-encrypted-backup"
+    paths:
+      - "poc/encrypted-backup/**"
+      - ".github/workflows/poc-encrypted-backup.yml"
+
+jobs:
+  browser-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: poc/encrypted-backup
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm test
