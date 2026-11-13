@@ -214,33 +214,37 @@ export async function createBackupHttpServer({ dataDir }) {
 
     if (method === 'POST' && url.pathname === '/__poc/tickets') {
       const body = await readJson(req);
-      const datasetId = safeId(body.datasetId, 'datasetId');
-      assertNotCleared(datasetId);
-      const scopes = [...new Set(body.scopes || [])];
-      if (!scopes.length || scopes.some((scope) => !ALLOWED_SCOPES.has(scope))) fail(400, '票据权限范围非法');
-      const ttlSeconds = Math.min(3600, Math.max(1, Number(body.ttlSeconds) || 600));
-      const token = randomBytes(32).toString('base64url');
-      const ticketId = randomBytes(16).toString('hex');
-      const record = {
-        ticketId, datasetId, scopes,
-        issuedAt: Date.now(), expiresAt: Date.now() + ttlSeconds * 1000,
-        revokedAt: null
-      };
-      state.tickets[tokenHash(token)] = record;
-      await save();
-      return json(res, 201, { ticketId, token, expiresAt: record.expiresAt });
+      return withMutationLock(async () => {
+        const datasetId = safeId(body.datasetId, 'datasetId');
+        assertNotCleared(datasetId);
+        const scopes = [...new Set(body.scopes || [])];
+        if (!scopes.length || scopes.some((scope) => !ALLOWED_SCOPES.has(scope))) fail(400, '票据权限范围非法');
+        const ttlSeconds = Math.min(3600, Math.max(1, Number(body.ttlSeconds) || 600));
+        const token = randomBytes(32).toString('base64url');
+        const ticketId = randomBytes(16).toString('hex');
+        const record = {
+          ticketId, datasetId, scopes,
+          issuedAt: Date.now(), expiresAt: Date.now() + ttlSeconds * 1000,
+          revokedAt: null
+        };
+        state.tickets[tokenHash(token)] = record;
+        await save();
+        return json(res, 201, { ticketId, token, expiresAt: record.expiresAt });
+      });
     }
 
     const revokeMatch = /^\/__poc\/tickets\/([A-Za-z0-9._-]+)\/revoke$/.exec(url.pathname);
     if (method === 'POST' && revokeMatch) {
       const body = await readJson(req);
-      const datasetId = safeId(body.datasetId, 'datasetId');
-      requireTicket(req, datasetId, 'ticket:revoke');
-      const target = Object.entries(state.tickets).find(([, item]) => item.ticketId === revokeMatch[1] && item.datasetId === datasetId);
-      if (!target) return json(res, 404, { error: '票据不存在' });
-      delete state.tickets[target[0]];
-      await save();
-      return json(res, 200, { revoked: true, ticketId: revokeMatch[1] });
+      return withMutationLock(async () => {
+        const datasetId = safeId(body.datasetId, 'datasetId');
+        requireTicket(req, datasetId, 'ticket:revoke');
+        const target = Object.entries(state.tickets).find(([, item]) => item.ticketId === revokeMatch[1] && item.datasetId === datasetId);
+        if (!target) return json(res, 404, { error: '票据不存在' });
+        delete state.tickets[target[0]];
+        await save();
+        return json(res, 200, { revoked: true, ticketId: revokeMatch[1] });
+      });
     }
 
     const initMatch = method === 'POST' && url.pathname === '/v1/backups/init';
@@ -346,27 +350,31 @@ export async function createBackupHttpServer({ dataDir }) {
     const backupMatch = /^\/v1\/backups\/([A-Za-z0-9._-]+)$/.exec(url.pathname);
     if (method === 'GET' && backupMatch) {
       const backupId = safeId(backupMatch[1], 'backupId');
-      const backup = state.backups[backupId];
-      if (!backup) {
-        assertBackupNotCleared(backupId);
-        fail(404, '备份不存在');
-      }
-      requireTicket(req, backup.manifest.datasetId, 'backup:read');
-      return json(res, 200, await readBackup(backupId));
+      return withMutationLock(async () => {
+        const backup = state.backups[backupId];
+        if (!backup) {
+          assertBackupNotCleared(backupId);
+          fail(404, '备份不存在');
+        }
+        requireTicket(req, backup.manifest.datasetId, 'backup:read');
+        return json(res, 200, await readBackup(backupId));
+      });
     }
 
     const downloadTicketMatch = method === 'POST' && /^\/v1\/backups\/([A-Za-z0-9._-]+)\/download-ticket$/.exec(url.pathname);
     if (downloadTicketMatch) {
       const backupId = safeId(downloadTicketMatch[1], 'backupId');
-      const backup = state.backups[backupId];
-      if (!backup) fail(404, '备份不存在');
-      requireTicket(req, backup.manifest.datasetId, 'backup:read');
-      const token = randomBytes(32).toString('base64url');
-      const ticketId = randomBytes(16).toString('hex');
-      const expiresAt = Date.now() + 5 * 60 * 1000;
-      state.downloadTickets[tokenHash(token)] = { ticketId, tokenHash: tokenHash(token), datasetId: backup.manifest.datasetId, backupId, expiresAt };
-      await save();
-      return json(res, 201, { ticketId, downloadUrl: '/api/v1/download/' + token, expiresAt });
+      return withMutationLock(async () => {
+        const backup = state.backups[backupId];
+        if (!backup) fail(404, '备份不存在');
+        requireTicket(req, backup.manifest.datasetId, 'backup:read');
+        const token = randomBytes(32).toString('base64url');
+        const ticketId = randomBytes(16).toString('hex');
+        const expiresAt = Date.now() + 5 * 60 * 1000;
+        state.downloadTickets[tokenHash(token)] = { ticketId, tokenHash: tokenHash(token), datasetId: backup.manifest.datasetId, backupId, expiresAt };
+        await save();
+        return json(res, 201, { ticketId, downloadUrl: '/api/v1/download/' + token, expiresAt });
+      });
     }
 
     const downloadMatch = /^\/v1\/download\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
@@ -381,9 +389,11 @@ export async function createBackupHttpServer({ dataDir }) {
         fail(401, '下载票据无效或已过期');
       }
       if (ticket.expiresAt <= Date.now()) fail(401, '下载票据无效或已过期');
-      assertNotCleared(ticket.datasetId);
-      if (!state.backups[ticket.backupId]) fail(404, '备份不存在');
-      return json(res, 200, await readBackup(ticket.backupId));
+      return withMutationLock(async () => {
+        assertNotCleared(ticket.datasetId);
+        if (!state.backups[ticket.backupId]) fail(404, '备份不存在');
+        return json(res, 200, await readBackup(ticket.backupId));
+      });
     }
 
     const clearMatch = method === 'POST' && /^\/v1\/datasets\/([A-Za-z0-9._-]+)\/clear$/.exec(url.pathname);
