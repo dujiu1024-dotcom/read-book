@@ -112,7 +112,7 @@ function createLock() {
   };
 }
 
-export async function createBackupHttpServer({ dataDir, uploadSessionTtlMs = 30 * 60 * 1000 }) {
+export async function createBackupHttpServer({ dataDir, uploadSessionTtlMs = 30 * 60 * 1000, downloadTicketTtlMs = 5 * 60 * 1000 }) {
   if (!dataDir) throw new Error('必须提供持久化数据目录');
   const root = path.resolve(dataDir);
   const stateFile = path.join(root, 'state.json');
@@ -398,7 +398,7 @@ export async function createBackupHttpServer({ dataDir, uploadSessionTtlMs = 30 
         requireTicket(req, backup.manifest.datasetId, 'backup:read');
         const token = randomBytes(32).toString('base64url');
         const ticketId = randomBytes(16).toString('hex');
-        const expiresAt = Date.now() + 5 * 60 * 1000;
+        const expiresAt = Date.now() + downloadTicketTtlMs;
         state.downloadTickets[tokenHash(token)] = { ticketId, tokenHash: tokenHash(token), datasetId: backup.manifest.datasetId, backupId, expiresAt };
         await save();
         return json(res, 201, { ticketId, downloadUrl: '/api/v1/download/' + token, expiresAt });
