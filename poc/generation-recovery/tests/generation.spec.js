@@ -231,3 +231,31 @@ test('接近自然完成时取消仍产生唯一终态，不暴露最终结果',
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+
+test('创建任务请求失败后可在刷新后使用原幂等键重试', async ({ page }) => {
+  let failedOnce = false;
+  await page.route('**/api/generations', async (route) => {
+    if (route.request().method() === 'POST' && !failedOnce) {
+      failedOnce = true;
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+  await page.goto('/');
+  await page.locator('#message').fill('retry fixture: do not duplicate user message');
+  await page.getByRole('button', { name: '发送消息' }).click();
+  await expect(page.locator('#status')).toContainText('可重试创建');
+  await expect(page.locator('#messages').locator('li')).toHaveCount(1);
+  await expect(page.locator('#retry')).toBeVisible();
+
+  // The pending local job survives refresh; retry reuses the same key and message.
+  await page.reload();
+  await expect(page.locator('#retry')).toBeVisible();
+  await page.getByRole('button', { name: '重试创建任务' }).click();
+  await expect(page.locator('#status')).toContainText('生成完成', { timeout: 20_000 });
+  await expect(page.locator('#messages').locator('li')).toHaveCount(2);
+  await expect(page.locator('#messages')).toContainText('retry fixture: do not duplicate user message');
+  await expect(page.locator('#messages')).toContainText('这是一条模拟生成结果。');
+});
