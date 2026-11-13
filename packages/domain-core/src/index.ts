@@ -187,3 +187,100 @@ export function appendMemoryVersion(
   }
   return structuredClone(next);
 }
+
+
+/** Provenance is explicit: user beliefs must never be conflated with the author's claims or AI inference. */
+export type MemoryViewpoint = "user" | "author" | "assistant_inference";
+
+export interface MemoryCandidate {
+  id: string;
+  title: string;
+  content: string;
+  viewpoint: MemoryViewpoint;
+  confidence: number;
+  ambiguity: number;
+  /** Value dimensions are independently assessed in [0, 1]; discussion count is not a proxy for value. */
+  value: {
+    novelty: number;
+    stability: number;
+    explanatoryPower: number;
+    discussionDepth: number;
+    relationStrength: number;
+  };
+  sourceMessageIds: MessageId[];
+  sourceReferences: SourceReference[];
+}
+
+export interface MemoryCandidatePolicy {
+  weights: MemoryCandidate["value"];
+  minimumValueScore: number;
+  minimumConfidence: number;
+  maximumAmbiguity: number;
+  minimumSourceMessages: number;
+}
+
+export interface MemoryCandidateEvaluation {
+  decision: "accept" | "needs_confirmation" | "reject";
+  score: number;
+  reasons: string[];
+}
+
+/** Evaluate a candidate transparently; thresholds are supplied by the caller, not silently frozen here. */
+export function evaluateMemoryCandidate(
+  candidate: MemoryCandidate,
+  policy: MemoryCandidatePolicy,
+): MemoryCandidateEvaluation {
+  const dimensions = Object.entries(candidate.value) as [keyof MemoryCandidate["value"], number][];
+  const weights = Object.entries(policy.weights) as [keyof MemoryCandidate["value"], number][];
+  const validUnit = (value: number) => Number.isFinite(value) && value >= 0 && value <= 1;
+
+  if (!candidate.id.trim() || !candidate.title.trim() || !candidate.content.trim()) {
+    throw new DomainRuleError("A memory candidate requires an id, title and content.");
+  }
+  if (!validUnit(candidate.confidence) || !validUnit(candidate.ambiguity)) {
+    throw new DomainRuleError("Candidate confidence and ambiguity must be between 0 and 1.");
+  }
+  if (dimensions.some(([, value]) => !validUnit(value))) {
+    throw new DomainRuleError("Every memory value dimension must be between 0 and 1.");
+  }
+  if (weights.some(([, value]) => !Number.isFinite(value) || value < 0)) {
+    throw new DomainRuleError("Memory value weights must be finite and non-negative.");
+  }
+  const totalWeight = weights.reduce((sum, [, weight]) => sum + weight, 0);
+  if (totalWeight <= 0) throw new DomainRuleError("At least one memory value weight must be positive.");
+  if (
+    !validUnit(policy.minimumValueScore) ||
+    !validUnit(policy.minimumConfidence) ||
+    !validUnit(policy.maximumAmbiguity) ||
+    !Number.isInteger(policy.minimumSourceMessages) ||
+    policy.minimumSourceMessages < 1
+  ) {
+    throw new DomainRuleError("Memory candidate policy thresholds are invalid.");
+  }
+
+  const score = dimensions.reduce((sum, [key, value]) => {
+    const weight = policy.weights[key];
+    return sum + value * weight;
+  }, 0) / totalWeight;
+
+  const reasons: string[] = [];
+  if (candidate.sourceMessageIds.length < policy.minimumSourceMessages) {
+    reasons.push("insufficient_source_messages");
+  }
+  if (candidate.sourceMessageIds.some((id) => !id.trim())) {
+    throw new DomainRuleError("Source message ids cannot be empty.");
+  }
+  if (candidate.confidence < policy.minimumConfidence) reasons.push("low_confidence");
+  if (candidate.ambiguity > policy.maximumAmbiguity) reasons.push("high_ambiguity");
+
+  if (reasons.includes("insufficient_source_messages")) {
+    return { decision: "reject", score, reasons };
+  }
+  if (reasons.length > 0) {
+    return { decision: "needs_confirmation", score, reasons };
+  }
+  if (score < policy.minimumValueScore) {
+    return { decision: "reject", score, reasons: ["insufficient_cognitive_value"] };
+  }
+  return { decision: "accept", score, reasons: ["value_and_provenance_requirements_met"] };
+}
