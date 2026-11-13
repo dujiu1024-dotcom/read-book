@@ -19,6 +19,21 @@ test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ p
   const afterReload = JSON.parse(await page.locator('#output').textContent());
   expect(afterReload.count).toBe(1000);
   expect(afterReload.integrity).toBe(true);
+  expect(afterReload.longTextIntegrity).toBe(true);
+});
+
+test('IndexedDB v1 升级到 v3 后保留原数据并补齐六实体结构', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { runMigrationProbe } = await import('/src/indexeddb.js');
+    return runMigrationProbe();
+  });
+  expect(result.migration).toBe('v1-to-v3');
+  expect(result.legacyThreadPreserved).toBe(true);
+  expect(result.legacyMessagePreserved).toBe(true);
+  expect(result.expectedStores).toBe(true);
+  expect(result.expectedIndexes).toBe(true);
+  expect(result.integrity).toBe(true);
 });
 
 test('批量替换事务中断时回滚，原数据集保持完整', async ({ page }) => {
