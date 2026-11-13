@@ -79,3 +79,35 @@ test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async 
   expect(result.relationCount).toBe(10000);
   expect(result.relationQueryMs.p95).toBeGreaterThan(0);
 });
+
+test('多标签页通过 Web Locks 单写者与只读降级，并支持锁交接', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Web Locks 跨标签页主测在 Chromium');
+  await page.goto('/');
+  const supported = await page.evaluate(() => Boolean(navigator.locks?.request));
+  test.skip(!supported, '当前浏览器未提供 Web Locks API');
+  const firstMode = await page.evaluate(async () => {
+    const { acquireDatasetWriter } = await import('/src/coordination.js');
+    window.firstWriter = await acquireDatasetWriter('lock-handoff-fixture');
+    return window.firstWriter.mode;
+  });
+  expect(firstMode).toBe('writer');
+
+  const second = await page.context().newPage();
+  await second.goto('/');
+  const blockedMode = await second.evaluate(async () => {
+    const { acquireDatasetWriter } = await import('/src/coordination.js');
+    window.blockedWriter = await acquireDatasetWriter('lock-handoff-fixture');
+    return window.blockedWriter.mode;
+  });
+  expect(blockedMode).toBe('readonly');
+  await page.evaluate(() => { window.firstWriter.release(); window.firstWriter.close(); });
+  const handedOffMode = await second.evaluate(async () => {
+    window.blockedWriter.close();
+    const { acquireDatasetWriter } = await import('/src/coordination.js');
+    window.nextWriter = await acquireDatasetWriter('lock-handoff-fixture');
+    return window.nextWriter.mode;
+  });
+  expect(handedOffMode).toBe('writer');
+  await second.evaluate(() => { window.nextWriter.release(); window.nextWriter.close(); });
+  await second.close();
+});
