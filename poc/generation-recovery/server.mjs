@@ -46,7 +46,8 @@ async function loadState() {
       idempotency.set(task.idempotencyKey, {
         generation_id: task.id,
         status: task.status,
-        idempotency_key: task.idempotencyKey
+        idempotency_key: task.idempotencyKey,
+        request_hash: task.requestHash || null
       });
       // A process restart interrupts execution, not the durable job. Resume from
       // the last persisted delta; sequence/event IDs remain stable.
@@ -104,10 +105,17 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/generations') {
       const idempotencyKey = req.headers['idempotency-key'];
       if (!idempotencyKey) return json(res, 400, { error: 'Idempotency-Key required' });
-      if (idempotency.has(idempotencyKey)) return json(res, 200, { ...idempotency.get(idempotencyKey), reused: true });
       const input = await body(req);
       if (typeof input.message !== 'string' || !input.message.trim()) return json(res, 400, { error: 'message required' });
-      const task = { id: randomUUID(), idempotencyKey, status: 'queued', message: input.message, sequence: 0, events: [], finalResult: null };
+      const requestHash = createHash('sha256').update(input.message).digest('hex');
+      if (idempotency.has(idempotencyKey)) {
+        const existing = idempotency.get(idempotencyKey);
+        if (existing.request_hash && existing.request_hash !== requestHash) {
+          return json(res, 409, { error: 'Idempotency-Key was already used with a different request payload' });
+        }
+        return json(res, 200, { ...existing, reused: true });
+      }
+      const task = { id: randomUUID(), idempotencyKey, requestHash, status: 'queued', message: input.message, sequence: 0, events: [], finalResult: null };
       tasks.set(task.id, task);
       const receipt = { generation_id: task.id, status: task.status, idempotency_key: idempotencyKey, request_hash: requestHash };
       idempotency.set(idempotencyKey, receipt);
