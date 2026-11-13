@@ -10,8 +10,8 @@ async function closeServer(app) {
   if (!app?.server?.listening) return;
   await new Promise((resolve, reject) => app.server.close((error) => error ? reject(error) : resolve()));
 }
-async function startServer(dataDir) {
-  const app = await listenBackupHttpServer({ dataDir, port: 0, host: '127.0.0.1' });
+async function startServer(dataDir, options = {}) {
+  const app = await listenBackupHttpServer({ dataDir, port: 0, host: '127.0.0.1', ...options });
   return { app, base: 'http://127.0.0.1:' + app.server.address().port };
 }
 async function request(base, route, { method = 'GET', token, body } = {}) {
@@ -53,9 +53,9 @@ async function uploadBackup(base, ticket, encrypted, idempotencyKey = 'idem-' + 
   assert.equal(complete.status, 200, JSON.stringify(complete.body));
   return complete.body;
 }
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'read-book-backup-http-'));
-  let running = await startServer(dataDir);
+  let running = await startServer(dataDir, options);
   t.after(async () => {
     await closeServer(running.app);
     await rm(dataDir, { recursive: true, force: true });
@@ -65,7 +65,7 @@ async function fixture(t) {
     get base() { return running.base; },
     async restart() {
       await closeServer(running.app);
-      running = await startServer(dataDir);
+      running = await startServer(dataDir, options);
     }
   };
 }
@@ -278,6 +278,30 @@ test('清除与完成并发竞态不能复活已清除的数据集', async (t) =
   assert.equal(clear.status, 200);
   const afterRace = await request(env.base, '/v1/backups/' + encrypted.manifest.backupId, { token: ticket.token });
   assert.equal(afterRace.status, 410);
+});
+
+test('上传会话过期后可用原幂等键重新初始化，不复用旧分块', async (t) => {
+  const env = await fixture(t, { uploadSessionTtlMs: 20 });
+  const datasetId = 'http-session-expiry';
+  const ticket = await issueTicket(env.base, datasetId);
+  const encrypted = await createEncryptedBackup({ datasetId, sequence: 1, payload: { value: 'session-expiry' } });
+  const key = 'expired-session-key';
+  const first = await request(env.base, '/v1/backups/init', {
+    method: 'POST', token: ticket.token,
+    body: { manifest: encrypted.manifest, idempotencyKey: key }
+  });
+  assert.equal(first.status, 201);
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  const expired = await request(env.base, '/v1/backups/' + encrypted.manifest.backupId + '/missing', { token: ticket.token });
+  assert.equal(expired.status, 410);
+  const restarted = await request(env.base, '/v1/backups/init', {
+    method: 'POST', token: ticket.token,
+    body: { manifest: encrypted.manifest, idempotencyKey: key }
+  });
+  assert.equal(restarted.status, 201);
+  assert.equal(restarted.body.resumed, false);
+  const missing = await request(env.base, '/v1/backups/' + encrypted.manifest.backupId + '/missing', { token: ticket.token });
+  assert.deepEqual(missing.body.missing, encrypted.chunks.map((chunk) => chunk.chunkIndex));
 });
 
 test('服务端拒绝不完整分块和被篡改密文，重复上传同一密文幂等', async (t) => {
