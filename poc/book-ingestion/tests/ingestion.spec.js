@@ -5,7 +5,7 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
     await page.goto('/');
     await page.locator('#fixture').selectOption(fixture);
     await page.getByRole('button', { name: '导入固定样本' }).click();
-    await expect(page.locator('#status')).toContainText('导入成功', { timeout: 60_000 });
+    await expect(page.locator('#status')).toContainText('导入成功', { timeout: 20_000 });
     const result = JSON.parse(await page.locator('#output').textContent());
     expect(result.id).toMatch(/^[a-f0-9]{64}$/);
     expect(result.citationCount).toBeGreaterThan(0);
