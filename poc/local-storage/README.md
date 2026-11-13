@@ -56,6 +56,21 @@ npm run build
 | 迁移与批量一致性快照 | 未实现 | 后续迭代 |
 | P50/P95、内存、存储体积 | 已加入采集 | 尚未在目标 Chrome/Edge 环境完成实测与报告 |
 
+## Chromium CI 100k 基准结果（Run 43425500315）
+
+测试环境：GitHub Actions Linux headless Chromium；100,000 条消息；5 轮写入/查询；Web Locks 单写者协调已启用。数值为本次运行观测值，不代表 Chrome/Edge 桌面稳定版。
+
+| 指标 | P50 | P95 |
+|---|---:|---:|
+| IndexedDB 批量写入 | 5,356 ms | 5,853 ms |
+| IndexedDB 数据集查询（getAll） | 2,550 ms | 3,640 ms |
+| IndexedDB Thread 关联查询 | 271 ms | 296 ms |
+
+- JS Heap：约 103 MB（运行结束时 performance.memory.usedJSHeapSize）。
+- Storage Estimate：usage 约 112.9 MB；quota 约 10.85 GB；usageDetails.indexedDB 约 112.9 MB。
+- persisted() 返回 false，persist() 请求返回 false：当前 CI 环境未授予持久化存储权限；这不影响 IndexedDB 本次读写测试，但意味着不能声称已取得持久化保护。
+- SQLite OPFS 100k：本次 CI Worker 未暴露 OPFS VFS，测试明确跳过；没有 SQLite 性能数据。
+
 ## 已知技术前提
 
 SQLite 官方 WASM npm 包说明：OPFS 后端只能在 Worker 中使用；示例部署需要 COOP: same-origin 与 COEP: require-corp。Node 环境只支持内存数据库，不能代替浏览器 OPFS 实测。
