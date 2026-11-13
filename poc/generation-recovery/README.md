@@ -24,7 +24,7 @@ Playwright 配置会自动启动 Mock Server 与 Vite；本地手工运行时需
 
 ## 已实现协议语义
 
-- 用户消息先写入 IndexedDB，再发起 POST 请求。
+- 用户消息先写入 IndexedDB，再发起 POST 请求；任务创建失败后保留本地待重试任务，刷新后仍可使用原 Idempotency-Key 重试，不重复插入用户消息。
 - 使用 Idempotency-Key 创建 generation_id；重复提交相同正文复用原任务，同一幂等键提交不同正文返回 409；服务端持久化正文 SHA-256 摘要，不在日志中输出正文。
 - Mock Server 任务独立于浏览器 SSE 连接。
 - SSE 事件带 event_id、sequence、generation_id；支持按 after 序号重放事件。
