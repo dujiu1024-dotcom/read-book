@@ -124,22 +124,33 @@ function queryBatch(count, datasetId) {
     [datasetId, datasetId + ':thread:0']
   );
   const relationQueryMs = performance.now() - relationStart;
-  return { count: Number(rows[0].count), relationCount: Number(relation[0].count), queryMs, relationQueryMs };
+  const graph = execute(`
+    SELECT COUNT(*) AS count FROM thread t
+    JOIN reading_round rr ON rr.thread_id = t.id AND rr.dataset_id = t.dataset_id
+    JOIN note n ON n.reading_round_id = rr.id AND n.dataset_id = rr.dataset_id
+    JOIN memory mm ON mm.note_id = n.id AND mm.dataset_id = n.dataset_id
+    JOIN source s ON s.id = n.source_id AND s.dataset_id = n.dataset_id
+    WHERE t.dataset_id = ?
+  `, [datasetId]);
+  return {
+    count: Number(rows[0].count), relationCount: Number(relation[0].count),
+    relatedThreadCount: Number(graph[0].count), queryMs, relationQueryMs
+  };
 }
 async function run(count, datasetId) {
   const writeSamples = [], querySamples = [], relationSamples = [];
-  let finalCount = 0, relationCount = 0;
+  let finalCount = 0, relationCount = 0, relatedThreadCount = 0;
   for (let run = 0; run < RUNS; run++) {
     writeSamples.push(writeBatch(count, datasetId));
     const result = queryBatch(count, datasetId);
     querySamples.push(result.queryMs);
     relationSamples.push(result.relationQueryMs);
     finalCount = result.count;
-    relationCount = result.relationCount;
+    relationCount = result.relationCount;\n    relatedThreadCount = result.relatedThreadCount;
   }
   return {
     adapter: 'SQLite WASM + OPFS', datasetId, count: finalCount, relationCount,
-    runs: RUNS, integrity: finalCount === count && relationCount === Math.ceil(count / 10),
+    runs: RUNS, integrity: finalCount === count && relationCount === Math.ceil(count / 10) && relatedThreadCount === 10, relatedThreadCount,
     writeMs: { p50: percentile(writeSamples, 0.5), p95: percentile(writeSamples, 0.95), samples: writeSamples },
     queryMs: { p50: percentile(querySamples, 0.5), p95: percentile(querySamples, 0.95), samples: querySamples },
     relationQueryMs: { p50: percentile(relationSamples, 0.5), p95: percentile(relationSamples, 0.95), samples: relationSamples }
