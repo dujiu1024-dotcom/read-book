@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:read-book:book-package:1.0.0:chapters",
+  "title": "Read Book Chapters 1.0.0",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": [
+      "chapter_id",
+      "parent_chapter_id",
+      "title",
+      "level",
+      "order_index",
+      "start_locator",
+      "end_locator"
+    ],
+    "properties": {
+      "chapter_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "parent_chapter_id": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 128
+      },
+      "title": {
+        "type": "string",
+        "minLength": 1
+      },
+      "level": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "order_index": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "start_locator": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": true
+      },
+      "end_locator": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": true
+      },
+      "page_start": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 1
+      },
+      "page_end": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 1
+      },
+      "source_heading": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "additionalProperties": false
+  }
+}
