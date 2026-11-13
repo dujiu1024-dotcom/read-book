@@ -49,3 +49,8 @@ export function terminateSqliteWorkerForTest() {
   for (const item of pending.values()) item.reject(new Error('SQLite Worker 已由故障注入终止'));
   pending.clear();
 }
+
+export async function checkSqliteConstraints(datasetId) {
+  await request('init');
+  return request('constraints', { datasetId });
+}
