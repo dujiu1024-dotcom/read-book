@@ -21,7 +21,7 @@
 - #4 生成任务 PoC 使用 Mock Server，已验证消息先落本地、幂等、流式事件和断线恢复；不代表生产队列或真实模型服务完成。
 - #5 书籍包 Schema/校验器与 #9 质量门禁已有 CI 证据，仍需最终审查。
 - #6 当前为合成语料和 Mock 检索评测，不构成真实中文书籍或生产 Agent 质量基线。
-- #7 身份、数据集与状态机契约仍需完成一致性验收。\n- #28 已合并 PR #29：完成可配置的认知候选价值评估、观点来源区分、置信度/歧义度与 Citation 来源门禁；抽取、版本演变和持久化仍在开发。
+- #7 身份、数据集与状态机契约仍需完成一致性验收。\n- #28 已合并 PR #29：完成可配置的认知候选价值评估、观点来源区分、置信度/歧义度与 Citation 来源门禁；抽取、版本演变和持久化仍在开发。\n- #27 已合并 PR #31：完成 GenerationTransport 协议、事件序号校验和本地先保存后请求的编排边界；真实 HTTP/SSE 服务仍未接入。
 
 PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不等于生产安全或完整产品验收通过。项目不安排实体手机/平板真机测试，以自动化浏览器测试、响应式视口矩阵和标准桌面浏览器兼容性检查作为验收方式。
 
@@ -35,7 +35,7 @@ PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不�
 - [x] [#8 PC 阅读交互原型](https://github.com/dujiu1024-dotcom/read-book/issues/8)（PR #20/#22 已合并；原型验收完成）
 - [ ] [#25 正式阅读客户端](https://github.com/dujiu1024-dotcom/read-book/issues/25)（PR #30 已合并：BookContentProvider 解耦；真实书籍 Provider 待接入）
 - [ ] [#26 本地个人数据 Repository](https://github.com/dujiu1024-dotcom/read-book/issues/26)
-- [ ] [#27 Agent 生成适配器与可靠消息交付](https://github.com/dujiu1024-dotcom/read-book/issues/27)
+- [ ] [#27 Agent 生成适配器与可靠消息交付](https://github.com/dujiu1024-dotcom/read-book/issues/27)（PR #31 已合并：协议适配与先保存后请求；真实 Transport 待接入）
 - [ ] [#28 自动认知沉淀、版本演变与来源追溯](https://github.com/dujiu1024-dotcom/read-book/issues/28)（PR #29 已合并：认知候选评估规则）
 
 推进原则：#25 可先通过 Provider 契约独立开发，不等待所有 PoC 完成；#26 的正式存储实现须依据 #1 的充分验证结论；#27 可先用 Mock/契约测试开发适配层；#28 可先用测试夹具完成认知规则和版本模型。
