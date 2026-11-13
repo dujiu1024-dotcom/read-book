@@ -236,6 +236,7 @@ test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失�
   } else {
     expect(output.count).toBe(1000);
     expect(output.integrity).toBe(true);
+    expect(output.longTextIntegrity).toBe(true);
     await page.evaluate(async () => {
       const { terminateSqliteWorkerForTest } = await import('/src/sqlite.js');
       terminateSqliteWorkerForTest();
@@ -246,6 +247,7 @@ test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失�
     }, output.datasetId);
     expect(recovered.count).toBe(1000);
     expect(recovered.integrity).toBe(true);
+    expect(recovered.longTextIntegrity).toBe(true);
     await page.reload();
     await page.getByRole('button', { name: '完整性检查' }).click();
     await expect(page.locator('#status')).toContainText('完整性检查通过', { timeout: 60_000 });
@@ -268,6 +270,7 @@ test('IndexedDB 10k 消息基准输出 P50/P95 与完整关系校验', async ({ 
   }));
   expect(result.count).toBe(10000);
   expect(result.integrity).toBe(true);
+  expect(result.longTextIntegrity).toBe(true);
   expect(result.runs).toBe(5);
   expect(result.relatedThreadCount).toBe(10);
 });
@@ -320,6 +323,7 @@ test('SQLite OPFS 10k 消息基准输出 P50/P95 与完整关系校验', async (
   }));
   expect(result.count).toBe(10000);
   expect(result.integrity).toBe(true);
+  expect(result.longTextIntegrity).toBe(true);
   expect(result.runs).toBe(5);
   expect(result.relatedThreadCount).toBe(10);
 });
@@ -348,6 +352,7 @@ test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async 
   }));
   expect(result.count).toBe(100000);
   expect(result.integrity).toBe(true);
+  expect(result.longTextIntegrity).toBe(true);
   expect(result.runs).toBe(5);
   expect(result.writeMs.samples).toHaveLength(5);
   expect(result.queryMs.p50).toBeGreaterThan(0);
