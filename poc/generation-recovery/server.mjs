@@ -45,6 +45,7 @@ async function execute(task) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1:4177');
   try {
+    if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true });
     if (req.method === 'POST' && url.pathname === '/api/generations') {
       const idempotencyKey = req.headers['idempotency-key'];
       if (!idempotencyKey) return json(res, 400, { error: 'Idempotency-Key required' });
