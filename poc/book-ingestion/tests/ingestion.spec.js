@@ -7,7 +7,7 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
     await page.getByRole('button', { name: '导入固定样本' }).click();
     await expect(page.locator('#status')).toContainText('导入成功', { timeout: 20_000 });
     const result = JSON.parse(await page.locator('#output').textContent());
-    expect(result.id).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.id).toMatch(/^[a-f0-9]{64}$/);\n    console.log('FIXTURE_SHA256', fixture, result.id);
     expect(result.citationCount).toBeGreaterThan(0);
     if (fixture === 'epub-3') {
       expect(result.parsed.chapters[0].sampleCfi).toContain('epubcfi(');
@@ -35,3 +35,31 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
     await expect(page.locator('#saved-books')).toContainText(fixture);
   });
 }
+
+
+test('损坏 EPUB/PDF 导入失败且不写入本地书库', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#file').setInputFiles({
+    name: 'broken.epub', mimeType: 'application/epub+zip',
+    buffer: Buffer.from('this is not a valid ZIP or EPUB package')
+  });
+  await expect(page.locator('#status')).toContainText('导入失败', { timeout: 20_000 });
+  await expect(page.locator('#saved-books')).not.toContainText('broken.epub');
+
+  await page.locator('#file').setInputFiles({
+    name: 'broken.pdf', mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.4\\nthis is a deliberately truncated PDF')
+  });
+  await expect(page.locator('#status')).toContainText('导入失败', { timeout: 20_000 });
+  await expect(page.locator('#saved-books')).not.toContainText('broken.pdf');
+});
+
+test('不支持的文件格式明确失败且不污染本地书库', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#file').setInputFiles({
+    name: 'unsupported.mobi', mimeType: 'application/octet-stream',
+    buffer: Buffer.from('fixture')
+  });
+  await expect(page.locator('#status')).toContainText('暂不支持该文件格式');
+  await expect(page.locator('#saved-books')).not.toContainText('unsupported.mobi');
+});
