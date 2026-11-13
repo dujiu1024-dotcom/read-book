@@ -253,7 +253,9 @@ export async function checkIndexedDb(datasetId) {
 
 export async function runMigrationProbe() {
   const name = DB_NAME + '-migration-' + crypto.randomUUID();
+  const v3Name = name + '-v3';
   let db;
+  let v3Db;
   try {
     await new Promise((resolve, reject) => {
       const request = indexedDB.open(name, 1);
@@ -281,35 +283,86 @@ export async function runMigrationProbe() {
     });
     db = await openDb(name);
     const migrated = await new Promise((resolve, reject) => {
-      const tx = db.transaction(['threads', 'messages'], 'readonly');
+      const tx = db.transaction(['threads', 'messages', 'readingRounds'], 'readonly');
       const threadRequest = tx.objectStore('threads').get('legacy-thread');
       const messageRequest = tx.objectStore('messages').get('legacy-message');
       const messageIndexes = [...tx.objectStore('messages').indexNames];
+      const roundStore = tx.objectStore('readingRounds');
+      const roundIndexes = [...roundStore.indexNames];
+      const roundSequenceIndex = roundStore.index('threadSequence');
+      const roundSequenceUnique = roundSequenceIndex.unique &&
+        Array.isArray(roundSequenceIndex.keyPath) &&
+        roundSequenceIndex.keyPath[0] === 'threadId' &&
+        roundSequenceIndex.keyPath[1] === 'sequence';
       tx.oncomplete = () => resolve({
         thread: threadRequest.result,
         message: messageRequest.result,
         stores: [...db.objectStoreNames],
-        messageIndexes
+        messageIndexes, roundIndexes, roundSequenceUnique
       });
       tx.onerror = () => reject(tx.error);
     });
     const expectedStores = STORES.every((store) => migrated.stores.includes(store));
     const expectedIndexes = ['datasetId', 'threadSequence'].every((index) => migrated.messageIndexes.includes(index));
+    const v1RoundIndexCorrect = migrated.roundSequenceUnique && !migrated.roundIndexes.includes('threadId');
+
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.open(v3Name, 3);
+      request.onupgradeneeded = () => {
+        const legacy = request.result;
+        const rounds = legacy.createObjectStore('readingRounds', { keyPath: 'id' });
+        rounds.createIndex('datasetId', 'datasetId');
+        rounds.createIndex('threadId', 'threadId', { unique: true });
+      };
+      request.onsuccess = () => {
+        const legacy = request.result;
+        const tx = legacy.transaction('readingRounds', 'readwrite');
+        tx.objectStore('readingRounds').put({
+          id: 'v3-round', datasetId: 'v3', threadId: 'v3-thread', sequence: 7
+        });
+        tx.oncomplete = () => { legacy.close(); resolve(); };
+        tx.onerror = () => { legacy.close(); reject(tx.error); };
+        tx.onabort = () => { legacy.close(); reject(tx.error || new Error('v3 迁移夹具创建中止')); };
+      };
+      request.onerror = () => reject(request.error);
+    });
+    v3Db = await openDb(v3Name);
+    const v3RoundMigration = await new Promise((resolve, reject) => {
+      const tx = v3Db.transaction('readingRounds', 'readonly');
+      const request = tx.objectStore('readingRounds').get('v3-round');
+      const store = tx.objectStore('readingRounds');
+      const indexNames = [...store.indexNames];
+      const index = store.index('threadSequence');
+      tx.oncomplete = () => resolve({
+        preserved: request.result?.sequence === 7,
+        compositeUnique: index.unique && Array.isArray(index.keyPath) &&
+          index.keyPath[0] === 'threadId' && index.keyPath[1] === 'sequence',
+        oldUniqueIndexRemoved: !indexNames.includes('threadId')
+      });
+      tx.onerror = () => reject(tx.error);
+    });
+    const v3RoundIndexCorrect = v3RoundMigration.preserved &&
+      v3RoundMigration.compositeUnique && v3RoundMigration.oldUniqueIndexRemoved;
     return {
-      adapter: 'IndexedDB', migration: 'v1-to-v4',
+      adapter: 'IndexedDB', migration: 'v1/v3-to-v4',
       legacyThreadPreserved: migrated.thread?.title === 'Legacy Thread',
       legacyMessagePreserved: migrated.message?.content === '迁移前原文',
       expectedStores, expectedIndexes,
+      v1RoundIndexCorrect, v3RoundIndexCorrect,
       integrity: migrated.thread?.title === 'Legacy Thread' &&
-        migrated.message?.content === '迁移前原文' && expectedStores && expectedIndexes
+        migrated.message?.content === '迁移前原文' && expectedStores &&
+        expectedIndexes && v1RoundIndexCorrect && v3RoundIndexCorrect
     };
   } finally {
     db?.close();
-    await new Promise((resolve) => {
-      const request = indexedDB.deleteDatabase(name);
-      request.onsuccess = resolve;
-      request.onerror = resolve;
-      request.onblocked = resolve;
-    });
+    v3Db?.close();
+    for (const databaseName of [name, v3Name]) {
+      await new Promise((resolve) => {
+        const request = indexedDB.deleteDatabase(databaseName);
+        request.onsuccess = resolve;
+        request.onerror = resolve;
+        request.onblocked = resolve;
+      });
+    }
   }
 }
