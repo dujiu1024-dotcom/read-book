@@ -6,6 +6,7 @@ import { dirname, resolve } from 'node:path';
 const PORT = Number(process.env.PORT || 4177);
 const STATE_FILE = resolve(process.env.GENERATION_STATE_FILE || './.poc-generation-state.json');
 const tokens = ['这是', '一条', '模拟', '生成', '结果。'];
+const TOKEN_DELAY_MS = Number(process.env.GENERATION_TOKEN_DELAY_MS || 180);
 const tasks = new Map();
 const idempotency = new Map();
 const subscribers = new Map();
@@ -75,7 +76,7 @@ async function execute(task) {
   await persist();
   const alreadyProduced = task.events.filter((event) => event.type === 'delta').length;
   for (let index = alreadyProduced; index < tokens.length; index++) {
-    await delay(180);
+    await delay(TOKEN_DELAY_MS);
     if (task.status === 'cancelled') return;
     emit(task, 'delta', { text: tokens[index] });
     await persist();
