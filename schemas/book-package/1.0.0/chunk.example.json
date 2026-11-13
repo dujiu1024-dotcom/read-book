@@ -1,0 +1,20 @@
+{
+  "chunk_id": "chunk-001",
+  "chapter_id": "chapter-001",
+  "chapter_title": "第一章",
+  "order_index": 0,
+  "content": "这是一段用于验证书籍包结构的示例原文。",
+  "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "locator_type": "epub_cfi",
+  "start_locator": {
+    "cfi": "/6/2"
+  },
+  "end_locator": {
+    "cfi": "/6/4"
+  },
+  "page_number": null,
+  "paragraph_start": 0,
+  "paragraph_end": 0,
+  "parser_version": "1.2.3",
+  "chunker_version": "0.1.0"
+}
