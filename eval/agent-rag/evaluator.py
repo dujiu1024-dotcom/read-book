@@ -76,6 +76,7 @@ def evaluate(corpus_rows: list[dict[str, Any]], question_rows: list[dict[str, An
     answerable_abstentions = 0
     forbidden_events = []
     latencies, input_tokens, output_tokens = [], [], []
+    run_metadata_values = []
     by_type: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "questions": 0, "recall_values": [], "citation_hits": 0,
         "citation_total": 0, "citation_covered": 0, "answerable": 0
@@ -83,6 +84,9 @@ def evaluate(corpus_rows: list[dict[str, Any]], question_rows: list[dict[str, An
 
     for qid, question in questions.items():
         prediction = predictions[qid]
+        metadata = prediction.get("run_metadata")
+        if metadata is not None and metadata not in run_metadata_values:
+            run_metadata_values.append(metadata)
         gold = set(question.get("gold_evidence_chunk_ids") or [])
         retrieved = prediction.get("retrieved_chunk_ids") or []
         if not isinstance(retrieved, list) or any(not isinstance(x, str) for x in retrieved):
@@ -190,6 +194,7 @@ def evaluate(corpus_rows: list[dict[str, Any]], question_rows: list[dict[str, An
         "report_version": "1.0.0",
         "evaluation_status": "measured_on_supplied_predictions",
         "dataset_provenance": "synthetic_fixture_not_real_book_baseline",
+        "prediction_provenance": run_metadata_values,
         "metric_notes": {
             "citation_precision": "Gold evidence chunk membership; semantic support still needs human review.",
             "citation_coverage": "Share of answerable questions with at least one gold evidence citation.",
