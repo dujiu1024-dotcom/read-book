@@ -15,6 +15,7 @@
 - [开源项目拆解与复用评估](docs/opensource-review.md)
 - [ReadAny + TextSage 深度复用评估](docs/reuse-assessment.md)
 - [决策记录](docs/decision-log.md)
+- [项目记录审查与下一步清单](docs/project-audit.md)
 
 ## 当前阶段
 
