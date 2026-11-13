@@ -343,7 +343,38 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 
 事件至少包含 event_id、local_dataset_id、thread_id（适用时）、reading_round_id（适用时）、entity_id、event_type、occurred_at、schema_version。事件日志存本地并纳入加密备份；服务端不得为审计而保存私人消息正文。
 
-## 14. 尚待确认与验证
+## 14. 契约测试规格（Given / When / Then）
+
+以下是供后续实现和自动化测试直接采用的行为规格，不代表当前已有可执行测试或 PoC 已通过。
+
+| 编号 | Given（前置条件） | When（事件） | Then（预期结果） |
+|---|---|---|---|
+| SM-001 | 当前主线单元为 not_presented | 原文成功展示并完成本地事务 | 单元依次记录 presented、awaiting_user；绑定当前轮次和原文定位 |
+| SM-002 | 当前单元为 awaiting_user，尚无实质讨论 | 用户要求继续 | 不推进主线；询问用户是否已理解并确认略读 |
+| SM-003 | 当前单元为 awaiting_user | 用户明确确认已理解并略读 | 单元转为 skipped；记录确认事件后才允许推进 |
+| SM-004 | 当前单元为 discussion_active | 用户主动要求继续 | 单元转为 discussed；在本地事务中推进到下一主线单元 |
+| SM-005 | 当前主线位置为 N | 用户临时查看其他章节 | 创建 temporary PresentedSource；ReadingRoundState 和 ReadingUnitProgress 不变 |
+| SM-006 | 某单元已为 discussed 或 skipped | 用户要求复习/再次深入讨论 | 创建 review PresentedSource；原单元状态和轮次完成状态不回退 |
+| SM-007 | 当前轮次至少一个主线单元未进入 discussed/skipped | 用户请求结束阅读 | 轮次不得标记 completed |
+| SM-008 | 当前轮次全部主线单元均为 discussed/skipped | 最后一个单元完成事务成功 | 轮次可标记 completed；不得自动创建下一轮 |
+| SM-009 | 同一 LocalDataSet + BookRevision 已有 Thread | 再次打开该版本阅读 | 返回原 Thread，不创建第二条 Thread |
+| SM-010 | Thread 为 archived | 用户重新打开 | 同一 Thread 回到 active；历史消息和来源关系保留 |
+| SM-011 | 用户消息尚未成功写入本地 | 用户发送消息并触发生成 | 不得先发起网络生成；本地持久化失败时不提交生成请求 |
+| SM-012 | GenerationJob 已 completed，但客户端尚未落本地结果 | 客户端重连并查询 generation_id | 获取完整最终结果并尝试本地事务写入；不得仅依赖 SSE 最后一条事件 |
+| SM-013 | 同一生成请求已使用 Idempotency-Key 创建任务 | 客户端以同一键重试 | 返回同一 GenerationJob，不重复执行生成 |
+| SM-014 | 应用启动且本地存在未备份变更 | 启动备份检查遇到离线/网络错误 | 应用和本地阅读继续可用；保留待备份状态，不丢失本地变更 |
+| SM-015 | 增量备份请求缺少已提交 parent_backup_id | 服务端验收备份 | 拒绝将其提交为可恢复增量备份 |
+| SM-016 | 数据集已 cleared，且存在并发中的上传完成请求 | 请求提交 BackupManifest | 最终提交检查命中墓碑并拒绝；不得复活数据集或推进 last_acked_sequence |
+| SM-017 | 用户已登录账号 B，但当前设备仅有账号 A 的数据集绑定 | 用户尚未明确选择数据集 | 不展示、不读取、不写入账号 A 的数据集 |
+| SM-018 | Account 已注销，服务器仍保留加密备份 | 用户查询账号状态或重新注册 | 不级联删除备份；新账号不得自动接管旧数据集 |
+| SM-019 | RecoveryChallenge 已 consumed 或 expired | 客户端重放同一挑战 | 拒绝重放；必须创建新挑战 |
+| SM-020 | BackupAuthorization 为 active，但 DataSetLifecycle 已 cleared | 用户请求下载或恢复 | 墓碑优先，授权立即不可用；请求拒绝 |
+| SM-021 | LocalDataSet 为非空，用户启动恢复 | 恢复流程开始 | 先保护现有数据；不得直接覆盖，必须由产品流程明确处理目标数据集 |
+| SM-022 | LocalDataSet 处于 restore_pending | 解密、迁移或关系校验任一步失败 | 不提交半成品；保留原数据/快照并记录失败原因 |
+| SM-023 | ExternalIdentity 已 revoked | 使用原 provider_subject 登录 | 拒绝旧映射；重新绑定必须创建新记录并通过唯一性校验 |
+| SM-024 | AccountDataSetBinding 为 inactive | 用户明确重新选择该账号下的数据集 | 重新校验权限与 DataSetLifecycle 后才可转为 active |
+
+## 15. 尚待确认与验证
 
 ### 需要产品确认
 1. 简短回应（如“确实”“不对”）是否可由 Agent 结合上下文判定为实质性讨论；建议允许上下文判断，但不得依赖字数阈值。
