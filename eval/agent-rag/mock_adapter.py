@@ -42,7 +42,7 @@ def build_predictions(corpus: list[dict], questions: list[dict], top_k: int) -> 
         predictions.append({
             "question_id": question["question_id"],
             "retrieved_chunk_ids": [item[1] for item in ranked[:top_k]],
-            "citations": citations,
+            "citations": [],
             "claims": [],
             "abstained": not bool(selected),
             "agent_actions": [],
@@ -54,6 +54,7 @@ def build_predictions(corpus: list[dict], questions: list[dict], top_k: int) -> 
                 "adapter_version": "0.1.0",
                 "run_kind": "mock_retrieval_only",
                 "answer_generation": "none",
+                "citation_generation": "none",
                 "gold_labels_used_for_retrieval": False
             }
         })
