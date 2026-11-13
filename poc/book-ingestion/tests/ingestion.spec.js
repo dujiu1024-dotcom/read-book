@@ -42,6 +42,8 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
     if (fixture === 'pdf-3') {
       expect(result.parsed.repeatedEdgeText).toContain('Header - Sample Book');
       expect(result.parsed.repeatedEdgeText).toContain('Footer - Sample Book');
+      expect(result.parsed.pages[0].printedPage).toBe(1);
+      expect(result.parsed.pages[1].printedPage).toBe(2);
       expect(result.parsed.pages[0].text).not.toContain('Header - Sample Book');
       expect(result.parsed.pages[0].text).not.toContain('Footer - Sample Book');
     }
