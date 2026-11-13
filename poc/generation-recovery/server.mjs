@@ -116,7 +116,7 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 200, { ...existing, reused: true });
       }
-      const task = { id: randomUUID(), idempotencyKey, requestHash, status: 'queued', message: input.message, sequence: 0, events: [], finalResult: null };
+      const task = { id: randomUUID(), idempotencyKey, requestHash, status: 'queued', sequence: 0, events: [], finalResult: null };
       tasks.set(task.id, task);
       const receipt = { generation_id: task.id, status: task.status, idempotency_key: idempotencyKey, request_hash: requestHash };
       idempotency.set(idempotencyKey, receipt);
