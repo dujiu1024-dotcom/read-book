@@ -14,11 +14,11 @@ import {
 
 const request: GenerationRequest = {
   client_generation_id: "client-generation-0001",
-  thread_id: "thread-1",
-  book_revision_id: "revision-1",
-  user_message: { local_message_id: "message-1", content: "用户原始表达" },
+  thread_id: "11111111-1111-4111-8111-111111111111",
+  book_revision_id: "22222222-2222-4222-8222-222222222222",
+  user_message: { local_message_id: "33333333-3333-4333-8333-333333333333", content: "用户原始表达" },
   context: {
-    current_source: { structure_node_id: "node-1", excerpt: "当前原文片段" },
+    current_source: { structure_node_id: "44444444-4444-4444-8444-444444444444", excerpt: "当前原文片段" },
     recent_messages: [{ role: "user", content: "之前的讨论" }],
     relevant_memory: [],
   },
@@ -115,7 +115,7 @@ test("persists the user message before creating a generation task", async () => 
   };
   const result = await persistUserMessageBeforeGeneration(
     repository, client,
-    { id: "message-1", threadId: "thread-1", content: "用户原始表达" },
+    { id: "33333333-3333-4333-8333-333333333333", threadId: "11111111-1111-4111-8111-111111111111", content: "用户原始表达" },
     request,
     "idempotency-key-0001",
   );
@@ -131,7 +131,7 @@ test("does not call the network when local persistence fails or message ids mism
     async cancelGeneration() { return accepted; },
     async streamEvents() {},
   });
-  const message = { id: "message-1", threadId: "thread-1", content: "用户原始表达" };
+  const message = { id: "33333333-3333-4333-8333-333333333333", threadId: "11111111-1111-4111-8111-111111111111", content: "用户原始表达" };
   await assert.rejects(() => persistUserMessageBeforeGeneration(
     { async saveUserMessage() { throw new Error("quota exceeded"); } },
     client, message, request, "idempotency-key-0001",
