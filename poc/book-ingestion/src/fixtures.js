@@ -11,8 +11,10 @@ function epubFixture(title, chapters) {
     'OEBPS/content.opf': strToU8(opf)
   };
   chapters.forEach((body, i) => {
-    files[`OEBPS/chapter${i+1}.xhtml`] = strToU8(`<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>第${i+1}章</title></head><body><h1 id="chapter-${i+1}">第${i+1}章</h1><p>${body}</p><aside epub:type="footnote" id="fn1"><p>脚注示例 ${i+1}</p></aside></body></html>`);
+    const image = title === 'epub-3' ? '<img src="images/diagram.svg" alt="示意图片"/>' : '';
+    files[`OEBPS/chapter${i+1}.xhtml`] = strToU8(`<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>第${i+1}章</title></head><body><h1 id="chapter-${i+1}">第${i+1}章</h1><p>${body}${image}</p><aside epub:type="footnote" id="fn1"><p>脚注示例 ${i+1}</p></aside></body></html>`);
   });
+  if (title === 'epub-3') files['OEBPS/images/diagram.svg'] = strToU8('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><title>fixture</title><circle cx="10" cy="10" r="8"/></svg>');
   return zipSync(files);
 }
 
@@ -51,7 +53,7 @@ export function getFixture(id) {
     const samples = {
       'pdf-1': [[{ text: 'Single column PDF sample', y: 740 }, { text: 'A paragraph with stable text offsets.', y: 710 }]],
       'pdf-2': [[{ text: 'Left column text', x: 50, y: 740 }, { text: 'Right column text', x: 330, y: 740 }]],
-      'pdf-3': [[{ text: 'Header - Sample Book', y: 770 }, { text: 'Body paragraph on page one.', y: 710 }, { text: 'Footer 1', y: 30 }], [{ text: 'Header - Sample Book', y: 770 }, { text: 'Body paragraph on page two.', y: 710 }, { text: 'Footer 2', y: 30 }]]
+      'pdf-3': [[{ text: 'Header - Sample Book', y: 770 }, { text: 'Body paragraph on page one.', y: 710 }, { text: 'Footer - Sample Book', y: 30 }], [{ text: 'Header - Sample Book', y: 770 }, { text: 'Body paragraph on page two.', y: 710 }, { text: 'Footer - Sample Book', y: 30 }]]
     };
     const bytes = pdfFixture(samples[id]);
     return { name: id + '.pdf', type: 'application/pdf', bytes };
@@ -59,7 +61,7 @@ export function getFixture(id) {
   const text = {
     'txt-1': 'UTF-8 测试\n\n第一段内容。\n\n第二段内容。',
     'txt-2': '长段落测试\n\n' + '这是一段用于测试长文本偏移定位的内容。'.repeat(500),
-    'txt-3': 'GB18030 编码回退由用户上传的外部样本覆盖；此固定夹具为 UTF-8 占位样本。'
+    'txt-3': Uint8Array.from(atob('R0IxODAzMCC5zLaoseDC69H5sb6jutbQzsTX1rf70+vGq9LGtqjOu6Gj'), (char) => char.charCodeAt(0))
   }[id];
-  return { name: id + '.txt', type: 'text/plain', bytes: new TextEncoder().encode(text) };
+  return { name: id + '.txt', type: 'text/plain', bytes: text instanceof Uint8Array ? text : new TextEncoder().encode(text) };
 }
