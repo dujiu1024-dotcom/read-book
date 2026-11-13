@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ page }) => {
+test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ page }) => {\n  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));\n  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '本地数据存储与浏览器可靠性' })).toBeVisible();
   await page.locator('#adapter').selectOption('indexeddb');
@@ -18,7 +18,25 @@ test('IndexedDB 写入后刷新页面，仍可读取同一数据集', async ({ p
   expect(afterReload.integrity).toBe(true);
 });
 
-test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失败', async ({ page, browserName }) => {
+test('Web Locks 不可用时 fail-closed，不能创建或写入数据集', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
+  const outcome = await page.evaluate(async () => {
+    const { runIndexedDb, checkIndexedDb } = await import('/src/indexeddb.js');
+    let error;
+    try { await runIndexedDb(10, 'no-lock-must-not-write'); }
+    catch (caught) { error = caught.message; }
+    const check = await checkIndexedDb('no-lock-must-not-write');
+    return { error, check };
+  });
+  expect(outcome.error).toContain('已阻止写入并降级只读');
+  expect(outcome.check.count).toBe(0);
+  expect(outcome.check.entityCounts).toEqual({
+    threads: 0, messages: 0, readingRounds: 0, notes: 0, memories: 0, sources: 0
+  });
+});
+
+test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失败', async ({ page, browserName }) => {\n  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));\n  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
   test.skip(browserName !== 'chromium', 'SQLite OPFS 先在 Chromium 主测，Firefox/WebKit 兼容性另行记录');
   await page.goto('/');
   await page.locator('#adapter').selectOption('sqlite');
@@ -37,7 +55,7 @@ test('SQLite OPFS 可用时执行写入与刷新恢复；不可用时明确失�
   }
 });
 
-test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', async ({ page, browserName }) => {
+test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', async ({ page, browserName }) => {\n  const lockSupported = await page.evaluate(() => Boolean(navigator.locks?.request));\n  test.skip(!lockSupported, '缺少 Web Locks 时必须只读，不执行写入测试');
   test.skip(browserName !== 'chromium', '100k 性能基准仅在 Chromium 主测，避免兼容矩阵重复压测');
   test.setTimeout(300_000);
   await page.goto('/');
