@@ -47,6 +47,11 @@ test('IndexedDB 100k 消息基准输出多轮 P50/P95 与 Thread 关联查询', 
   await expect(page.locator('#status')).toContainText(/完成|执行失败/, { timeout: 280_000 });
   const result = JSON.parse(await page.locator('#output').textContent());
   expect(result.error, JSON.stringify(result)).toBeUndefined();
+  console.log('IndexedDB 100k benchmark:', JSON.stringify({
+    writeMs: result.writeMs, queryMs: result.queryMs,
+    relationQueryMs: result.relationQueryMs, memory: result.memory,
+    storage: result.storage, writerCoordination: result.writerCoordination
+  }));
   expect(result.count).toBe(100000);
   expect(result.integrity).toBe(true);
   expect(result.runs).toBe(5);
@@ -61,17 +66,24 @@ test('SQLite OPFS 100k 消息基准输出多轮 P50/P95 与 JOIN 查询', async 
   test.skip(browserName !== 'chromium', 'SQLite OPFS 100k 性能基准仅在 Chromium 主测');
   test.setTimeout(300_000);
   await page.goto('/');
-  const capability = await page.evaluate(() => ({
-    opfs: Boolean(navigator.storage?.getDirectory),
-    isolated: window.crossOriginIsolated
-  }));
-  test.skip(!capability.opfs || !capability.isolated, '当前运行环境不具备 OPFS/跨源隔离，保留明确失败记录');
+  const capability = await page.evaluate(async () => {
+    const { runSqlite } = await import('/src/sqlite.js');
+    try {
+      await runSqlite(1, 'sqlite-opfs-capability-probe');
+      return { supported: true };
+    } catch (error) { return { supported: false, error: error.message }; }
+  });
+  test.skip(!capability.supported, '当前 CI Worker 未暴露 SQLite OPFS VFS：' + capability.error);
   await page.locator('#adapter').selectOption('sqlite');
   await page.locator('#count').selectOption('100000');
   await page.getByRole('button', { name: '执行写入与查询测试' }).click();
   await expect(page.locator('#status')).toContainText(/完成|执行失败/, { timeout: 280_000 });
   const result = JSON.parse(await page.locator('#output').textContent());
   expect(result.error, JSON.stringify(result)).toBeUndefined();
+  console.log('SQLite OPFS 100k benchmark:', JSON.stringify({
+    writeMs: result.writeMs, queryMs: result.queryMs,
+    relationQueryMs: result.relationQueryMs, writerCoordination: result.writerCoordination
+  }));
   expect(result.count).toBe(100000);
   expect(result.integrity).toBe(true);
   expect(result.runs).toBe(5);
