@@ -3,7 +3,7 @@
 <body><main>
 <header><p>READ-BOOK / TECHNICAL POC D</p><h1>生成任务、流式响应与断线恢复</h1><p>模拟模型服务，不调用真实 LLM，不保存服务端私人历史。</p></header>
 <section><h2>阅读讨论模拟</h2><label>用户消息<textarea id="message" rows="3">请解释这段原文的核心观点。</textarea></label>
-<div class="actions"><button id="send">发送消息</button><button id="disconnect" class="secondary">断开流连接</button><button id="recover" class="secondary">恢复待处理任务</button><button id="duplicate" class="secondary">重复提交同一请求</button><button id="cancel" class="danger">取消生成</button></div>
+<div class="actions"><button id="send">发送消息</button><button id="retry" class="secondary" hidden>重试创建任务</button><button id="disconnect" class="secondary">断开流连接</button><button id="recover" class="secondary">恢复待处理任务</button><button id="duplicate" class="secondary">重复提交同一请求</button><button id="cancel" class="danger">取消生成</button></div>
 <p id="status" role="status">等待输入。</p><pre id="stream"></pre><pre id="result"></pre></section>
 <section><h2>本地消息记录</h2><ol id="messages"></ol></section>
 </main><script type="module" src="/src/main.js"></script></body></html>
