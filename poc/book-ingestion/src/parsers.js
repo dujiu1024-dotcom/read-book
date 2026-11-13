@@ -1,8 +1,4 @@
 import ePub from 'epubjs';
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
-
 async function parseEpub(bytes) {
   const book = ePub(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   await book.ready;
@@ -23,7 +19,14 @@ async function parseEpub(bytes) {
 }
 
 async function parsePdf(bytes) {
-  const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const [pdfjsLib, pdfWorker] = await Promise.all([
+    import('pdfjs-dist'),
+    import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+  ]);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker.default;
+  // PDF.js may transfer/detach the supplied buffer to its Worker. Keep the
+  // original bytes intact because they are also persisted in IndexedDB.
+  const pdf = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
   const pages = [];
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber);
