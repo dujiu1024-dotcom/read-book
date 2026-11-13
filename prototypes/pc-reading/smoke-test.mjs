@@ -71,7 +71,7 @@ try {
   await page.getByRole("button", { name: "重试" }).last().click();
   await page.getByText("重试完成 · 演示状态").waitFor({ timeout: 3000 });
 
-  await page.getByRole("button", { name: "演示状态切换" }).click();
+  await page.getByRole("button", { name: /切换当前单元讨论状态/ }).click();
   page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: /继续下一单元/ }).click();
   if (!(await page.locator("#sourceHeading").textContent()).includes("共同目标如何落地")) throw new Error("mainline did not advance after explicit confirmation");
