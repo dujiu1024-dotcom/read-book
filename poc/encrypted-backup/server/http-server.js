@@ -269,7 +269,13 @@ export async function createBackupHttpServer({ dataDir }) {
           if (priorBackupId !== manifest.backupId) fail(409, '幂等键已被其他备份请求使用');
           if (state.backups[priorBackupId]) return json(res, 200, { backupId: priorBackupId, state: 'committed', resumed: true });
           const priorSession = state.sessions[priorBackupId];
-          if (priorSession) return json(res, 200, { backupId: priorBackupId, state: 'uploading', resumed: true });
+          if (priorSession && priorSession.expiresAt > Date.now()) {
+            return json(res, 200, { backupId: priorBackupId, state: 'uploading', resumed: true });
+          }
+          if (priorSession) {
+            delete state.sessions[priorBackupId];
+            await rm(path.join(chunksRoot, priorBackupId), { recursive: true, force: true });
+          }
         }
         if (state.sessions[manifest.backupId] || state.backups[manifest.backupId]) fail(409, '备份 ID 已存在');
         validateParentChain(manifest);
