@@ -8,6 +8,7 @@ on:
     paths:
       - "README.md"
       - "docs/**"
+      - "schemas/**"
       - ".github/quality/**"
       - ".github/quality-requirements.txt"
       - ".github/scripts/**"
