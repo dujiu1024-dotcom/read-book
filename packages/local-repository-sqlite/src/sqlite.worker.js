@@ -809,6 +809,9 @@ function handle(message) {
   if (type === "getMessages") {
     return execute("SELECT * FROM message WHERE dataset_id=? AND thread_id=? AND sequence>? ORDER BY sequence", [message.datasetId,message.threadId,message.afterSequence||0]).map(rowToMessage);
   }
+  if (type === "getReadingUnitProgress") {
+    return execute("SELECT * FROM reading_unit_progress WHERE dataset_id=? AND reading_round_id=? ORDER BY structure_node_id",[message.datasetId,message.readingRoundId]).map(p=>({readingRoundId:p.reading_round_id,structureNodeId:p.structure_node_id,status:p.status,firstPresentedSourceId:p.first_presented_source_id,lastActivityMessageId:p.last_activity_message_id,completedAt:p.completed_at,updatedAt:p.updated_at}));
+  }
   if (type === "getGenerationDelivery") {
     const r=first("SELECT * FROM generation_delivery WHERE dataset_id=? AND client_generation_id=?",[message.datasetId,message.clientGenerationId]);
     return r ? {clientGenerationId:r.client_generation_id,generationId:r.generation_id,threadId:r.thread_id,userMessageId:r.user_message_id,assistantMessageId:r.assistant_message_id,idempotencyKey:r.idempotency_key,status:r.status,lastSequence:r.last_sequence,lastEventId:r.last_event_id,expiresAt:r.expires_at,updatedAt:r.updated_at} : null;
