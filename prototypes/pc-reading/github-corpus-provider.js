@@ -91,8 +91,10 @@ async function loadChuanxiLu(fetchImpl) {
   const apiPath = path.split("/").map(encodeURIComponent).join("/");
   const metadataUrl = GITHUB_API + "/repos/" + repository + "/contents/" + apiPath + "?ref=master";
   const metadata = await (await request(fetchImpl, metadataUrl, "《传习录》来源元数据")).json();
-  if (metadata.type !== "file" || typeof metadata.sha !== "string" || typeof metadata.download_url !== "string") {
-    throw new Error("《传习录》来源元数据不完整。");
+  if (metadata.type !== "file" || !/^[a-f0-9]{40}$/i.test(metadata.sha || "") ||
+      typeof metadata.download_url !== "string" ||
+      !metadata.download_url.startsWith(RAW_GITHUB + "/" + repository + "/")) {
+    throw new Error("《传习录》来源元数据不完整或下载地址不可信。");
   }
   const url = metadata.download_url;
   const raw = await (await request(fetchImpl, url, "《传习录》正文")).text();
@@ -131,7 +133,11 @@ async function loadMaoXuanVolume(fetchImpl, book) {
   let totalCharacters = 0;
   const articles = await mapConcurrent(files, CONCURRENCY, async (file) => {
     const url = file.download_url;
-    if (typeof url !== "string" || !url.startsWith(RAW_GITHUB + "/ruguoaaa/gushi/") || typeof file.sha !== "string") throw new Error("GitHub 返回了非预期的正文来源信息：" + file.name);
+    if (typeof url !== "string" || !url.startsWith(RAW_GITHUB + "/ruguoaaa/gushi/") ||
+        !/^[a-f0-9]{40}$/i.test(file.sha || "") || typeof file.path !== "string" ||
+        !file.path.startsWith(directory + "/")) {
+      throw new Error("GitHub 返回了非预期的正文来源信息：" + file.name);
+    }
     const raw = await (await request(fetchImpl, url, file.name)).text();
     if (!raw.trim()) throw new Error(file.name + " 正文为空。");
     if (raw.length > MAX_FILE_CHARACTERS) throw new Error(file.name + " 超过单篇读取上限。");
@@ -156,6 +162,12 @@ async function loadMaoXuanVolume(fetchImpl, book) {
   if (!units.length) throw new Error(book.title + "未提取到正文段落。");
   return units;
 }
+async function sourceFingerprint(units) {
+  const sourceIdentity = units.map((unit) => unit.source.repository + "/" + unit.source.path + ":" + unit.source.revision).join("\n");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sourceIdentity));
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 export function createGithubCorpusProvider({ fetchImpl = globalThis.fetch } = {}) {
   if (typeof fetchImpl !== "function") throw new TypeError("GitHub 语料 Provider 需要 fetch 实现。");
   return Object.freeze({
@@ -164,10 +176,13 @@ export function createGithubCorpusProvider({ fetchImpl = globalThis.fetch } = {}
       const book = GITHUB_CORPUS_BOOKS.find((item) => item.key === key);
       if (!book) throw new Error("不支持的 GitHub 语料书目：" + key);
       const units = key === "chuanxilu" ? await loadChuanxiLu(fetchImpl) : await loadMaoXuanVolume(fetchImpl, VOLUMES.find((item) => item.key === key));
+      const sourceSnapshotSha256 = await sourceFingerprint(units);
       return {
-        bookRevisionId: "github-corpus-" + key, title: book.title, author: book.author,
+        bookRevisionId: "github-corpus-" + key + "-" + sourceSnapshotSha256.slice(0, 20),
+        title: book.title, author: book.author,
         initialMainlineUnitId: units[0].id, units,
         sourceMetadata: {
+          sourceSnapshotSha256,
           kind: "public-github-source", repository: book.source,
           sourceUrl: key === "chuanxilu" ? "https://github.com/garychowcmu/daizhigev20" : "https://github.com/ruguoaaa/gushi",
           attribution: "正文按需从公开 GitHub 仓库读取。公开可访问不等于已确认再分发许可；本模式不将正文复制进 read-book 仓库。",

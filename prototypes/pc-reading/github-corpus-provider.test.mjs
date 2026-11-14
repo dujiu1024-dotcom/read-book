@@ -17,6 +17,8 @@ test("loads Chuanxi Lu into ordered units with volume labels and source locators
   }});
   const revision = await provider.loadBookRevision("github-corpus-chuanxilu");
   assert.equal(revision.title, "传习录");
+  assert.match(revision.bookRevisionId, /^github-corpus-chuanxilu-[a-f0-9]{20}$/);
+  assert.equal(revision.sourceMetadata.sourceSnapshotSha256.length, 64);
   assert.ok(revision.units.length >= 4);
   assert.equal(revision.units[0].chapter, "卷上");
   assert.ok(revision.units.some((unit) => unit.chapter === "卷中"));
@@ -27,9 +29,9 @@ test("loads Chuanxi Lu into ordered units with volume labels and source locators
 
 test("loads a Mao Xuan volume independently and preserves article order", async () => {
   const files = [
-    { type: "file", name: "02、第二篇.md", path: "docs/第二卷/02、第二篇.md", sha: "2222222222222222222222222222222222222222", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/02.md" },
-    { type: "file", name: "01、第一篇.md", path: "docs/第二卷/01、第一篇.md", sha: "1111111111111111111111111111111111111111", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/01.md" },
-    { type: "file", name: "README.md", path: "docs/第二卷/README.md", sha: "3333333333333333333333333333333333333333", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/README.md" }
+    { type: "file", name: "02、第二篇.md", path: "docs/方法论/毛泽东选集/第二卷/02、第二篇.md", sha: "2222222222222222222222222222222222222222", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/02.md" },
+    { type: "file", name: "01、第一篇.md", path: "docs/方法论/毛泽东选集/第二卷/01、第一篇.md", sha: "1111111111111111111111111111111111111111", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/01.md" },
+    { type: "file", name: "README.md", path: "docs/方法论/毛泽东选集/第二卷/README.md", sha: "3333333333333333333333333333333333333333", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/README.md" }
   ];
   const provider = createGithubCorpusProvider({ fetchImpl: async (url) => {
     if (String(url).includes("/contents/")) return new Response(JSON.stringify(files), { status: 200 });
@@ -37,6 +39,7 @@ test("loads a Mao Xuan volume independently and preserves article order", async 
   }});
   const revision = await provider.loadBookRevision("github-corpus-maoxuan-2");
   assert.equal(revision.title, "毛泽东选集 第二卷");
+  assert.match(revision.bookRevisionId, /^github-corpus-maoxuan-2-[a-f0-9]{20}$/);
   assert.ok(revision.units.every((unit) => unit.chapter.startsWith("第二卷 / ")));
   assert.match(revision.units[0].chapter, /第一篇/);
   assert.ok(revision.units.some((unit) => /第二篇/.test(unit.chapter)));

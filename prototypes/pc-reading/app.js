@@ -1,6 +1,7 @@
 import { createDemoBookContentProvider } from "./book-content-provider.js";
 import { createPublicBookApiProvider } from "./public-book-content-provider.js";
 import { createGithubCorpusProvider } from "./github-corpus-provider.js";
+import { createLocalCorpusRuntime } from "./local-corpus-runtime.js";
 import { createProductionReaderRuntime } from "./reader-runtime.js";
 
 (() => {
@@ -572,13 +573,32 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
         $("composerSection").hidden = true;
         $("memoryPanel").hidden = true;
         $("menuButton").hidden = true;
-        $("readerModeLabel").textContent = "GitHub 公开语料 · 只读模式";
         $("backupButton").disabled = true;
-        $("backupButton").textContent = "备份未接入";
+        $("backupButton").textContent = "备份未配置";
         state.discussed = true;
+        let localPositionMessage = "本地阅读位置持久化未启用。";
+        try {
+          productionRuntime = await createLocalCorpusRuntime(bookRevision, {
+            datasetId: readerConfig.localDataSetId || undefined,
+          });
+          const position = productionRuntime.readingPosition;
+          if (position) {
+            const index = units.findIndex((unit) => unit.id === position.mainlineNodeId);
+            if (index >= 0) state.mainlineIndex = index;
+            state.viewMode = position.viewMode || "mainline";
+            state.displayedUnit = units.find((unit) => unit.id === position.displayedNodeId) || units[state.mainlineIndex];
+            state.discussed = Boolean(position.currentUnitDiscussed);
+          }
+          $("readerModeLabel").textContent = "本地阅读位置 · GitHub 原文";
+          localPositionMessage = "阅读位置已从本地 SQLite/OPFS 恢复。";
+        } catch (storageError) {
+          productionRuntime = null;
+          $("readerModeLabel").textContent = "GitHub 公开语料 · 在线只读";
+          localPositionMessage = "本地阅读位置持久化不可用：" + storageError.message;
+        }
         renderSource();
         updateCount();
-        setGenerationStatus("已从原始 GitHub 仓库读取 " + units.length + " 个阅读单元。当前为只读语料模式，尚未接入本地持久化和真实 Agent。");
+        setGenerationStatus("已从 GitHub 读取 " + units.length + " 个阅读单元。" + localPositionMessage + " 备份未配置，真实 Agent 尚未接入。");
         return;
       }
       if (isDemoProvider) {

@@ -4,13 +4,15 @@ PC 阅读客户端原型，支持明确标注的 Demo BookContentProvider、公�
 
 ## 启动
 
-需要 Python 3：
+需要 Node.js 22。使用 Vite 启动（本目录依赖 TypeScript Worker，不能用纯静态文件服务器代替）：
 
 ```bash
-python -m http.server 4173 --directory prototypes/pc-reading
+cd prototypes/pc-reading
+npm install
+npm run dev
 ```
 
-浏览器打开 `http://localhost:4173`。
+浏览器打开终端输出的本地地址。
 
 ## 当前覆盖
 
@@ -125,3 +127,9 @@ npm run dev
 ```
 
 打开阅读页后，在顶部选择《传习录》或《毛泽东选集》对应卷次。
+
+## GitHub 语料的本地阅读位置
+
+公开语料模式会使用与正式阅读器相同的 SQLite WASM + OPFS Repository 保存阅读主线、临时查看位置和 Thread。书籍版本 ID 根据本次读取的 Git blob SHA 集合计算指纹；来源文件变化后会形成新的 BookRevision，不会把新版本误当成旧版本。
+
+此模式只在本机保存阅读位置。启动时创建本地一致性快照，但没有配置加密备份服务时不会上传；界面明确显示“备份未配置”。Agent 消息和认知数据仍未接入。
