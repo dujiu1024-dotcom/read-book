@@ -562,8 +562,10 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
     bookSelector.addEventListener("change", () => {
       const next = bookSelector.value;
       const params = new URLSearchParams(window.location.search);
-      if (next === "service") params.delete("book");
-      else params.set("book", next);
+      if (next === "service") {
+        params.delete("book");
+        try { window.localStorage.removeItem("read-book:prefer-local-book"); } catch {}
+      } else params.set("book", next);
       const query = params.toString();
       window.location.search = query ? "?" + query : "";
     });
