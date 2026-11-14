@@ -166,3 +166,8 @@ GitHub 语料的 BookRevision ID 和结构节点 ID 均由来源 Git Blob SHA、
 
 
 来源检索的边界：客户端只负责从当前 BookRevision 中挑选有限候选原文；最多 7 条，每条最多 30,000 字符，当前原文与额外来源合计不超过 Generation API 的 120,000 字符上限。重试和断线恢复使用消息持久化的来源引用重建原始证据集合，不会因检索算法或书籍内容变化而静默替换来源。客户端检索结果不等于模型引用，只有服务端完成原文核验并持久化为 CitationRecord 的引用才会展示。测试代码位于 `source-retriever.test.mjs`，执行命令为 `npm run test:source-retriever`；按项目约定本轮不执行测试。
+
+
+## 认知来源追溯与关系展示
+
+认知面板从当前 Thread 的持久化消息中按 `sourceMessageIds` 回查原始消息，并在当前认知、历史版本和待确认候选中展示来源消息内容与书籍原文定位。认知关联按 `MemoryRelation` 的版本端点展示关系类型及关联版本。数据读取继续受当前 Thread 隔离约束；来源消息不可读取时显示原始消息 ID，不伪造内容。
