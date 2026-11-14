@@ -48,67 +48,6 @@
 - skipped 必须由用户明确确认；不能批量跳过尚未展示的单元。
 - review / temporary / citation 不改变 ReadingUnitProgress。
 
-
-### 2.1 状态定义
-
-| 状态 | 含义 | 是否允许推进 |
-|---|---|---:|
-| not_presented（未展示） | 本轮主线尚未展示该论述单元 | 否 |
-| presented（已展示） | 原文已展示，展示记录已落本地 | 否 |
-| awaiting_user（待用户表达） | 原文展示完成，Agent 正在等待用户发言 | 否 |
-| discussion_active（讨论中） | 用户已就当前单元表达问题、理解、观点、质疑或关联想法，讨论尚未收束 | 否 |
-| discussed（已讨论） | 当前单元已完成本轮讨论，允许推进 | 是 |
-| skipped（已略读） | 用户明确确认已理解并选择略读，允许推进 | 是 |
-
-presented 与 awaiting_user 可以在同一事务中连续发生，但保留两个事件：原文展示成功、Agent 进入等待。这样可审计“展示过”与“当前等待”的差别。
-
-### 2.2 允许的状态转换
-
-| 当前状态 | 事件/条件 | 下一状态 | 处理规则 |
-|---|---|---|---|
-| not_presented | 主线展示成功并写入 PresentedSource | presented | 必须绑定当前 ReadingRound 和原文定位 |
-| presented | 展示事务完成 | awaiting_user | Agent 停止主动输出，等待用户 |
-| awaiting_user | 用户发出实质性讨论内容 | discussion_active | 只识别交互意图，不评价理解正确与否 |
-| discussion_active | 用户继续提问/解释/质疑/补充 | discussion_active | 继续围绕本单元讨论 |
-| discussion_active | 用户在已有实质讨论后发出继续阅读/推进指令，或自然表达本段讨论已结束 | discussed | 由 Agent 结合上下文判断交互是否已收束；不要求用户手动切换讨论模式 |
-| awaiting_user | 用户要求继续，但本单元尚无实质讨论 | awaiting_user | 先询问是否已理解并希望略读；不得直接推进 |
-| awaiting_user | 用户确认已理解并选择略读 | skipped | 记录用户确认事件 |
-| awaiting_user | 用户选择继续讨论 | discussion_active | 留在当前单元 |
-| discussion_active | 用户发出继续阅读/推进指令 | discussed | 记录本轮结束事件；不额外要求用户点击“结束讨论” |
-| discussed / skipped | 用户要求重新查看或深入讨论该单元 | 不变 | 创建 review PresentedSource 并关联新讨论；不得回退 ReadingUnitProgress 终态。若用户要重新走完整主线，应由用户主动开启新 ReadingRound |
-| 任意状态 | 临时查看其他章节 | 不变 | 创建 temporary PresentedSource，不改主线状态 |
-| 任意状态 | 复习已读单元 | 不变 | 创建 review PresentedSource，不改主线状态 |
-
-### 2.3 “实质性讨论”的拟定识别规则（待确认）
-
-该规则只判断用户是否真正开始围绕本单元交流，不判断用户是否理解正确。
-
-可视为实质性讨论的行为：
-- 用户提出与本段有关的问题；
-- 用户复述、解释或表达自己的理解；
-- 用户提出观点、质疑、反例或不同意见；
-- 用户将本段与自己的经验、其他知识或其他章节关联；
-- 用户明确表达“我理解了，主要意思是……”等认知内容。
-
-单独出现以下内容，不自动视为已讨论：
-- “嗯”“好”“收到”等纯确认；
-- “继续”“下一段”“往下读”等推进指令；
-- 单个表情、无语义回应或与本段无关的寒暄。
-
-**重要：** 上述识别是交互行为分类，不是理解度检测。即使用户的理解有误，也可以算作已经发生讨论；Agent 应在后续对话中回应和澄清，而不是阻止推进。
-
-仍需产品确认的关键边界：
-- 当用户只发出简短但可能有态度含义的回应（例如“确实”“不对”）时，是否由 Agent 结合上下文判定为实质讨论。
-- 用户要求继续但没有实质讨论时，确认文案建议为：“如果你已经理解这一段，可以选择略读；如果还没弄明白，我们继续讨论。”不得把略读包装成默认选项或强迫用户答题。
-
-### 2.4 略读约束
-
-- 略读必须是用户主动确认，不允许 Agent 根据停留时长、沉默或“看起来不想读”自动略读。
-- 用户仅说“不想看了”“跳过吧”，不能直接认定为已理解；Agent 应说明当前单元尚未讨论，并询问是否已理解并确认略读。
-- 用户确认“已理解，略读”后，当前单元转为 skipped。
-- skipped 是本轮主线的有效完成方式，不代表用户永久放弃该内容；用户仍可随时复习。
-- 不允许批量略过尚未展示的后续主线单元。
-
 ## 3. 阅读轮次状态机
 
 ### 3.1 状态
@@ -127,25 +66,6 @@ presented 与 awaiting_user 可以在同一事务中连续发生，但保留两�
 - completed 后不自动开启下一轮；PC 页面显示“开启新一轮阅读”，由用户主动触发。
 - 新一轮在同一 Thread 下 round_number 递增，从当前 BookRevision 的主线第一个单元开始；历史 Message、Note、Memory、PresentedSource 全部保留。
 - abandoned 状态在 Repository 中可表达，但当前 UI 暂无主动放弃入口。
-
-
-### 3.1 状态
-
-| 状态 | 含义 |
-|---|---|
-| active | 当前阅读轮次进行中 |
-| completed | 当前版本的全部主线论述单元均已讨论或由用户确认略读 |
-| abandoned | 用户明确终止本轮；不等同于完成 |
-
-### 3.2 转换规则
-
-- Thread 创建后启动 round_number=1，状态 active。
-- 用户主动开启二刷/三刷时，在同一 Thread 下创建新 ReadingRound，round_number 递增。
-- 新一轮从作者主线第一个单元开始，但历史消息、笔记、Memory 和来源关系全部保留。
-- 只有当前 BookRevision 的所有主线论述单元都处于 discussed 或 skipped，且无未完成主线单元时，ReadingRound 才可转为 completed。
-- 临时查看和复习记录不计入主线完成度。
-- completed 后 Agent 询问用户是否开启下一轮；不得自动开启。
-- abandoned 不允许被报告为 completed；是否允许恢复 abandoned 轮次需在产品规则中另行确认。
 
 ## 4. 主线位置与临时查看/复习
 
@@ -168,31 +88,9 @@ presented 与 awaiting_user 可以在同一事务中连续发生，但保留两�
 - 复习/引用不创建新 ReadingRound，不改变主线节点和单元状态。
 - 复习中的讨论仍写入原 Thread，但不能回退 discussed / skipped 终态。
 
-
-### 4.1 主线推进
-
-- 当前主线节点由 ReadingRoundState.current_structure_node_id 表示。
-- 推进时按已发布 BookRevision 的主线结构顺序定位下一个论述单元。
-- 推进必须在一个本地事务中完成：校验当前单元可推进 → 记录其 discussed/skipped 终态 → 更新当前节点 → 创建新 PresentedSource → 写入展示事件。
-- 若下一单元原文获取失败，不能提前推进；应保留当前节点和待处理状态。
-
-### 4.2 临时查看
-
-- 因知识关联查看其他章节或后续内容，presentation_type=temporary。
-- 临时查看可以展示原文并围绕其讨论，但不得改变当前主线节点、主线单元状态或轮次完成状态。
-- 临时讨论产生的 Message、Citation、Note、Memory 仍保留来源，但其 PresentedSource 必须标记 temporary。
-- 临时查看结束后，Agent 应引导回到原主线位置；不得自动把临时章节变为主线下一节。
-
-### 4.3 复习
-
-- 复习已读内容，presentation_type=review。
-- 复习不创建新 ReadingRound，不改变当前主线节点和单元状态。
-- 复习中的讨论消息仍写入原 Thread，并关联复习 PresentedSource；是否形成 Note/Memory 仍按自动沉淀规则判断。
-
 ## 5. Thread 生命周期边界
 
 SQLite v6 的 Thread 只持久化 id、dataset_id、book_revision_id、created_at，并通过 (dataset_id, book_revision_id) 保证唯一。当前版本没有 Thread.status 字段，也没有归档/恢复状态转换；因此不应把 active / archived 描述为已实现能力。不同阅读轮次在同一 Thread 内累积。
-
 
 ## 6. Message 与 Generation 状态机
 
@@ -223,39 +121,6 @@ SQLite v6 的 Thread 只持久化 id、dataset_id、book_revision_id、created_a
 - 网络断开不等于任务失败；恢复时从本地 cursor 续传，并以服务端最终快照作为权威结果。
 - 正式服务端 GenerationJob 尚未部署；上述服务端状态是 API/设计契约，不代表后端已实现。
 
-
-### 6.1 Message
-
-| 状态 | 含义 | 允许转换 |
-|---|---|---|
-| pending | 消息已创建但尚未完成持久化/生成 | complete / failed / cancelled |
-| complete | 消息正文完整并已持久化 | 终态 |
-| failed | 生成或持久化失败，保留失败记录 | 通过新消息/新生成尝试恢复，不覆盖原记录 |
-| cancelled | 生成已取消 | 通过新生成尝试恢复，不覆盖原记录 |
-
-- 用户 Message 必须先写入本地并标记 complete，再发起网络请求。
-- Assistant Message 只有在服务端最终结果完整返回且本地事务提交后才标记 complete。
-- 流式 delta 仅为 UI 临时状态，不创建正式 Message。
-- 重新生成创建新的 Assistant Message，并用 supersedes_message_id 指向被替代的旧回复。
-- 消息 sequence 在同一 Thread 内单调递增；失败尝试也不能复用已分配的 sequence。
-
-### 6.2 GenerationJob / GenerationReceipt
-
-服务端 GenerationJob：
-queued → running → completed / failed / cancelled / expired
-
-本地 GenerationReceipt：
-submitted → streaming → completed / failed / cancelled / expired
-
-规则：
-- 服务端终态只允许一次；取消与自然完成竞态由服务端原子提交先后决定。
-- 网络断开不等于任务失败；客户端恢复连接后通过 generation_id 查询。
-- 事件流 sequence 只用于增量显示和断点恢复，不是最终结果权威来源。
-- 服务端 completed 后必须可查询完整结果，直到 expires_at。
-- 客户端成功写入本地 Assistant Message 后，GenerationReceipt 标记 completed 并记录 result_message_id。
-- 服务端 TTL 到期后任务结果可清除；本地已持久化消息不受影响。
-- 同一个 Idempotency-Key 重放必须返回同一个生成任务，不得重复执行。
-
 ## 7. 备份上传状态机
 
 客户端流程阶段：snapshotting → encrypting → uploading → awaiting_commit → committed。
@@ -266,7 +131,6 @@ submitted → streaming → completed / failed / cancelled / expired
 - 失败或网络断开不自动确认；待上传密文包和幂等身份保存在本地，恢复时查询服务端 received_parts 后续传。
 - 新设备先查询备份并询问是否恢复；恢复只允许导入空数据集。
 - 客户端已实现 HTTP 上传/下载适配器与加密链恢复；正式服务端、清除墓碑并发竞态和生产安全评审仍未完成。
-
 
 ## 8. 数据集生命周期状态机
 
@@ -395,7 +259,6 @@ submitted → streaming → completed / failed / cancelled / expired
 - 客户端不得仅凭 HTTP 成功响应推进 last_acked_sequence，必须确认 BackupRecord.status=committed。
 - 服务端清除墓碑优先于上传完成和恢复；正式服务端必须在 complete/restore 时再次检查。
 
-
 ## 12. 消息与生成状态边界（实现对齐）
 
 - Message 是本地长期对话记录；GenerationDelivery 是本地可恢复任务交付记录；GenerationJob 是服务端计算任务。三者不能共用一个状态字段。
@@ -403,7 +266,6 @@ submitted → streaming → completed / failed / cancelled / expired
 - GenerationDelivery 使用 queued / running / completed / failed / cancelled / expired。
 - completed Assistant Message 必须来自服务端权威快照并在本地事务中提交。
 - 当前代码不存在 Message.pending，也不存在独立 GenerationReceipt 表；旧文档中的这两个概念已分别由 saved/generating 状态和 GenerationDelivery 取代。
-
 
 ## 13. 事件与审计最低要求
 
@@ -467,22 +329,3 @@ submitted → streaming → completed / failed / cancelled / expired
 - 页面关闭/刷新、生成断线/取消、备份续传和新设备恢复。
 - 临时查看/复习/citation 不改变主线进度。
 - 正式服务端清除墓碑、账号注销、恢复授权和生成终态竞态。
-
-
-### 需要产品确认
-1. 简短回应（如“确实”“不对”）是否可由 Agent 结合上下文判定为实质性讨论；建议允许上下文判断，但不得依赖字数阈值。
-2. 用户在主线已完成后要求重新深入讨论某个 skipped 单元，是否只作为 review，不改变已完成轮次状态；建议默认如此，除非用户主动开启新一轮。
-3. abandoned 轮次是否允许继续恢复；建议第一版先不提供恢复 abandoned 的入口，避免和二刷语义混淆。
-4. Message.pending 的持久化语义，以及本地 Message 状态与 GenerationReceipt 状态的映射。
-5. 浏览器安装上下文是否需要独立 Device 标识；第一版不因此引入多设备同步或数据集自动合并。
-6. RecoveryChallenge 的失败次数、速率限制、挑战有效期和重放保护参数，由安全设计确定。
-
-### 需要 PoC 验证
-- 本地事务并发下主线状态与 Message sequence 一致性。
-- 页面关闭/刷新、生成断线、取消竞态时的状态恢复。
-- 多标签页锁、备份快照和 dirty_sequence 正确性。
-- 状态事件与业务实体事务的原子性。
-- 临时查看/复习绝不改变主线状态的自动化测试。
-- 账号注销不级联删除备份、账号切换不泄露其他数据集、清除墓碑与上传/授权并发竞态测试。
-- 恢复挑战单次消费、授权过期/撤销及 cleared 墓碑阻断恢复的测试。
-
