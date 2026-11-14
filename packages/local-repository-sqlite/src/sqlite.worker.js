@@ -18,7 +18,7 @@ function parseJson(value, fallback = []) {
 function ensureDataset(datasetId) {
   if (typeof datasetId !== "string" || !datasetId.trim()) throw new Error("datasetId 非法");
   execute(
-    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,4,?,?,0,0,'active')",
+    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,5,?,?,0,0,'active')",
     [datasetId, new Date().toISOString(), new Date().toISOString()],
   );
   const dataset = first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
@@ -153,7 +153,7 @@ async function initialize() {
   // Existing installations have the v1 schema and no PRAGMA user_version marker.
   // Treat version 0 as the shipped v1 baseline, then migrate atomically to v2.
   const storedVersion = Number(first("PRAGMA user_version")?.user_version ?? 0);
-  if (storedVersion > 4) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
+  if (storedVersion > 5) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
   if (storedVersion < 2) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -228,6 +228,16 @@ async function initialize() {
     }
   }
 }
+  if (storedVersion < 5) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      db.exec({ sql: "CREATE TABLE IF NOT EXISTS memory_candidate (id TEXT PRIMARY KEY,dataset_id TEXT NOT NULL REFERENCES local_dataset(id),thread_id TEXT NOT NULL REFERENCES thread(id),candidate_json TEXT NOT NULL,evaluation_score REAL NOT NULL CHECK(evaluation_score >= 0 AND evaluation_score <= 1),status TEXT NOT NULL CHECK(status='needs_confirmation'),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(dataset_id,thread_id,id)); CREATE INDEX IF NOT EXISTS idx_memory_candidate_pending ON memory_candidate(dataset_id,thread_id,status,created_at); UPDATE local_dataset SET schema_version=5; PRAGMA user_version=5;" });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v5 迁移失败，已回滚", { cause: error });
+    }
+  }
 function assertDataset(datasetId) {
   if (!activeDatasetId || datasetId !== activeDatasetId) throw new Error("事务 datasetId 不匹配");
 }
@@ -389,6 +399,38 @@ function txOperation(datasetId, operation, input) {
       transactionDirty=true;
       return v;
     }
+
+    case "saveMemoryCandidate": {
+      const record=input.candidate;
+      const candidate=record?.candidate;
+      const viewpoints=["user","author","assistant_inference"];
+      if (!record || typeof record.id!=="string" || !record.id.trim() || record.id!==candidate?.id ||
+          record.datasetId!==datasetId || typeof record.threadId!=="string" || !record.threadId.trim() ||
+          record.status!=="needs_confirmation" || !Number.isFinite(record.evaluationScore) || record.evaluationScore<0 || record.evaluationScore>1 ||
+          !Number.isFinite(Date.parse(record.createdAt)) || !Number.isFinite(Date.parse(record.updatedAt)) ||
+          typeof candidate.title!=="string" || !candidate.title.trim() || typeof candidate.content!=="string" || !candidate.content.trim() ||
+          !viewpoints.includes(candidate.viewpoint) || !Number.isFinite(candidate.confidence) || candidate.confidence<0 || candidate.confidence>1 ||
+          !Number.isFinite(candidate.ambiguity) || candidate.ambiguity<0 || candidate.ambiguity>1 ||
+          !Array.isArray(candidate.sourceMessageIds) || candidate.sourceMessageIds.length===0 || new Set(candidate.sourceMessageIds).size!==candidate.sourceMessageIds.length ||
+          !Array.isArray(candidate.sourceReferences)) throw new Error("MemoryCandidate 字段非法");
+      const thread=first("SELECT id FROM thread WHERE id=? AND dataset_id=?",[record.threadId,datasetId]);
+      if (!thread) throw new Error("MemoryCandidate Thread 不属于当前数据集");
+      const sourceRows=candidate.sourceMessageIds.map((messageId)=>first("SELECT thread_id,role FROM message WHERE id=? AND dataset_id=?",[messageId,datasetId]));
+      if (sourceRows.some((row)=>!row || row.thread_id!==record.threadId) || !sourceRows.some((row)=>row.role==="user")) {
+        throw new Error("MemoryCandidate 必须引用当前 Thread 的消息且至少包含一条用户消息");
+      }
+      assertSourceReferences(datasetId,record.threadId,candidate.sourceReferences);
+      const serialized=JSON.stringify(candidate);
+      const old=first("SELECT candidate_json,evaluation_score FROM memory_candidate WHERE id=? AND dataset_id=?",[record.id,datasetId]);
+      if (old) {
+        if (old.candidate_json!==serialized || old.evaluation_score!==record.evaluationScore) throw new Error("MemoryCandidate ID 已用于不同候选内容");
+        return record;
+      }
+      execute("INSERT INTO memory_candidate(id,dataset_id,thread_id,candidate_json,evaluation_score,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+        [record.id,datasetId,record.threadId,serialized,record.evaluationScore,record.status,record.createdAt,record.updatedAt]);
+      transactionDirty=true;
+      return record;
+    }
     case "appendMemoryRelation": {
       const r=input.relation;
       const allowed = ["supports","contradicts","extends","supersedes","retracts","duplicate_of"];
@@ -514,6 +556,7 @@ function txOperation(datasetId, operation, input) {
         memories:execute("SELECT * FROM memory WHERE dataset_id=?", [datasetId]).map(m=>({id:m.id,datasetId:m.dataset_id,threadId:m.thread_id,currentVersionId:m.current_version_id,createdAt:m.created_at,updatedAt:m.updated_at})),
         memoryVersions:execute("SELECT * FROM memory_version WHERE dataset_id=? ORDER BY memory_id,version", [datasetId]).map(v=>({id:v.id,memoryId:v.memory_id,version:v.version,previousVersionId:v.previous_version_id,changeKind:v.change_kind,content:v.content,title:v.title,viewpoint:v.viewpoint,confidence:v.confidence,ambiguity:v.ambiguity,evaluationScore:v.evaluation_score,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references),createdAt:v.created_at})),
         memoryRelations:execute("SELECT * FROM memory_relation WHERE dataset_id=? ORDER BY created_at,id", [datasetId]).map(r=>({id:r.id,fromVersionId:r.from_version_id,toVersionId:r.to_version_id,relationType:r.relation_type,sourceMessageIds:parseJson(r.source_message_ids),sourceReferences:parseJson(r.source_references),createdAt:r.created_at})),
+        memoryCandidates:execute("SELECT * FROM memory_candidate WHERE dataset_id=? ORDER BY created_at,id", [datasetId]).map(c=>({id:c.id,datasetId:c.dataset_id,threadId:c.thread_id,candidate:parseJson(c.candidate_json,{}),evaluationScore:c.evaluation_score,status:c.status,createdAt:c.created_at,updatedAt:c.updated_at})),
         generationDeliveries:execute("SELECT * FROM generation_delivery WHERE dataset_id=? ORDER BY updated_at,client_generation_id", [datasetId]).map(r=>({clientGenerationId:r.client_generation_id,generationId:r.generation_id,threadId:r.thread_id,userMessageId:r.user_message_id,assistantMessageId:r.assistant_message_id,idempotencyKey:r.idempotency_key,status:r.status,lastSequence:r.last_sequence,lastEventId:r.last_event_id,expiresAt:r.expires_at,updatedAt:r.updated_at})),
       };
     }
@@ -574,8 +617,18 @@ function handle(message) {
   if (type === "listPendingGenerationDeliveries") {
     return execute("SELECT * FROM generation_delivery WHERE dataset_id=? AND status IN ('queued','running') ORDER BY updated_at,client_generation_id",[message.datasetId]).map(r=>({clientGenerationId:r.client_generation_id,generationId:r.generation_id,threadId:r.thread_id,userMessageId:r.user_message_id,assistantMessageId:r.assistant_message_id,idempotencyKey:r.idempotency_key,status:r.status,lastSequence:r.last_sequence,lastEventId:r.last_event_id,expiresAt:r.expires_at,updatedAt:r.updated_at}));
   }
+
   if (type === "getMemoryVersions") {
-    return execute("SELECT * FROM memory_version WHERE dataset_id=? AND memory_id=? ORDER BY version", [message.datasetId,message.memoryId]).map(v=>({...v,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references)}));
+    return execute("SELECT * FROM memory_version WHERE dataset_id=? AND memory_id=? ORDER BY version", [message.datasetId,message.memoryId]).map(v=>({
+      id:v.id,memoryId:v.memory_id,version:v.version,previousVersionId:v.previous_version_id,changeKind:v.change_kind,
+      content:v.content,title:v.title,viewpoint:v.viewpoint,confidence:v.confidence,ambiguity:v.ambiguity,evaluationScore:v.evaluation_score,
+      sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references),createdAt:v.created_at,
+    }));
+  }
+  if (type === "getMemoryCandidates") {
+    return execute("SELECT * FROM memory_candidate WHERE dataset_id=? AND thread_id=? AND status=? ORDER BY created_at,id", [message.datasetId,message.threadId,"needs_confirmation"]).map(c=>({
+      id:c.id,datasetId:c.dataset_id,threadId:c.thread_id,candidate:parseJson(c.candidate_json,{}),evaluationScore:c.evaluation_score,status:c.status,createdAt:c.created_at,updatedAt:c.updated_at,
+    }));
   }
   if (type === "getMemoryRelations") {
     return execute("SELECT * FROM memory_relation WHERE dataset_id=? AND (from_version_id=? OR to_version_id=?) ORDER BY created_at,id", [message.datasetId,message.versionId,message.versionId]).map(r=>({
