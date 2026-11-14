@@ -436,6 +436,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       bookRevisionId: bookRevision.bookRevisionId,
       structureNodeId: unit.id,
       locator: unit.locator,
+      presentationType: callbacks.presentationType || "mainline",
     }];
     const request = {
       client_generation_id: clientGenerationId,
@@ -455,7 +456,10 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       request,
       idempotencyKey,
       sourceReferences,
-      onPersisted: callbacks.onPersisted,
+      onPersisted: async () => {
+        await markDiscussionStarted(unit, userMessageId, callbacks.presentationType || "mainline");
+        await callbacks.onPersisted?.();
+      },
       onDelta: callbacks.onDelta,
     });
     if (config.memoryExtractionProvider && config.memoryCandidatePolicy) {
@@ -473,6 +477,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       const unit = bookRevision.units.find((item) => item.id === source?.structureNodeId)
         || bookRevision.units.find((item) => item.id === bookRevision.initialMainlineUnitId);
       if (!unit) throw new Error("无法为待恢复任务重建原文上下文。");
+      if (source?.presentationType === "mainline") await markDiscussionStarted(unit, user.id, "mainline");
       return {
         client_generation_id: delivery.clientGenerationId,
         thread_id: thread.id,
@@ -513,12 +518,17 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     repository,
     thread,
     readingPosition,
+    readingRound,
     backupStatus,
     loadMessages,
     loadMemoryState,
     extractMemories,
     resolveMemoryCandidate,
     savePosition,
+    recordPresentedSource,
+    getReadingUnitProgress,
+    completeMainlineUnit,
+    startNewReadingRound,
     send,
     stop: () => controller.stop(),
     resumePending,
