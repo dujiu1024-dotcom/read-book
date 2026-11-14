@@ -423,6 +423,9 @@ export async function createProductionReaderRuntime(config, bookRevision) {
 
   async function send(content, unit, callbacks = {}) {
     if (!unit) throw new Error("当前没有可关联的原文单元。");
+    if ((callbacks.presentationType || "mainline") === "mainline" && readingRound?.status !== "active") {
+      throw new Error("当前阅读轮次已完成，请先开启新一轮，或切换到复习模式继续讨论。");
+    }
     const messages = await loadMessages();
     const recentMessages = messages.slice(-12).map(({ message }) => ({
       role: message.role,
