@@ -77,6 +77,13 @@ export interface MemoryVersion {
   previousVersionId: MemoryVersionId | null;
   changeKind: MemoryChangeKind;
   content: string;
+  /** Human-readable candidate label; optional for legacy versions. */
+  title?: string;
+  /** Preserve whether this version records the user's view, the author's view, or AI inference. */
+  viewpoint?: MemoryViewpoint;
+  confidence?: number;
+  ambiguity?: number;
+  evaluationScore?: number;
   sourceMessageIds: MessageId[];
   sourceReferences: SourceReference[];
   createdAt: string;
