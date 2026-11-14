@@ -80,7 +80,7 @@ async function fetchVerifiedText(fetchImpl, url, label, expectedSha) {
     throw new Error(label + " Git Blob SHA 校验失败；拒绝混用不同来源版本的缓存内容。");
   }
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes).replace(/^\uFEFF/, "");
   } catch {
     throw new Error(label + " 不是有效 UTF-8 文本，拒绝导入。");
   }
@@ -218,7 +218,7 @@ function createCacheAwareFetch(fetchImpl, cacheStorage) {
       try {
         const response = await fetchImpl(url, options);
         if (response.ok && cache) {
-          void cache.put(url, response.clone()).catch(() => {});
+          try { await cache.put(url, response.clone()); } catch {}
         } else if (!response.ok && cache) {
           try {
             const cached = await cache.match(url);
