@@ -163,6 +163,3 @@ GitHub 语料 Provider 使用浏览器 Cache Storage 缓存来源仓库的目录
 
 缓存只包含公开来源的目录和正文，不包含用户阅读位置、消息或认知数据。阅读位置仍保存在 SQLite/OPFS；加密云端备份仍需宿主服务配置。浏览器清理站点数据后，离线缓存可能被清除。
 
-## Agent 多来源证据
-
-正式书籍服务模式会在用户发送讨论后，对当前 BookRevision 的阅读单元做本地词项检索，最多附带 3 条相关原文作为 additional_sources。服务端返回的每条引用仍必须通过 BookRevision、节点、定位和原文摘录核验，只有核验通过的 CitationRecord 才会显示。引用卡片逐条回跳到对应原文。该检索是轻量词项匹配，不等同于语义向量检索；真实 Agent 仍需宿主配置 Generation API 和认证。
