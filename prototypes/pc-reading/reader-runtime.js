@@ -141,6 +141,45 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     };
   }
 
+  async function resolveMemoryCandidate(candidateId, resolution) {
+    const pending = await repository.getMemoryCandidates(datasetId, thread.id);
+    const record = pending.find((item) => item.id === candidateId);
+    if (!record) throw new Error("这条待确认认知已不存在或已经处理。");
+    if (resolution === "rejected") {
+      await repository.transaction(datasetId, (tx) => tx.resolveMemoryCandidate(candidateId, "rejected", new Date().toISOString()));
+      return loadMemoryState();
+    }
+    if (resolution !== "accepted") throw new Error("未知的认知确认操作。");
+    if (typeof config.planMemoryEvolution !== "function") throw new Error("尚未配置认知演变规划器，不能安全确认并写入。");
+    const existing = await repository.createConsistentSnapshot(datasetId);
+    const acceptedItem = {
+      candidate: record.candidate,
+      evaluation: { decision: "accept", score: record.evaluationScore, reasons: ["user_confirmed"] },
+    };
+    const extractionResult = {
+      modelVersion: "user-confirmed",
+      accepted: [acceptedItem],
+      needsConfirmation: [],
+      rejected: [],
+    };
+    const plans = await config.planMemoryEvolution({
+      accepted: [acceptedItem],
+      existingMemories: existing.memories.filter((item) => item.threadId === thread.id),
+      existingVersions: existing.memoryVersions,
+      existingRelations: existing.memoryRelations,
+      threadId: thread.id,
+      bookRevisionId: bookRevision.bookRevisionId,
+      userConfirmedCandidateId: candidateId,
+    });
+    if (!Array.isArray(plans) || plans.length !== 1) throw new Error("演变规划器必须为已确认候选返回且仅返回一个版本计划。");
+    await persistAcceptedMemoryCandidates(repository, datasetId, extractionResult, [{
+      ...plans[0],
+      candidateId: record.candidate.id,
+      resolveCandidateId: record.id,
+    }]);
+    return loadMemoryState();
+  }
+
   async function savePosition(state, units) {
     const current = units[state.mainlineIndex];
     const displayed = state.displayedUnit;
@@ -251,6 +290,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     loadMessages,
     loadMemoryState,
     extractMemories,
+    resolveMemoryCandidate,
     savePosition,
     send,
     stop: () => controller.stop(),
