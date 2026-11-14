@@ -37,3 +37,17 @@ npm run build
 - 不把解析成功等同于正文完整或定位正确；必须人工抽样对照原文件。
 
 该 PoC 不决定最终阅读器选型，不构成正式导入服务。
+
+## 标准书籍包导出
+
+导入 EPUB/PDF/TXT 后，可在“标准书籍包导出”区域补充书名、作者和语言等元数据，并导出 v1.0.0 ZIP 包。导出包含原始文件、书目元数据、章节结构和 JSONL 正文切片；每个正文切片与原始文件均包含 SHA-256。作者等缺失元数据必须由操作者填写，不会自动编造；扫描版 PDF 无可提取文本时不会伪装成可用切片。
+
+生成的 ZIP 可使用 packages/book-package-validator CLI 校验：
+
+```sh
+cd packages/book-package-validator
+npm install
+node src/cli.js ../../path/to/book.read-book.zip
+```
+
+导出器只生成结构化包，不代表云端加工、OCR、版权审核或检索质量已完成。向量文件和图片资源暂不导出。
