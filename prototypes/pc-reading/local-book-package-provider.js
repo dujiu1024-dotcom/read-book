@@ -138,13 +138,16 @@ export async function parseBookPackage(input, identity = {}) {
   try { files = unzipSync(archiveBytes); }
   catch (error) { throw new Error("书籍包 ZIP 解压失败：" + error.message); }
 
-  const entries = Object.entries(files);
-  if (entries.length !== expectedFiles.size) throw new Error("ZIP 解压后的文件数量与中央目录不一致。");
+  const extractedFiles = {};
   for (const [path, size] of expectedFiles) {
     if (!(files[path] instanceof Uint8Array) || files[path].byteLength !== size) {
       throw new Error("ZIP 文件解压结果与中央目录声明不一致：" + path);
     }
+    extractedFiles[path] = files[path];
   }
+  files = extractedFiles;
+  const entries = Object.entries(files);
+  if (entries.length !== expectedFiles.size) throw new Error("ZIP 解压后的文件数量与中央目录不一致。");
   const expandedBytes = entries.reduce((total, [, bytes]) => total + bytes.byteLength, 0);
   if (entries.length > 20000 || expandedBytes > MAX_EXPANDED_BYTES) {
     throw new RangeError("书籍包展开后文件数量或体积超过安全限制。");
