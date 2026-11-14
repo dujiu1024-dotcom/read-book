@@ -154,7 +154,7 @@ export interface MemoryCandidateRecord {
   threadId: string;
   candidate: MemoryCandidate;
   evaluationScore: number;
-  status: "needs_confirmation";
+  status: "needs_confirmation" | "accepted" | "rejected";
   createdAt: string;
   updatedAt: string;
 }
@@ -203,6 +203,7 @@ export interface LocalRepositoryTransaction {
   appendMemoryVersion(version: MemoryVersion): Promise<MemoryVersion>;
   appendMemoryRelation(relation: MemoryRelation): Promise<MemoryRelation>;
   saveMemoryCandidate(candidate: MemoryCandidateRecord): Promise<MemoryCandidateRecord>;
+  resolveMemoryCandidate(candidateId: string, status: "accepted" | "rejected", updatedAt: string): Promise<boolean>;
 
   createAccountDataSetBinding(binding: AccountDataSetBinding): Promise<AccountDataSetBinding>;
   getAccountDataSetBinding(bindingId: string): Promise<AccountDataSetBinding | null>;
