@@ -121,3 +121,48 @@ test('TXT 段落定位偏移与去除首尾空白后的原文完全一致', asyn
   for (const paragraph of result) expect(paragraph.slice).toBe(paragraph.text);
 });
 
+
+
+test('从维基文库按上中下三卷导入《传习录》，保留修订来源', async ({ page }) => {
+  await page.route('https://zh.wikisource.org/w/api.php**', async (route) => {
+    const url = new URL(route.request().url());
+    const pageName = url.searchParams.get('page');
+    const section = pageName.endsWith('卷01') ? '传习录上' : pageName.endsWith('卷02') ? '传习录中' : '传习录下';
+    const body = section + '正文。'.repeat(1600);
+    const html = '<div class="mw-parser-output"><div class="mw-heading mw-heading3"><h3>◎' + section + '</h3></div><p>' +
+      body + '</p><div class="mw-heading mw-heading3"><h3>下一篇</h3></div><p>不应被导入的其他内容。</p></div>';
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ parse: { title: pageName, revid: 12345, text: html } })
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '从维基文库导入《传习录》原文' }).click();
+  await expect(page.locator('#status')).toContainText('导入成功', { timeout: 20_000 });
+  await expect(page.locator('#batch-status')).toContainText('传习录');
+  const result = JSON.parse(await page.locator('#output').textContent());
+  expect(result.source.sourceRecords).toHaveLength(3);
+  expect(result.source.sourceRecords.every((item) => item.revid === 12345)).toBe(true);
+  expect(result.sections.map((item) => item.title)).toEqual(['《传习录》上卷', '《传习录》中卷', '《传习录》下卷']);
+  expect(result.characters).toBeGreaterThan(10_000);
+  expect(result.sections.every((item) => !item.source.url.includes('undefined'))).toBe(true);
+  expect(JSON.stringify(result)).not.toContain('不应被导入的其他内容');
+});
+
+test('六本指定书籍可一次批量导入并分别识别，不合并书目', async ({ page }) => {
+  await page.goto('/');
+  const titles = [
+    ['传习录.txt', 'chuanxilu'],
+    ...[1, 2, 3, 4, 5].map((volume) => ['毛泽东选集-第' + volume + '卷.txt', 'maoxuan-' + volume])
+  ];
+  await page.locator('#file').setInputFiles(titles.map(([name]) => ({
+    name, mimeType: 'text/plain', buffer: Buffer.from('第一段原文内容\\n\\n第二段原文内容，包含足够的书籍文本。')
+  })));
+  await expect(page.locator('#batch-status')).toContainText('成功 6 本', { timeout: 20_000 });
+  const report = JSON.parse(await page.locator('#output').textContent());
+  expect(report.outcomes).toHaveLength(6);
+  expect(report.outcomes.map((item) => item.corpusKey)).toEqual(titles.map((item) => item[1]));
+  expect(report.missingCorpusKeys).toEqual([]);
+  await expect(page.locator('#saved-books').locator('li')).toHaveCount(6);
+});
