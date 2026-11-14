@@ -297,3 +297,218 @@ export function evaluateMemoryCandidate(
   }
   return { decision: "accept", score, reasons: ["value_and_provenance_requirements_met"] };
 }
+
+
+/** Cross-memory links are explicit and provenance-bearing; they never replace the immutable version chain. */
+export type MemoryRelationType =
+  | "supports"
+  | "contradicts"
+  | "extends"
+  | "supersedes"
+  | "retracts"
+  | "duplicate_of";
+
+export interface MemoryRelation {
+  id: string;
+  fromVersionId: MemoryVersionId;
+  toVersionId: MemoryVersionId;
+  relationType: MemoryRelationType;
+  sourceMessageIds: MessageId[];
+  sourceReferences: SourceReference[];
+  createdAt: string;
+}
+
+export interface MemoryExtractionContext {
+  threadId: ThreadId;
+  bookRevisionId: BookRevisionId;
+  /** All message IDs available to the extractor in this Thread. */
+  availableMessageIds: MessageId[];
+  /** A candidate must trace to at least one original user message, not only assistant output. */
+  availableUserMessageIds: MessageId[];
+  /** Structure nodes belonging to the immutable BookRevision currently being discussed. */
+  availableStructureNodeIds: StructureNodeId[];
+}
+
+export interface MemoryExtractionResult {
+  candidates: MemoryCandidate[];
+}
+
+/**
+ * Validate structured model output against the exact conversation and source scope supplied.
+ * This is a provenance gate, not a semantic truth check or a replacement for value evaluation.
+ */
+export function validateMemoryExtractionResult(
+  output: MemoryExtractionResult,
+  context: MemoryExtractionContext,
+): MemoryCandidate[] {
+  if (!output || !Array.isArray(output.candidates)) {
+    throw new DomainRuleError("Memory extraction output must contain a candidates array.");
+  }
+  if (output.candidates.length > 10) {
+    throw new DomainRuleError("One extraction result may contain at most 10 candidates.");
+  }
+  if (!context || !Array.isArray(context.availableMessageIds) ||
+      !Array.isArray(context.availableUserMessageIds) || !Array.isArray(context.availableStructureNodeIds)) {
+    throw new DomainRuleError("Extraction context scopes must be arrays.");
+  }
+  const availableMessages = new Set(context.availableMessageIds);
+  const availableUsers = new Set(context.availableUserMessageIds);
+  const availableNodes = new Set(context.availableStructureNodeIds);
+  if (!availableMessages.size ||
+      [...availableMessages].some((id) => typeof id !== "string" || !id.trim()) ||
+      availableMessages.size !== context.availableMessageIds.length ||
+      [...availableUsers].some((id) => !availableMessages.has(id)) ||
+      availableUsers.size !== context.availableUserMessageIds.length ||
+      [...availableNodes].some((id) => typeof id !== "string" || !id.trim()) ||
+      availableNodes.size !== context.availableStructureNodeIds.length) {
+    throw new DomainRuleError("Extraction context message/source scopes are invalid.");
+  }
+  if (typeof context.threadId !== "string" || !context.threadId.trim() ||
+      typeof context.bookRevisionId !== "string" || !context.bookRevisionId.trim()) {
+    throw new DomainRuleError("Extraction context requires a Thread and BookRevision.");
+  }
+
+  const candidateIds = new Set<string>();
+  const contentFingerprints = new Set<string>();
+  for (const candidate of output.candidates) {
+    if (!candidate || typeof candidate !== "object") {
+      throw new DomainRuleError("Every extraction candidate must be an object.");
+    }
+    if (typeof candidate.id !== "string" || !candidate.id.trim() ||
+        typeof candidate.title !== "string" || !candidate.title.trim() ||
+        typeof candidate.content !== "string" || !candidate.content.trim()) {
+      throw new DomainRuleError("Every candidate requires a non-empty id, title and content.");
+    }
+    if (candidateIds.has(candidate.id)) throw new DomainRuleError("Candidate IDs must be unique within one result.");
+    candidateIds.add(candidate.id);
+    if (!["user", "author", "assistant_inference"].includes(candidate.viewpoint)) {
+      throw new DomainRuleError("Candidate viewpoint is invalid.");
+    }
+    if (typeof candidate.requiresBookCitation !== "boolean") {
+      throw new DomainRuleError("Candidate requiresBookCitation must be boolean.");
+    }
+    if (!Array.isArray(candidate.sourceMessageIds) || candidate.sourceMessageIds.length === 0) {
+      throw new DomainRuleError("Every candidate must cite at least one original message.");
+    }
+    if (new Set(candidate.sourceMessageIds).size !== candidate.sourceMessageIds.length) {
+      throw new DomainRuleError("Candidate source message IDs must be unique.");
+    }
+    if (candidate.sourceMessageIds.some((id) => !availableMessages.has(id))) {
+      throw new DomainRuleError("Candidate references a message outside the supplied Thread context.");
+    }
+    if (!candidate.sourceMessageIds.some((id) => availableUsers.has(id))) {
+      throw new DomainRuleError("Every candidate must trace to at least one original user message.");
+    }
+    if (!Array.isArray(candidate.sourceReferences)) {
+      throw new DomainRuleError("Candidate sourceReferences must be an array.");
+    }
+    const sourceKeys = new Set<string>();
+    for (const reference of candidate.sourceReferences) {
+      if (!reference || typeof reference !== "object") {
+        throw new DomainRuleError("Candidate source references must be objects.");
+      }
+      if (reference.bookRevisionId !== context.bookRevisionId) {
+        throw new DomainRuleError("Candidate citation belongs to a different BookRevision.");
+      }
+      if (!availableNodes.has(reference.structureNodeId)) {
+        throw new DomainRuleError("Candidate citation references a structure node outside the supplied BookRevision.");
+      }
+      if (!reference.locator.trim()) throw new DomainRuleError("Candidate citation locator cannot be empty.");
+      const key = JSON.stringify([reference.bookRevisionId, reference.structureNodeId, reference.locator]);
+      if (sourceKeys.has(key)) throw new DomainRuleError("Candidate source references must be unique.");
+      sourceKeys.add(key);
+    }
+    if (candidate.viewpoint === "author" && !candidate.requiresBookCitation) {
+      throw new DomainRuleError("An author viewpoint must require a Book Citation.");
+    }
+    if (candidate.requiresBookCitation && candidate.sourceReferences.length === 0) {
+      throw new DomainRuleError("A book-based candidate must include a Book Citation.");
+    }
+    const fingerprint = `${candidate.title.trim().toLocaleLowerCase()}::${candidate.content.trim().replace(/\s+/g, " ").toLocaleLowerCase()}`;
+    if (contentFingerprints.has(fingerprint)) {
+      throw new DomainRuleError("Duplicate candidates in one extraction result must be collapsed.");
+    }
+    contentFingerprints.add(fingerprint);
+  }
+  return structuredClone(output.candidates);
+}
+
+export function validateMemoryRelation(relation: MemoryRelation): MemoryRelation {
+  if (!relation || typeof relation !== "object") {
+    throw new DomainRuleError("MemoryRelation must be an object.");
+  }
+  if (typeof relation.id !== "string" || !relation.id.trim() ||
+      typeof relation.fromVersionId !== "string" || !relation.fromVersionId.trim() ||
+      typeof relation.toVersionId !== "string" || !relation.toVersionId.trim()) {
+    throw new DomainRuleError("MemoryRelation requires id and both version endpoints.");
+  }
+  if (relation.fromVersionId === relation.toVersionId) {
+    throw new DomainRuleError("A MemoryRelation cannot point to itself.");
+  }
+  if (typeof relation.createdAt !== "string" || !Number.isFinite(Date.parse(relation.createdAt))) {
+    throw new DomainRuleError("MemoryRelation createdAt must be a valid date-time.");
+  }
+  if (!["supports", "contradicts", "extends", "supersedes", "retracts", "duplicate_of"].includes(relation.relationType)) {
+    throw new DomainRuleError("MemoryRelation type is invalid.");
+  }
+  if (!Array.isArray(relation.sourceMessageIds) || relation.sourceMessageIds.length === 0) {
+    throw new DomainRuleError("MemoryRelation requires source message provenance.");
+  }
+  if (new Set(relation.sourceMessageIds).size !== relation.sourceMessageIds.length ||
+      relation.sourceMessageIds.some((id) => !id.trim())) {
+    throw new DomainRuleError("MemoryRelation source message IDs must be unique and non-empty.");
+  }
+  if (!Array.isArray(relation.sourceReferences) || relation.sourceReferences.some((reference) =>
+    !reference || typeof reference.bookRevisionId !== "string" || !reference.bookRevisionId.trim() ||
+    typeof reference.structureNodeId !== "string" || !reference.structureNodeId.trim() ||
+    typeof reference.locator !== "string" || !reference.locator.trim()
+  )) {
+    throw new DomainRuleError("MemoryRelation Book Citations must have complete locators.");
+  }
+  return structuredClone(relation);
+}
+
+/**
+ * Validate an immutable version append and its optional cross-memory relation.
+ * conflict/rejection/extension require explicit typed links; correction/supplement are
+ * represented by the same memory's previousVersionId chain and need no cross-memory link.
+ */
+export function validateMemoryEvolution(
+  previous: MemoryVersion | null,
+  next: MemoryVersion,
+  relation: MemoryRelation | null = null,
+): { version: MemoryVersion; relation: MemoryRelation | null } {
+  if (!["new", "supplement", "correction", "conflict", "rejection", "extension"].includes(next.changeKind)) {
+    throw new DomainRuleError("MemoryVersion changeKind is invalid.");
+  }
+  const version = appendMemoryVersion(previous, next);
+  const requiredRelation: Partial<Record<MemoryChangeKind, MemoryRelationType>> = {
+    conflict: "contradicts",
+    rejection: "retracts",
+    extension: "extends",
+  };
+  const optionalRelation: Partial<Record<MemoryChangeKind, MemoryRelationType>> = {
+    supplement: "supports",
+    correction: "supersedes",
+  };
+  const required = requiredRelation[next.changeKind];
+  const optional = optionalRelation[next.changeKind];
+
+  if (required && relation === null) {
+    throw new DomainRuleError(`Memory change "${next.changeKind}" requires a "${required}" relation.`);
+  }
+  if (relation === null) return { version, relation: null };
+
+  const validatedRelation = validateMemoryRelation(relation);
+  if (validatedRelation.fromVersionId !== next.id) {
+    throw new DomainRuleError("MemoryRelation.fromVersionId must match the appended version.");
+  }
+  const expected = required || optional;
+  if (!expected || validatedRelation.relationType !== expected) {
+    throw new DomainRuleError(`Memory change "${next.changeKind}" cannot use relation "${validatedRelation.relationType}".`);
+  }
+  if (!validatedRelation.sourceMessageIds.some((id) => next.sourceMessageIds.includes(id))) {
+    throw new DomainRuleError("MemoryRelation provenance must overlap the new MemoryVersion sources.");
+  }
+  return { version, relation: validatedRelation };
+}

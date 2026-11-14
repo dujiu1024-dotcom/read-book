@@ -9,6 +9,11 @@ import {
   openNonMainlineView,
   returnToMainline,
   transitionAssistantMessage,
+  validateMemoryEvolution,
+  validateMemoryExtractionResult,
+  validateMemoryRelation,
+  type MemoryCandidate,
+  type MemoryRelation,
   type MemoryVersion,
   type ReadingPosition,
   type Thread,
@@ -120,4 +125,150 @@ test("memory evolution appends a linked version and preserves the old version", 
   assert.throws(() => appendMemoryVersion(first, { ...second, previousVersionId: null }), DomainRuleError);
   assert.throws(() => appendMemoryVersion(first, { ...second, version: 3 }), DomainRuleError);
   assert.throws(() => appendMemoryVersion(first, { ...second, memoryId: "other" }), DomainRuleError);
+});
+
+const extractionContext = {
+  threadId: "thread-1",
+  bookRevisionId: "revision-1",
+  availableMessageIds: ["user-1", "assistant-1"],
+  availableUserMessageIds: ["user-1"],
+  availableStructureNodeIds: ["node-1"],
+};
+
+const validCandidate: MemoryCandidate = {
+  id: "candidate-1",
+  title: "先建立边界再优化",
+  content: "用户倾向先明确问题边界，再进行局部优化。",
+  viewpoint: "user",
+  confidence: 0.92,
+  ambiguity: 0.08,
+  value: {
+    novelty: 0.8, stability: 0.7, explanatoryPower: 0.85,
+    discussionDepth: 0.75, relationStrength: 0.7,
+  },
+  sourceMessageIds: ["user-1"],
+  sourceReferences: [],
+  requiresBookCitation: false,
+};
+
+test("structured extraction output is limited to supplied messages and user provenance", () => {
+  assert.deepEqual(
+    validateMemoryExtractionResult({ candidates: [validCandidate] }, extractionContext),
+    [validCandidate],
+  );
+  assert.throws(() => validateMemoryExtractionResult({
+    candidates: [{ ...validCandidate, sourceMessageIds: ["unknown-message"] }],
+  }, extractionContext), DomainRuleError);
+  assert.throws(() => validateMemoryExtractionResult({
+    candidates: [{ ...validCandidate, sourceMessageIds: ["assistant-1"] }],
+  }, extractionContext), /original user message/);
+});
+
+test("book-based and author-viewpoint candidates require a citation in the active revision", () => {
+  assert.throws(() => validateMemoryExtractionResult({
+    candidates: [{ ...validCandidate, viewpoint: "author", requiresBookCitation: false }],
+  }, extractionContext), /author viewpoint/);
+  assert.throws(() => validateMemoryExtractionResult({
+    candidates: [{ ...validCandidate, requiresBookCitation: true }],
+  }, extractionContext), /Book Citation/);
+  const cited = {
+    ...validCandidate,
+    viewpoint: "author" as const,
+    requiresBookCitation: true,
+    sourceReferences: [{
+      bookRevisionId: "revision-1", structureNodeId: "node-1", locator: "EPUB CFI 1",
+    }],
+  };
+  assert.doesNotThrow(() => validateMemoryExtractionResult({ candidates: [cited] }, extractionContext));
+  assert.throws(() => validateMemoryExtractionResult({
+    candidates: [{ ...cited, sourceReferences: [{
+      bookRevisionId: "revision-2", structureNodeId: "node-1", locator: "EPUB CFI 1",
+    }] }],
+  }, extractionContext), /different BookRevision/);
+  assert.throws(() => validateMemoryExtractionResult({
+    candidates: [{ ...cited, sourceReferences: [{
+      bookRevisionId: "revision-1", structureNodeId: "unknown-node", locator: "EPUB CFI 1",
+    }] }],
+  }, extractionContext), /outside the supplied BookRevision/);
+});
+
+test("one extraction batch rejects duplicate candidates and excessive candidate count", () => {
+  assert.throws(() => validateMemoryExtractionResult({
+    candidates: [validCandidate, { ...validCandidate, id: "candidate-2" }],
+  }, extractionContext), /Duplicate candidates/);
+  assert.throws(() => validateMemoryExtractionResult({
+    candidates: Array.from({ length: 11 }, (_, index) => ({ ...validCandidate, id: "candidate-" + index })),
+  }, extractionContext), /at most 10/);
+});
+
+function memoryVersion(changeKind: MemoryVersion["changeKind"], version = 2): MemoryVersion {
+  return {
+    id: "version-" + version,
+    memoryId: "memory-1",
+    version,
+    previousVersionId: version === 1 ? null : "version-1",
+    changeKind,
+    content: "认知内容 " + changeKind,
+    sourceMessageIds: ["user-1"],
+    sourceReferences: [],
+    createdAt: "2026-11-14T00:00:00.000Z",
+  };
+}
+
+function relationFor(version: MemoryVersion, relationType: MemoryRelation["relationType"]): MemoryRelation {
+  return {
+    id: "relation-" + relationType,
+    fromVersionId: version.id,
+    toVersionId: "version-other",
+    relationType,
+    sourceMessageIds: ["user-1"],
+    sourceReferences: [],
+    createdAt: "2026-11-14T00:00:01.000Z",
+  };
+}
+
+test("all six memory change kinds have explicit append and relation rules", () => {
+  const first = memoryVersion("new", 1);
+  assert.doesNotThrow(() => validateMemoryEvolution(null, first));
+
+  assert.doesNotThrow(() => validateMemoryEvolution(
+    first, memoryVersion("supplement"), null,
+  ));
+  assert.doesNotThrow(() => validateMemoryEvolution(
+    first, memoryVersion("correction"), relationFor(memoryVersion("correction"), "supersedes"),
+  ));
+  assert.doesNotThrow(() => validateMemoryEvolution(
+    first, memoryVersion("conflict"), relationFor(memoryVersion("conflict"), "contradicts"),
+  ));
+  assert.doesNotThrow(() => validateMemoryEvolution(
+    first, memoryVersion("rejection"), relationFor(memoryVersion("rejection"), "retracts"),
+  ));
+  assert.doesNotThrow(() => validateMemoryEvolution(
+    first, memoryVersion("extension"), relationFor(memoryVersion("extension"), "extends"),
+  ));
+
+  assert.throws(() => validateMemoryEvolution(
+    first, memoryVersion("conflict"), null,
+  ), /requires a "contradicts" relation/);
+  assert.throws(() => validateMemoryEvolution(
+    first, memoryVersion("rejection"), relationFor(memoryVersion("rejection"), "supports"),
+  ), /cannot use relation/);
+  assert.throws(() => validateMemoryEvolution(
+    null, memoryVersion("new", 1), relationFor(memoryVersion("new", 1), "supports"),
+  ), /cannot use relation/);
+});
+
+test("memory relations require distinct endpoints and original source provenance", () => {
+  const relation = relationFor(memoryVersion("conflict"), "contradicts");
+  assert.deepEqual(validateMemoryRelation(relation), relation);
+  assert.throws(() => validateMemoryRelation({
+    ...relation, toVersionId: relation.fromVersionId,
+  }), /cannot point to itself/);
+  assert.throws(() => validateMemoryRelation({
+    ...relation, sourceMessageIds: [],
+  }), /requires source message provenance/);
+  assert.throws(() => validateMemoryEvolution(
+    memoryVersion("new", 1), memoryVersion("conflict"),
+    { ...relation, sourceMessageIds: ["another-user-message"] },
+  ), /provenance must overlap/);
 });
