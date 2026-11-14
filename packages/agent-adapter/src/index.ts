@@ -398,6 +398,9 @@ export async function runGenerationTurn(
   } catch (error) {
     streamError = error;
   }
+  if (input.signal.aborted) {
+    await client.cancel(accepted.generation_id, input.idempotencyKey + ":cancel").catch(() => undefined);
+  }
   let snapshot: GenerationSnapshot;
   try {
     snapshot = await client.get(accepted.generation_id);
