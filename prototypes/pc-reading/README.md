@@ -71,6 +71,15 @@ window.READ_BOOK_CONFIG = {
 若没有配置公共 API，页面明确使用 Demo Provider；若配置了真实书籍，页面不会展示演示讨论消息或固定演示回复，讨论输入暂时禁用，等待 #26/#27 接入。
 
 
+
+## 多节点原文证据
+
+正式阅读运行时会基于当前用户输入，在当前 BookRevision 的全部阅读单元中执行本地词项检索（中文二元/三元词组 + 英文词项，BM25 风格排序），排除当前原文单元后最多选择 7 个候选来源。只发送命中的原文摘录，不发送整本书或完整用户历史。
+
+GenerationRequest.context.additional_sources 是可选的有界证据包。服务端引用必须匹配本次请求提供的 BookRevision、结构节点、定位和原文摘录；未提供或无法在原文中找到的引用不会写入本地 SourceReference/CitationRecord。阅读界面逐条展示通过校验的引用卡片，并支持分别回跳原文。
+
+当前检索是可解释的词项检索基线，不等同于语义向量检索；后续可替换为受控的相关来源 Provider，但仍必须受同一证据白名单和原文校验约束。对应纯函数测试：`source-retrieval.test.mjs`，本目录命令：`npm run test:source-retrieval`。
+
 ## 本地运行（正式阅读客户端）
 
 本目录现由 Vite 构建，生产模式会接入 SQLite WASM + OPFS 本地 Repository、公共书籍 API Provider 和 HTTP/SSE Agent Transport，不再使用固定演示回复。
