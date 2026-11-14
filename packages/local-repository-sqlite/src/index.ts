@@ -120,6 +120,10 @@ export class SqliteOpfsRepository implements LocalRepository {
     });
   }
 
+  async createConsistentSnapshot(datasetId: string): Promise<RepositorySnapshot> {
+    return this.transaction(datasetId, (tx) => tx.createConsistentSnapshot());
+  }
+
   async getDataSet(datasetId: string): Promise<LocalDataSet | null> {
     await this.ensureReady();
     return this.request("getDataSet", { datasetId });
