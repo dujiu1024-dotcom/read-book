@@ -120,7 +120,7 @@ export async function parseBookPackage(input) {
       id: chunk.chunk_id,
       chapter: chapterPath(chapter, chaptersById),
       title: chapter.title,
-      locator: chunk.start_locator || chunk.page_number ? (chunk.start_locator || `第${chunk.page_number}页`) : `正文单元 ${units.length + 1}`,
+      locator: chunk.start_locator || (chunk.page_number ? `第${chunk.page_number}页` : `正文单元 ${units.length + 1}`),
       text: chunk.content,
     });
   }
