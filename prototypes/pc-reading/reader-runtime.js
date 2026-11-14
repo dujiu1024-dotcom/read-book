@@ -8,6 +8,7 @@ import { createHttpGenerationTransport } from "../../packages/agent-adapter/src/
 import { createHttpEncryptedBackupPort } from "../../poc/encrypted-backup/src/http-backup-port.js";
 import { runMemoryExtraction, persistAcceptedMemoryCandidates } from "../../packages/agent-adapter/src/memory-extraction.ts";
 import { selectThreadMemoryState } from "./memory-thread-scope.js";
+import { hasEncryptedBackupService } from "./reader-capabilities.js";
 
 function uuid() {
   return crypto.randomUUID();
@@ -57,14 +58,20 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       checkpointInterval: config.backupCheckpointInterval,
     });
   };
-  let encryptedBackupPort = localOnly ? null : makeBackupPort(datasetId);
-  let backupStatus = localOnly
-    ? { label: "备份：未配置", detail: "当前仅使用本地阅读模式；配置加密备份服务后可启用云端备份。" }
+  const backupConfigured = !localOnly && hasEncryptedBackupService(config);
+  let encryptedBackupPort = backupConfigured ? makeBackupPort(datasetId) : null;
+  let backupStatus = !backupConfigured
+    ? {
+        label: "备份：未配置",
+        detail: localOnly
+          ? "当前仅使用本地阅读模式；配置加密备份服务后可启用云端备份。"
+          : "Agent 与本地阅读可用；尚未配置加密备份服务，私人数据仅保存在本地。",
+      }
     : { label: "备份：检查中", detail: "正在检查本地数据与云端备份状态。" };
 
   let initialSnapshot = await repository.createConsistentSnapshot(datasetId);
   const hasLocalData = initialSnapshot.threads.length > 0 || initialSnapshot.messages.length > 0 || initialSnapshot.dirtySequence > 0;
-  if (!localOnly && !hasLocalData) {
+  if (backupConfigured && encryptedBackupPort && !hasLocalData) {
     if (typeof encryptedBackupPort.listBackups !== "function") {
       throw new Error("新设备首次打开必须支持查询云端备份清单，不能在未知远端状态下直接创建新数据。");
     }
