@@ -91,3 +91,32 @@ test("memory extraction requires declared message scope to match provider input"
     /exactly match the declared Thread message scope/,
   );
 });
+
+
+test("memory extraction routes low-confidence candidates to confirmation instead of acceptance", async () => {
+  const result = await runMemoryExtraction({
+    async extractStructured() {
+      return {
+        candidates: [{
+          ...candidate,
+          confidence: 0.35,
+          ambiguity: 0.1,
+        }],
+      };
+    },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  assert.equal(result.accepted.length, 0);
+  assert.equal(result.needsConfirmation.length, 1);
+  assert.deepEqual(result.needsConfirmation[0].evaluation.reasons, ["low_confidence"]);
+});
+
+test("memory extraction allows an empty candidate result for ordinary conversation", async () => {
+  const result = await runMemoryExtraction({
+    async extractStructured() {
+      return { candidates: [] };
+    },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  assert.equal(result.accepted.length, 0);
+  assert.equal(result.needsConfirmation.length, 0);
+  assert.equal(result.rejected.length, 0);
+});
