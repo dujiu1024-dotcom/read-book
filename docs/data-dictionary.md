@@ -124,7 +124,7 @@ item_type：key_point / concept / author_claim / argument / evidence / case / cr
 
 ### 3.2 AccountDataSetBinding（本地绑定上下文）
 
-字段：id UUID PK；account_id TEXT NOT NULL；local_dataset_id UUID NOT NULL FK；binding_status TEXT NOT NULL（active / inactive / revoked）；bound_at TIMESTAMP NOT NULL；last_selected_at TIMESTAMP NULL。
+字段：id UUID PK；account_id TEXT NULL；local_dataset_id UUID NOT NULL FK；status TEXT NOT NULL（active / inactive / revoked）；bound_at TIMESTAMP NOT NULL；last_selected_at TIMESTAMP NULL；revoked_at TIMESTAMP NULL。
 
 约束：同一数据集最多一个 active account binding；同一账号可有多个历史绑定，但用户必须显式选择。切换账号不得自动选择其他账号的数据集。该表只表达当前设备上的显式关联，不授予跨账号云端恢复权。
 
@@ -170,53 +170,53 @@ item_type：key_point / concept / author_claim / argument / evidence / case / cr
 
 主键：(reading_round_id, structure_node_id)。每轮创建时，所有主线单元初始化为 not_presented。状态转换以 state-machines.md 为准；review / temporary / citation 不得修改本表。discussed / skipped 为单元终态；全部单元进入终态后，ReadingRound 才能 completed。
 
-### 3.9 Citation
+### 3.10 Citation
 
 字段：id UUID PK；message_id UUID NOT NULL FK；book_revision_id UUID NOT NULL；chunk_id UUID NOT NULL；structure_node_id UUID NOT NULL；source_locator JSON NOT NULL；quote TEXT NOT NULL；source_hash TEXT NOT NULL；created_at TIMESTAMP NOT NULL。
 
 约束：引用必须绑定具体 BookRevision、chunk、结构节点和来源哈希；原文版本变更不得静默迁移旧引用。
 
-### 3.10 Note
+### 3.11 Note
 
 字段：id UUID PK；local_dataset_id UUID NOT NULL FK；book_revision_id UUID NOT NULL；note_type TEXT NOT NULL（author_view / user_view / ai_organization / ai_explanation / question / discussion_conclusion）；title TEXT NOT NULL；content TEXT NOT NULL；source_type TEXT NOT NULL（message / citation / structure_node / mixed）；version INTEGER NOT NULL；edit_origin TEXT NOT NULL（ai / user）；user_edited_at TIMESTAMP NULL；reading_round_id UUID NULL FK → ReadingRound.id；status TEXT NOT NULL（active / deleted）；created_at TIMESTAMP NOT NULL；updated_at TIMESTAMP NOT NULL。
 
 约束：AI 不得静默覆盖 edit_origin=user 的内容；AI 后续更新必须创建新版本或候选记录并保留历史。删除采用软删除并保留来源审计。
 
-### 3.11 NoteSource
+### 3.12 NoteSource
 
 字段：id UUID PK；note_id UUID NOT NULL FK；source_message_id UUID NULL FK → Message.id；citation_id UUID NULL FK → Citation.id；structure_node_id UUID NULL FK → BookStructureNode.id；source_role TEXT NOT NULL；created_at TIMESTAMP NOT NULL。
 
 source_role：author / user / assistant。每条 NoteSource 至少绑定一个来源对象；Note 至少有一个 NoteSource。
 
-### 3.12 Memory
+### 3.13 Memory
 
 字段：id UUID PK；local_dataset_id UUID NOT NULL FK；book_revision_id UUID NOT NULL；memory_type TEXT NOT NULL；content TEXT NOT NULL；status TEXT NOT NULL（active / superseded / retracted / deleted）；reading_round_id UUID NULL FK → ReadingRound.id；created_at TIMESTAMP NOT NULL；updated_at TIMESTAMP NOT NULL。
 
 约束：认知演变不得原位覆盖旧 Memory；通过 MemoryRelation 建立关系。删除后不应被检索为当前有效认知，但审计与来源链按用户删除规则处理。
 
-### 3.13 MemorySource
+### 3.14 MemorySource
 
 字段：id UUID PK；memory_id UUID NOT NULL FK；source_message_id UUID NULL FK → Message.id；citation_id UUID NULL FK → Citation.id；structure_node_id UUID NULL FK → BookStructureNode.id；source_role TEXT NOT NULL；created_at TIMESTAMP NOT NULL。
 
 约束：每条 Memory 至少有一个来源；来源角色区分 author / user / assistant。
 
-### 3.14 MemoryRelation
+### 3.15 MemoryRelation
 
 字段：id UUID PK；from_memory_id UUID NOT NULL FK → Memory.id；to_memory_id UUID NOT NULL FK → Memory.id；relation_type TEXT NOT NULL（supplements / corrects / conflicts / overturns / extends）；created_at TIMESTAMP NOT NULL。
 
 约束：(from_memory_id, to_memory_id, relation_type) UNIQUE；from 与 to 不得相同；关系方向表示新认知指向被关联的既有认知，具体展示顺序由应用层解释。
 
-### 3.15 GenerationDelivery（SQLite v3）
+### 3.16 GenerationDelivery（SQLite v3）
 
 字段：client_generation_id UUID PK；dataset_id UUID NOT NULL FK；thread_id UUID NOT NULL FK；user_message_id UUID NOT NULL FK；assistant_message_id UUID NOT NULL FK；idempotency_key TEXT NOT NULL；generation_id TEXT NULL；status TEXT NOT NULL（queued / running / completed / failed / cancelled / expired）；last_sequence INTEGER NOT NULL；last_event_id TEXT NULL；expires_at TIMESTAMP NULL；created_at TIMESTAMP NOT NULL；updated_at TIMESTAMP NOT NULL。
 
 约束：客户端生成身份与幂等键稳定；重复提交复用同一 delivery；事件游标不回退；终态不可回退；最终 Assistant Message 以服务端权威快照落库。此表是本地可恢复任务交付记录，不是服务端 GenerationJob 的替代品。
 
-### 3.16 BackupJournal（未实现为独立表）
+### 3.17 BackupJournal（未实现为独立表）
 
 SQLite v6 不创建逐行 BackupJournal。增量边界由 LocalDataSet.dirty_sequence 与 last_acked_sequence 表达；Repository 事务提交时推进 dirty_sequence，远端 committed 后只确认本次一致性快照对应的序号。不得将其描述为跨设备同步日志或逐实体变更历史。
 
-### 3.17 MigrationLog（未实现为独立表）
+### 3.18 MigrationLog（未实现为独立表）
 
 SQLite v6 不创建 MigrationLog 表。当前迁移由 PRAGMA user_version 与 LocalDataSet.schema_version 表达，并在单个 SQLite 事务中执行；迁移失败回滚，不推进目标版本。迁移审计表属于后续可选增强，不是当前已实现能力。
 
