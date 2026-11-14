@@ -29,9 +29,9 @@ test("loads Chuanxi Lu into ordered units with volume labels and source locators
 
 test("loads a Mao Xuan volume independently and preserves article order", async () => {
   const files = [
-    { type: "file", name: "02、第二篇.md", path: "docs/第二卷/02、第二篇.md", sha: "2222222222222222222222222222222222222222", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/02.md" },
-    { type: "file", name: "01、第一篇.md", path: "docs/第二卷/01、第一篇.md", sha: "1111111111111111111111111111111111111111", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/01.md" },
-    { type: "file", name: "README.md", path: "docs/第二卷/README.md", sha: "3333333333333333333333333333333333333333", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/README.md" }
+    { type: "file", name: "02、第二篇.md", path: "docs/方法论/毛泽东选集/第二卷/02、第二篇.md", sha: "2222222222222222222222222222222222222222", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/02.md" },
+    { type: "file", name: "01、第一篇.md", path: "docs/方法论/毛泽东选集/第二卷/01、第一篇.md", sha: "1111111111111111111111111111111111111111", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/01.md" },
+    { type: "file", name: "README.md", path: "docs/方法论/毛泽东选集/第二卷/README.md", sha: "3333333333333333333333333333333333333333", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/README.md" }
   ];
   const provider = createGithubCorpusProvider({ fetchImpl: async (url) => {
     if (String(url).includes("/contents/")) return new Response(JSON.stringify(files), { status: 200 });
