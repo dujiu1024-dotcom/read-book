@@ -18,7 +18,7 @@ let persistQueue = Promise.resolve();
 
 function audit(event, fields = {}) {
   // Deliberately exclude message content, access tokens and idempotency keys.
-  process.stdout.write(JSON.stringify({ at: new Date().toISOString(), event, ...fields }) + '\\n');
+  process.stdout.write(JSON.stringify({ at: new Date().toISOString(), event, ...fields }) + '\n');
 }
 function json(res, status, value) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -76,6 +76,20 @@ function emit(task, type, data = {}) {
     subscribers.delete(task.id);
   }
 }
+function expireTasks(now = Date.now()) {
+  let changed = false;
+  for (const task of tasks.values()) {
+    if (!['queued', 'running'].includes(task.status) || !task.expiresAt || Date.parse(task.expiresAt) > now) continue;
+    task.status = 'expired';
+    task.finalResult = null;
+    emit(task, 'expired');
+    const receipt = idempotency.get(task.idempotencyKey);
+    if (receipt) receipt.status = 'expired';
+    audit('generation.expired', { generation_id: task.id, sequence: task.sequence });
+    changed = true;
+  }
+  return changed;
+}
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 async function execute(task) {
   if (!['queued', 'running'].includes(task.status)) return;
@@ -107,7 +121,7 @@ function schedule(task) {
 await loadState();
 expireTasks();
 for (const task of tasks.values()) if (task.status === 'queued') schedule(task);
-const expiryTimer = setInterval(() => { expireTasks(); void persist(); }, Math.min(TASK_TTL_MS, 60_000));
+const expiryTimer = setInterval(() => { if (expireTasks()) void persist(); }, Math.min(TASK_TTL_MS, 60_000));
 expiryTimer.unref?.();
 
 const server = http.createServer(async (req, res) => {
@@ -155,12 +169,12 @@ const server = http.createServer(async (req, res) => {
           'x-accel-buffering': 'no'
         });
         audit('generation.stream.open', { generation_id: task.id, after });
-        for (const event of task.events.filter((item) => item.sequence > after)) res.write(`id: ${event.event_id}\\nevent: ${event.type}\\ndata: ${JSON.stringify(event)}\\n\\n`);
+        for (const event of task.events.filter((item) => item.sequence > after)) res.write(`id: ${event.event_id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
         if (['completed', 'cancelled', 'failed', 'expired'].includes(task.status)) return res.end();
         if (!subscribers.has(task.id)) subscribers.set(task.id, new Set());
         subscribers.get(task.id).add(res);
         const heartbeat = setInterval(() => {
-          if (!res.destroyed && !res.writableEnded) res.write(': heartbeat\\n\\n');
+          if (!res.destroyed && !res.writableEnded) res.write(': heartbeat\n\n');
         }, HEARTBEAT_MS);
         heartbeat.unref?.();
         res.on('close', () => {
@@ -183,4 +197,4 @@ const server = http.createServer(async (req, res) => {
     json(res, 404, { error: 'not found' });
   } catch (error) { json(res, 500, { error: error.message }); }
 });
-server.listen(PORT, '127.0.0.1', () => process.stdout.write('Mock Generation Server listening on ' + PORT + '\\n'));
+server.listen(PORT, '127.0.0.1', () => process.stdout.write('Mock Generation Server listening on ' + PORT + '\n'));
