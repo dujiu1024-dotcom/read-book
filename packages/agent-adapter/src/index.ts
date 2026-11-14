@@ -301,6 +301,9 @@ export function createGenerationClient(transport: GenerationTransport) {
       if (cursor.generationId !== generationId) {
         throw new GenerationProtocolError("Event cursor belongs to a different generation.");
       }
+      if (!Number.isSafeInteger(cursor.lastSequence) || cursor.lastSequence < 0) {
+        throw new GenerationProtocolError("Event cursor lastSequence must be a non-negative integer.");
+      }
       let currentCursor = { ...cursor };
       await transport.streamEvents(generationId, currentCursor.lastSequence, signal, (raw) => {
         const result = advanceGenerationEventCursor(currentCursor, raw);
