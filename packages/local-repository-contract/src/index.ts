@@ -209,6 +209,8 @@ export interface LocalRepository {
   readonly adapterName: string;
   readonly schemaVersion: number;
   transaction<T>(datasetId: string, operation: (tx: LocalRepositoryTransaction) => Promise<T>): Promise<T>;
+  /** Read a transactionally consistent export snapshot without acknowledging it as backed up. */
+  createConsistentSnapshot(datasetId: string): Promise<RepositorySnapshot>;
   getDataSet(datasetId: string): Promise<LocalDataSet | null>;
   getMessages(datasetId: string, threadId: string, afterSequence?: number): Promise<PersistedMessage[]>;
   getGenerationDelivery(datasetId: string, clientGenerationId: string): Promise<GenerationDeliveryRecord | null>;
