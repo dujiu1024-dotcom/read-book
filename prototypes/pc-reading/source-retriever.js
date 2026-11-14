@@ -7,6 +7,7 @@ const DEFAULT_STOPWORDS = new Set([
 
 const MAX_RESULTS = 7;
 const MAX_QUERY_TERMS = 96;
+const MAX_QUERY_CHARACTERS = 4000;
 const BM25_K1 = 1.2;
 const BM25_B = 0.75;
 
@@ -90,19 +91,20 @@ export function createSourceRetriever(units, options = {}) {
   const averageLength = documents.length
     ? documents.reduce((sum, document) => sum + document.length, 0) / documents.length
     : 0;
-  const configuredMinimumScore = Number(options.minimumScore);
+  const safeOptions = options && typeof options === "object" ? options : {};
+  const configuredMinimumScore = Number(safeOptions.minimumScore);
   const minimumScore = Number.isFinite(configuredMinimumScore) && configuredMinimumScore >= 0
     ? configuredMinimumScore
     : 0.12;
 
   function retrieve(query, currentUnitId, limit = MAX_RESULTS) {
-    const queryTokens = [...new Set(tokenize(query))].slice(0, MAX_QUERY_TERMS);
+    const normalizedQuery = normalizeText(String(query ?? "").slice(0, MAX_QUERY_CHARACTERS)).trim();
+    const queryTokens = [...new Set(tokenize(normalizedQuery))].slice(0, MAX_QUERY_TERMS);
     const requestedLimit = Number.isFinite(Number(limit)) ? Math.floor(Number(limit)) : MAX_RESULTS;
     if (!queryTokens.length || !documents.length || requestedLimit <= 0) return [];
     const count = Math.min(MAX_RESULTS, requestedLimit);
     const currentDocument = documents.find((item) => item.unit.id === currentUnitId);
     const currentChapter = currentDocument?.unit.chapter;
-    const normalizedQuery = normalizeText(query).trim();
     const scored = [];
 
     for (const document of documents) {
