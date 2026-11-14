@@ -289,6 +289,9 @@ export async function planAcceptedMemoryCandidates(
   const latestByMemoryId = new Map<string, MemoryVersion>();
   for (const version of allVersions) {
     const current = latestByMemoryId.get(version.memoryId);
+    if (current && version.version === current.version && version.id !== current.id) {
+      throw new MemoryExtractionError("Snapshot contains multiple latest versions with the same memory version number.");
+    }
     if (!current || version.version > current.version) latestByMemoryId.set(version.memoryId, version);
   }
   const alreadyPersistedCandidateIds = result.accepted
@@ -343,9 +346,10 @@ export async function planAcceptedMemoryCandidates(
   }
   if (toPropose.length > 0) {
     const proposals = await planner!.propose({
-      candidates: toPropose.map((item) => item.candidate),
-      existingLatestVersions: latestVersions,
+      candidates: structuredClone(toPropose.map((item) => item.candidate)),
+      existingLatestVersions: structuredClone(latestVersions),
     });
+    if (!Array.isArray(proposals)) throw new MemoryExtractionError("The evolution planner must return a proposal array.");
     const proposalIds = proposals.map((proposal) => proposal.candidateId);
     if (new Set(proposalIds).size !== proposalIds.length ||
         proposalIds.length !== toPropose.length ||
@@ -355,6 +359,9 @@ export async function planAcceptedMemoryCandidates(
     const usedTargets = new Set<string>();
     const candidatesById = new Map(toPropose.map((item) => [item.candidate.id, item.candidate]));
     for (const proposal of proposals) {
+      if (!["new", "supplement", "correction", "conflict", "rejection", "extension"].includes(proposal.changeKind)) {
+        throw new MemoryExtractionError("The evolution planner returned an unsupported changeKind.");
+      }
       if (typeof proposal.rationale !== "string" || !proposal.rationale.trim()) {
         throw new MemoryExtractionError("Every evolution proposal requires a rationale.");
       }
@@ -379,7 +386,7 @@ export async function planAcceptedMemoryCandidates(
         });
         continue;
       }
-      if (proposal.duplicateOfMemoryId || typeof proposal.targetMemoryId !== "string" || !proposal.targetMemoryId.trim()) {
+      if (proposal.duplicateOfMemoryId !== undefined || typeof proposal.targetMemoryId !== "string" || !proposal.targetMemoryId.trim()) {
         throw new MemoryExtractionError("A non-new evolution proposal must target exactly one existing memory.");
       }
       if (usedTargets.has(proposal.targetMemoryId)) {
