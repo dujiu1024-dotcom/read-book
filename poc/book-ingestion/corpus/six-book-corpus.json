@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0.0",
+  "corpus_id": "read-book-six-book-validation",
+  "purpose": "real-book-ingestion-and-reading-validation",
+  "books": [
+    {
+      "key": "chuanxilu",
+      "title": "传习录",
+      "author": "王阳明",
+      "volume_count": 3,
+      "required": true,
+      "preferred_source": "public-domain-original-text",
+      "expected_format": [
+        "epub",
+        "txt",
+        "pdf"
+      ],
+      "rights_check": "Confirm exact base text; distinguish public-domain original from modern annotated editions.",
+      "source_records": [
+        {
+          "volume": "上",
+          "url": "https://zh.wikisource.org/zh-hans/王阳明集/卷01",
+          "source": "维基文库"
+        },
+        {
+          "volume": "中",
+          "url": "https://zh.wikisource.org/zh-hans/王阳明集/卷02",
+          "source": "维基文库"
+        },
+        {
+          "volume": "下",
+          "url": "https://zh.wikisource.org/zh-hans/王阳明集/卷03",
+          "source": "维基文库"
+        }
+      ],
+      "source_note": "维基文库所载王阳明集卷一至卷三中的《传习录》上、中、下。需核对文本版本、缺文及标点；现代点校版不自动视为公版。"
+    },
+    {
+      "key": "maoxuan-1",
+      "title": "毛泽东选集 第1卷",
+      "author": "毛泽东",
+      "volume": 1,
+      "series": "毛泽东选集",
+      "required": true,
+      "expected_format": [
+        "epub",
+        "pdf",
+        "txt"
+      ],
+      "rights_check": "User-supplied lawful copy required; do not acquire full text from unauthorized sources."
+    },
+    {
+      "key": "maoxuan-2",
+      "title": "毛泽东选集 第2卷",
+      "author": "毛泽东",
+      "volume": 2,
+      "series": "毛泽东选集",
+      "required": true,
+      "expected_format": [
+        "epub",
+        "pdf",
+        "txt"
+      ],
+      "rights_check": "User-supplied lawful copy required; do not acquire full text from unauthorized sources."
+    },
+    {
+      "key": "maoxuan-3",
+      "title": "毛泽东选集 第3卷",
+      "author": "毛泽东",
+      "volume": 3,
+      "series": "毛泽东选集",
+      "required": true,
+      "expected_format": [
+        "epub",
+        "pdf",
+        "txt"
+      ],
+      "rights_check": "User-supplied lawful copy required; do not acquire full text from unauthorized sources."
+    },
+    {
+      "key": "maoxuan-4",
+      "title": "毛泽东选集 第4卷",
+      "author": "毛泽东",
+      "volume": 4,
+      "series": "毛泽东选集",
+      "required": true,
+      "expected_format": [
+        "epub",
+        "pdf",
+        "txt"
+      ],
+      "rights_check": "User-supplied lawful copy required; do not acquire full text from unauthorized sources."
+    },
+    {
+      "key": "maoxuan-5",
+      "title": "毛泽东选集 第5卷",
+      "author": "毛泽东",
+      "volume": 5,
+      "series": "毛泽东选集",
+      "required": true,
+      "expected_format": [
+        "epub",
+        "pdf",
+        "txt"
+      ],
+      "rights_check": "User-supplied lawful copy required; do not acquire full text from unauthorized sources."
+    }
+  ],
+  "pipeline": [
+    "source_hash",
+    "parse",
+    "metadata_review",
+    "chapter_structure",
+    "text_integrity",
+    "locator_roundtrip",
+    "book_package_export",
+    "package_validation",
+    "book_revision_import",
+    "reading_position",
+    "citation_retrieval",
+    "generation",
+    "memory_extraction",
+    "cross_volume_memory_evolution",
+    "backup_restore"
+  ],
+  "acceptance": {
+    "separateBookRevisionPerVolume": true,
+    "neverMergeVolumes": true,
+    "allCitationsMustResolveToSource": true,
+    "recordParserAndSourceVersions": true,
+    "rightsReviewBeforePublication": true
+  }
+}
