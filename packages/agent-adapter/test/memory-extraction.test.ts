@@ -320,3 +320,18 @@ test("persists exact duplicate as an explicit duplicate_of relation to the exist
   assert.equal(writes[1].relation.relationType, "duplicate_of");
   assert.equal(writes[1].relation.toVersionId, target.id);
 });
+
+
+test("empty memory history creates first versions without requiring a semantic planner", async () => {
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const planned = await planAcceptedMemoryCandidates({
+    async createConsistentSnapshot() { return { memoryVersions: [] }; },
+  }, "dataset-1", accepted, undefined, () => "2026-11-14T00:00:00.000Z", () => "new-memory-1");
+  assert.equal(planned.plans.length, 1);
+  assert.equal(planned.plans[0].changeKind, "new");
+  assert.equal(planned.plans[0].version, 1);
+  assert.equal(planned.plans[0].previousVersionId, null);
+  assert.equal(planned.plans[0].relation, undefined);
+});
