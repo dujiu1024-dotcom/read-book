@@ -17,6 +17,25 @@ import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, M
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
+export function mapWorkerError(payload: { message: string; code?: string }): Error {
+  switch (payload.code) {
+    case "DATASET_NOT_FOUND":
+    case "THREAD_REVISION_CONFLICT":
+    case "MESSAGE_IDEMPOTENCY_CONFLICT":
+    case "MESSAGE_SEQUENCE_CONFLICT":
+    case "READ_ONLY":
+    case "QUOTA_EXCEEDED":
+    case "MIGRATION_FAILED":
+    case "INTEGRITY_FAILED":
+    case "WRITER_LOCK_UNAVAILABLE":
+    case "ACCOUNT_BINDING_NOT_FOUND":
+      return new RepositoryError(payload.code, payload.message);
+    default:
+      return new Error(payload.message);
+  }
+}
+
+
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
   readonly schemaVersion = 2;
@@ -32,18 +51,8 @@ export class SqliteOpfsRepository implements LocalRepository {
       const pending = this.pending.get(data.id);
       if (!pending) return;
       this.pending.delete(data.id);
-      if (data.error) {
-        const code = data.error.code;
-        const knownCodes = new Set([
-          "DATASET_NOT_FOUND", "THREAD_REVISION_CONFLICT", "MESSAGE_IDEMPOTENCY_CONFLICT",
-          "MESSAGE_SEQUENCE_CONFLICT", "READ_ONLY", "QUOTA_EXCEEDED", "MIGRATION_FAILED",
-          "INTEGRITY_FAILED", "WRITER_LOCK_UNAVAILABLE", "ACCOUNT_BINDING_NOT_FOUND",
-        ]);
-        pending.reject(knownCodes.has(code)
-          ? new RepositoryError(code, data.error.message)
-          : new Error(data.error.message));
-      }
-      else pending.resolve(data.result);
+      if (data.error) pending.reject(mapWorkerError(data.error));
+            else pending.resolve(data.result);
     };
     this.worker.onerror = (event) => {
       for (const pending of this.pending.values()) pending.reject(new Error(event.message || "SQLite Worker 异常退出"));
