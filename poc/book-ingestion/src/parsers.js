@@ -131,7 +131,7 @@ async function parseTxt(bytes) {
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { encoding = 'gb18030'; text = new TextDecoder('gb18030').decode(bytes); }
   const paragraphs = [];
-  const matcher = /[^\\r\\n]+(?:\\r?\\n(?!\s*\\r?\\n)[^\\r\\n]+)*/g;
+  const matcher = /[^\r\n]+(?:\r?\n(?!\s*\r?\n)[^\r\n]+)*/g;
   for (const match of text.matchAll(matcher)) {
     const value = match[0].trim();
     if (value) {
