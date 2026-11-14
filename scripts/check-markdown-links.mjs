@@ -14,7 +14,7 @@ async function walk(dir) {
   }
 }
 function stripCodeFences(text) {
-  return text.replace(/^\\s*\\x60{3}[^\\n]*\\n[\\s\\S]*?^\\s*\\x60{3}\\s*$/gm, "").replace(/\\x60[^\\x60]*\\x60/g, "");
+  return text.replace(/^\s*\x60{3}[^\n]*\n[\s\S]*?^\s*\x60{3}\s*$/gm, "").replace(/\x60[^\x60]*\x60/g, "");
 }
 function resolveTarget(source, raw) {
   const target = raw.trim().replace(/^<|>$/g, "");
