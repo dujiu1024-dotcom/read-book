@@ -1,17 +1,17 @@
 import {
   RepositoryError,
   type LocalRepository,
-  LocalRepositoryTransaction,
-  RepositorySnapshot,
-  PersistedMessage,
-  LocalDataSet,
-  ReadingRoundRecord,
-  ReadingPositionRecord,
-  CitationRecord,
-  NoteRecord,
-  NewUserMessage,
-  NewAssistantMessage,
-  AccountDataSetBinding,
+  type LocalRepositoryTransaction,
+  type RepositorySnapshot,
+  type PersistedMessage,
+  type LocalDataSet,
+  type ReadingRoundRecord,
+  type ReadingPositionRecord,
+  type CitationRecord,
+  type NoteRecord,
+  type NewUserMessage,
+  type NewAssistantMessage,
+  type AccountDataSetBinding,
 } from "../../local-repository-contract/src/index.ts";
 import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, MemoryRelation } from "../../domain-core/src/index.ts";
 
