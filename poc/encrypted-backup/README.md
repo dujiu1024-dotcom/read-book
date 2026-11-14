@@ -5,7 +5,7 @@ Independent browser/Node Web Crypto PoC. Uses synthetic data and an in-memory mo
 ## Included
 - Random AES-256-GCM dataset key and independent 256-bit recovery credential.
 - PBKDF2-SHA-256 key wrapping with configurable iteration count. The default is experimental and requires security review before production.
-- Versioned full snapshots and ID-based incremental upserts/removals.
+- Versioned full snapshots, ID-based incremental upserts/removals, configurable full-checkpoint cadence, and resumable chunk upload.
 - Per-backup HKDF-derived AES-GCM subkeys, deterministic unique chunk-counter nonces, and AAD bound to dataset, backup, parent, schema version and chunk index. A new backup ID derives a distinct chunk key; retry must reuse the original ciphertext package rather than re-encrypting under the same ID.
 - SHA-256 ciphertext manifest validation and full-chain restore into a temporary in-memory snapshot.
 - Mock server that stores ciphertext only, supports idempotent upload and enforces a cleared-dataset tombstone against late upload completion and download.
