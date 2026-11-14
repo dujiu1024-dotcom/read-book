@@ -386,6 +386,8 @@ function txOperation(datasetId, operation, input) {
     case "createReadingRound": {
       const r=input.round;
       if (!first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [r.threadId,datasetId])) throw new Error("ReadingRound Thread 不属于当前数据集");
+      if (r.status==="active" && first("SELECT id FROM reading_round WHERE thread_id=? AND status='active'",[r.threadId])) throw new Error("同一 Thread 只能有一个 active ReadingRound");
+      if (!Number.isSafeInteger(r.roundNumber) || r.roundNumber<1) throw new Error("ReadingRound roundNumber 非法");
       execute("INSERT INTO reading_round(id,dataset_id,thread_id,round_number,status,started_at,completed_at) VALUES(?,?,?,?,?,?,?)",
         [r.id,datasetId,r.threadId,r.roundNumber,r.status,r.startedAt,r.completedAt||null]);
       transactionDirty=true;
