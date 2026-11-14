@@ -82,7 +82,7 @@ function numberedSort(left, right) {
 function makeUnit({ id, chapter, title, text, locator, sourceUrl, sourcePath, order }) {
   return { id, chapter, title, text, locator, order, source: {
     repository: sourcePath.startsWith("儒藏/") ? "garychowcmu/daizhigev20" : "ruguoaaa/gushi",
-    path: sourcePath, url: sourceUrl, revision: "main-or-master"
+    path: sourcePath, url: sourceUrl, revision: sourcePath.startsWith("儒藏/") ? "master" : "main"
   }};
 }
 async function loadChuanxiLu(fetchImpl) {
