@@ -570,18 +570,14 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
         return;
       }
 
-      if (useLocalBookPackage) {
-        renderSource();
-        updateCount();
-        $("messageInput").disabled = true;
-        $("sendButton").disabled = true;
-        $("simulateFailure").hidden = true;
-        $("menuButton").hidden = true;
-        setGenerationStatus("本地书籍包已加载。当前为只读阅读模式；配置真实 Agent 服务后可开启讨论，不会生成演示回复。");
-        return;
-      }
-
-      productionRuntime = await createProductionReaderRuntime(readerConfig, bookRevision);
+      const hasAgentConfiguration = Boolean(
+        (readerConfig.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken) &&
+        (readerConfig.generationApiBaseUrl || readerConfig.apiBaseUrl)
+      );
+      productionRuntime = await createProductionReaderRuntime({
+        ...readerConfig,
+        localOnly: useLocalBookPackage && !hasAgentConfiguration,
+      }, bookRevision);
       const position = productionRuntime.readingPosition;
       if (position) {
         const index = units.findIndex(unit => unit.id === position.mainlineNodeId);
@@ -593,13 +589,15 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
       renderSource();
       await refreshPersistedMessages();
       renderMemoryState(await productionRuntime.loadMemoryState());
-      $("messageInput").disabled = false;
-      $("sendButton").disabled = false;
+      $("messageInput").disabled = !productionRuntime.generationConfigured;
+      $("sendButton").disabled = !productionRuntime.generationConfigured;
       $("simulateFailure").hidden = true;
       $("menuButton").hidden = true;
       $("backupButton").textContent = productionRuntime.backupStatus.label;
-      setGenerationStatus("本地阅读数据已加载；讨论消息先保存到本地，再请求 Agent。");
-      productionRuntime.resumePending({
+      setGenerationStatus(productionRuntime.generationConfigured
+        ? "本地阅读数据已加载；讨论消息先保存到本地，再请求 Agent。"
+        : "本地书籍、阅读主线和讨论历史已保存到当前浏览器。Agent 与云端备份尚未配置。");
+      if (productionRuntime.generationConfigured) productionRuntime.resumePending({
         onDelta: () => {},
         onMemoryUpdate: renderMemoryState,
       }).then(async () => {
