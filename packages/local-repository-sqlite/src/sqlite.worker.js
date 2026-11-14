@@ -311,7 +311,9 @@ function txOperation(datasetId, operation, input) {
       const old=first("SELECT * FROM message WHERE id=? AND dataset_id=? AND role='assistant'", [input.messageId,datasetId]);
       if (!old || old.status !== "generating") throw new Error("只有生成中的 Assistant Message 可以变更状态");
       if (input.status === "generating") throw new Error("Assistant Message 不允许回退到 generating");
-      execute("UPDATE message SET status=?,content=? WHERE id=?", [input.status,input.content ?? old.content,input.messageId]);
+      const sourceReferences = input.sourceReferences === undefined ? parseJson(old.source_references) : input.sourceReferences;
+      if (input.sourceReferences !== undefined) assertSourceReferences(datasetId, old.thread_id, sourceReferences);
+      execute("UPDATE message SET status=?,content=?,source_references=? WHERE id=?", [input.status,input.content ?? old.content,JSON.stringify(sourceReferences),input.messageId]);
       transactionDirty=true;
       const row=first("SELECT * FROM message WHERE id=?", [input.messageId]);
       return rowToMessage(row).message;
