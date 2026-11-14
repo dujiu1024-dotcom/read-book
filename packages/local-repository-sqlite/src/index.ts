@@ -1,20 +1,40 @@
-import type {
-  LocalRepository,
-  LocalRepositoryTransaction,
-  RepositorySnapshot,
-  PersistedMessage,
-  LocalDataSet,
-  ReadingRoundRecord,
-  ReadingPositionRecord,
-  CitationRecord,
-  NoteRecord,
-  NewUserMessage,
-  NewAssistantMessage,
-  AccountDataSetBinding,
+import {
+  RepositoryError,
+  type LocalRepository,
+  type LocalRepositoryTransaction,
+  type RepositorySnapshot,
+  type PersistedMessage,
+  type LocalDataSet,
+  type ReadingRoundRecord,
+  type ReadingPositionRecord,
+  type CitationRecord,
+  type NoteRecord,
+  type NewUserMessage,
+  type NewAssistantMessage,
+  type AccountDataSetBinding,
 } from "../../local-repository-contract/src/index.ts";
 import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, MemoryRelation } from "../../domain-core/src/index.ts";
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
+
+export function mapWorkerError(payload: { message: string; code?: string }): Error {
+  switch (payload.code) {
+    case "DATASET_NOT_FOUND":
+    case "THREAD_REVISION_CONFLICT":
+    case "MESSAGE_IDEMPOTENCY_CONFLICT":
+    case "MESSAGE_SEQUENCE_CONFLICT":
+    case "READ_ONLY":
+    case "QUOTA_EXCEEDED":
+    case "MIGRATION_FAILED":
+    case "INTEGRITY_FAILED":
+    case "WRITER_LOCK_UNAVAILABLE":
+    case "ACCOUNT_BINDING_NOT_FOUND":
+      return new RepositoryError(payload.code, payload.message);
+    default:
+      return new Error(payload.message);
+  }
+}
+
 
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
@@ -31,7 +51,7 @@ export class SqliteOpfsRepository implements LocalRepository {
       const pending = this.pending.get(data.id);
       if (!pending) return;
       this.pending.delete(data.id);
-      if (data.error) pending.reject(new Error(data.error.message));
+      if (data.error) pending.reject(mapWorkerError(data.error));
       else pending.resolve(data.result);
     };
     this.worker.onerror = (event) => {
