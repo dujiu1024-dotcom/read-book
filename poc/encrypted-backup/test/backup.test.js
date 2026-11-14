@@ -72,13 +72,14 @@ test("cleared tombstone blocks a late upload and download while retaining cipher
   const bundle = await createRecoveryBundle("dataset-1", undefined, { iterations: 100_000 });
   const backup = await encryptBackup(snapshot(1, "secret"), { dataKey: bundle.dataKey, keyEnvelope: bundle.keyEnvelope });
   const server = createMockBackupServer();
+  await server.completeUpload(server.beginUpload("dataset-1"), backup);
   const session = server.beginUpload("dataset-1");
   const tombstone = server.clearDataset("dataset-1");
   assert.equal(tombstone.status, "cleared");
   await assert.rejects(server.completeUpload(session, backup), /cleared before upload completion/);
   assert.equal(server.isCleared("dataset-1"), true);
   assert.throws(() => server.getBackupChain("dataset-1", backup.manifest.backupId), /cleared/);
-  assert.equal(server.inspectStoredCiphertextCount("dataset-1"), 0);
+  assert.equal(server.inspectStoredCiphertextCount("dataset-1"), 1);
 });
 
 test("mock server makes repeated upload idempotent and rejects conflicting backup IDs", async () => {
