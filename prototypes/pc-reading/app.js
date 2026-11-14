@@ -1,15 +1,20 @@
 import { createDemoBookContentProvider } from "./book-content-provider.js";
 import { createPublicBookApiProvider } from "./public-book-content-provider.js";
+import { createGithubCorpusProvider } from "./github-corpus-provider.js";
 import { createProductionReaderRuntime } from "./reader-runtime.js";
 
 (() => {
   let units = [];
   let bookRevision = null;
   const readerConfig = window.READ_BOOK_CONFIG || {};
-  const isDemoProvider = !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId;
+  const queryBookId = new URLSearchParams(window.location.search).get("book");
+  const isGithubCorpusMode = Boolean(queryBookId && queryBookId !== "demo");
+  const isDemoProvider = queryBookId === "demo" || (!isGithubCorpusMode && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId);
   let bookContentProvider = null;
   let productionRuntime = null;
-  const requestedBookRevisionId = readerConfig.bookRevisionId || (isDemoProvider ? "demo-book-revision-1" : "");
+  const requestedBookRevisionId = isGithubCorpusMode
+    ? "github-corpus-" + queryBookId
+    : isDemoProvider ? "demo-book-revision-1" : (readerConfig.bookRevisionId || "");
 
   const state = {
     mainlineIndex: 1,
@@ -43,7 +48,17 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     const unit = state.displayedUnit;
     if (!unit || !bookRevision) return;
     $("bookTitle").textContent = bookRevision.title;
+    $("topbarBookTitle").textContent = bookRevision.title;
     $("bookAuthor").textContent = bookRevision.author;
+    $("sourceTag").textContent = isGithubCorpusMode ? "GitHub 公开语料" : "原书内容";
+    const sourceLink = $("sourceSourceLink");
+    if (sourceLink && unit.source?.url) {
+      sourceLink.href = unit.source.url;
+      sourceLink.hidden = false;
+    } else if (sourceLink) {
+      sourceLink.hidden = true;
+      sourceLink.removeAttribute("href");
+    }
     $("sourceHeading").textContent = unit.title;
     $("sourceText").textContent = unit.text;
     $("sourceLocator").textContent = unit.locator;
@@ -277,16 +292,36 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     renderSource();
   });
 
-  $("temporaryButton").addEventListener("click", () => $("temporaryDialog").showModal());
-  document.querySelectorAll("[data-unit]").forEach(button => {
-    button.addEventListener("click", () => {
-      const unit = units.find(item => item.id === button.dataset.unit);
-      if (!unit) return;
-      state.displayedUnit = unit;
-      state.viewMode = "temporary";
-      $("temporaryDialog").close();
-      renderSource();
-    });
+  function renderChapterOptions() {
+    const container = $("chapterOptions");
+    if (!container) return;
+    container.replaceChildren();
+    const firstUnitByChapter = new Map();
+    for (const unit of units) {
+      if (!firstUnitByChapter.has(unit.chapter)) firstUnitByChapter.set(unit.chapter, unit);
+    }
+    for (const [chapter, unit] of firstUnitByChapter) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chapter-option";
+      const heading = document.createElement("strong");
+      heading.textContent = chapter;
+      const detail = document.createElement("span");
+      detail.textContent = unit.title;
+      button.append(heading, detail);
+      button.addEventListener("click", () => {
+        state.displayedUnit = unit;
+        state.viewMode = "temporary";
+        $("temporaryDialog").close();
+        renderSource();
+      });
+      container.append(button);
+    }
+  }
+
+  $("temporaryButton").addEventListener("click", () => {
+    renderChapterOptions();
+    $("temporaryDialog").showModal();
   });
 
   $("returnMainline").addEventListener("click", returnToMainline);
@@ -296,18 +331,18 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       toast("先回到当前主线，再继续阅读。");
       return;
     }
-    if (!state.discussed) {
+    if (!state.discussed && !isGithubCorpusMode) {
       const confirmed = window.confirm("当前论述单元还没有讨论。是否略读当前单元并继续？");
       if (!confirmed) return;
     }
     if (state.mainlineIndex >= units.length - 1) {
-      toast("演示主线已到最后一个单元。");
+      toast(isGithubCorpusMode ? "当前书籍已到最后一个阅读单元。" : "演示主线已到最后一个单元。");
       return;
     }
     state.mainlineIndex += 1;
     state.displayedUnit = units[state.mainlineIndex];
     state.viewMode = "mainline";
-    state.discussed = false;
+    state.discussed = isGithubCorpusMode;
     renderSource();
     toast("已按主线顺序展示下一单元。");
   });
@@ -487,10 +522,29 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     }
   }
 
+  const bookSelector = $("bookSelector");
+  if (bookSelector) {
+    const serviceOption = bookSelector.querySelector('option[value="service"]');
+    if (serviceOption) serviceOption.disabled = !(readerConfig.apiBaseUrl && readerConfig.bookRevisionId);
+    bookSelector.value = isGithubCorpusMode ? queryBookId : (queryBookId === "demo" || isDemoProvider ? "demo" : "service");
+    bookSelector.addEventListener("change", () => {
+      const next = bookSelector.value;
+      const params = new URLSearchParams(window.location.search);
+      if (next === "service") params.delete("book");
+      else params.set("book", next);
+      const query = params.toString();
+      window.location.search = query ? "?" + query : "";
+    });
+  }
+
   async function initializeReader() {
     try {
       if (isDemoProvider) {
         bookContentProvider = createDemoBookContentProvider();
+      } else if (isGithubCorpusMode) {
+        state.messages = [];
+        messageList.replaceChildren();
+        bookContentProvider = createGithubCorpusProvider();
       } else {
         state.messages = [];
         messageList.replaceChildren();
@@ -512,6 +566,21 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       state.mainlineIndex = units.findIndex(unit => unit.id === bookRevision.initialMainlineUnitId);
       if (state.mainlineIndex < 0) throw new Error("书籍主线起始单元不存在。");
       state.displayedUnit = units[state.mainlineIndex];
+      renderChapterOptions();
+      if (isGithubCorpusMode) {
+        $("conversationSection").hidden = true;
+        $("composerSection").hidden = true;
+        $("memoryPanel").hidden = true;
+        $("menuButton").hidden = true;
+        $("readerModeLabel").textContent = "GitHub 公开语料 · 只读模式";
+        $("backupButton").disabled = true;
+        $("backupButton").textContent = "备份未接入";
+        state.discussed = true;
+        renderSource();
+        updateCount();
+        setGenerationStatus("已从原始 GitHub 仓库读取 " + units.length + " 个阅读单元。当前为只读语料模式，尚未接入本地持久化和真实 Agent。");
+        return;
+      }
       if (isDemoProvider) {
         renderSource();
         updateCount();
@@ -549,7 +618,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       });
     } catch (error) {
       $("sourceHeading").textContent = "书籍内容加载失败";
-      $("sourceText").textContent = "当前无法加载此书籍版本，请检查内容提供器与本地数据配置。";
+      $("sourceText").textContent = "当前无法加载此书籍版本，请检查网络、来源仓库和内容提供器配置。";
       setGenerationStatus("内容加载失败：" + error.message);
       $("messageInput").disabled = true;
       $("sendButton").disabled = true;

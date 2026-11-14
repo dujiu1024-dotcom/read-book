@@ -13,7 +13,17 @@
       <a class="brand" href="#" aria-label="知行首页">知行</a>
       <div class="topbar-book">
         <span class="eyebrow">正在阅读</span>
-        <strong>协同系统设计</strong>
+        <strong id="topbarBookTitle">协同系统设计</strong>
+        <select id="bookSelector" class="book-selector" aria-label="选择阅读书籍">
+          <option value="demo">演示内容</option>
+          <option value="chuanxilu">传习录</option>
+          <option value="maoxuan-1">毛泽东选集 第一卷</option>
+          <option value="maoxuan-2">毛泽东选集 第二卷</option>
+          <option value="maoxuan-3">毛泽东选集 第三卷</option>
+          <option value="maoxuan-4">毛泽东选集 第四卷</option>
+          <option value="maoxuan-5">毛泽东选集 第五卷</option>
+          <option value="service">已配置的正式书籍服务</option>
+        </select>
       </div>
       <button class="icon-button" id="menuButton" type="button" aria-label="演示：切换当前单元讨论状态" title="演示状态切换">···</button>
     </header>
@@ -38,7 +48,7 @@
         </div>
         <div id="sourceBody" class="source-body">
           <p id="sourceText">协同效率并不等于沟通次数增加。它取决于参与者是否围绕同一目标行动，以及关键交接是否清楚。沟通频繁但目标不一致，只会更快放大分歧。</p>
-          <div class="source-foot"><span id="sourceLocator">第一章 · 论述单元 01</span><span class="source-tag">原书内容</span></div>
+          <div class="source-foot"><span id="sourceLocator">第一章 · 论述单元 01</span><a id="sourceSourceLink" class="source-link" target="_blank" rel="noopener noreferrer" hidden>查看来源</a><span class="source-tag" id="sourceTag">原书内容</span></div>
         </div>
       </section>
 
@@ -52,7 +62,7 @@
         <button class="text-button" id="returnMainline" type="button">回到当前主线</button>
       </div>
 
-      <section class="conversation" aria-labelledby="conversationHeading">
+      <section class="conversation" id="conversationSection" aria-labelledby="conversationHeading">
         <div class="conversation-heading">
           <div>
             <div class="eyebrow">持续讨论</div>
@@ -95,7 +105,7 @@
         <div class="pending-memory-list" id="pendingMemoryList" hidden></div>
       </section>
 
-      <section class="composer" aria-label="发送讨论">
+      <section class="composer" id="composerSection" aria-label="发送讨论">
         <label class="sr-only" for="messageInput">输入你的想法</label>
         <textarea id="messageInput" rows="3" placeholder="写下你的理解、疑问或反驳……"></textarea>
         <div class="composer-footer">
@@ -110,7 +120,7 @@
       </section>
 
       <footer class="reader-footer">
-        <span><span class="status-dot"></span>本地数据 · 演示状态</span>
+        <span><span class="status-dot"></span><span id="readerModeLabel">本地数据 · 演示状态</span></span>
         <button class="text-button" id="backupButton" type="button" title="查看备份状态">备份：已检查</button>
       </footer>
     </main>
@@ -120,10 +130,7 @@
     <form method="dialog">
       <div class="dialog-head"><div><div class="eyebrow">临时查看</div><h2>选择一个章节</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
       <p class="dialog-description">临时查看不会改变当前主线位置。</p>
-      <div class="chapter-options">
-        <button class="chapter-option" type="button" data-unit="unit-2"><strong>第一章 · 协同的基础</strong><span>共同目标如何落地</span></button>
-        <button class="chapter-option" type="button" data-unit="unit-3"><strong>第二章 · 接口与交接</strong><span>接口契约</span></button>
-      </div>
+      <div class="chapter-options" id="chapterOptions"></div>
     </form>
   </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
