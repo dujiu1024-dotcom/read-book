@@ -98,6 +98,14 @@ function requiredString(value: unknown, field: string): string {
   return value;
 }
 
+function boundedString(value: unknown, field: string, min: number, max: number): string {
+  const text = requiredString(value, field);
+  if (text.length < min || text.length > max) {
+    throw new GenerationProtocolError(`"${field}" length must be between ${min} and ${max}.`);
+  }
+  return text;
+}
+
 function requiredUuid(value: unknown, field: string): string {
   const text = requiredString(value, field);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) {
@@ -165,7 +173,7 @@ export function validateGenerationAccepted(value: unknown): GenerationAccepted {
     throw new GenerationProtocolError("GenerationAccepted has an invalid status.");
   }
   return {
-    generation_id: requiredString(item.generation_id, "generation_id"),
+    generation_id: boundedString(item.generation_id, "generation_id", 16, 128),
     status,
     expires_at: validDate(item.expires_at, "expires_at"),
   };
@@ -195,7 +203,7 @@ export function validateGenerationSnapshot(value: unknown): GenerationSnapshot {
     throw new GenerationProtocolError("A completed generation must expose its final result.");
   }
   return {
-    generation_id: requiredString(item.generation_id, "generation_id"),
+    generation_id: boundedString(item.generation_id, "generation_id", 16, 128),
     status: item.status as GenerationStatus,
     expires_at: validDate(item.expires_at, "expires_at"),
     result,
@@ -210,8 +218,8 @@ export function authoritativeFinalResult(snapshot: GenerationSnapshot): Generati
 
 export function validateGenerationEvent(value: unknown): GenerationEvent {
   const item = record(value);
-  const eventId = requiredString(item.event_id, "event_id");
-  const generationId = requiredString(item.generation_id, "generation_id");
+  const eventId = boundedString(item.event_id, "event_id", 1, 128);
+  const generationId = boundedString(item.generation_id, "generation_id", 16, 128);
   if (!Number.isInteger(item.sequence) || (item.sequence as number) < 1) {
     throw new GenerationProtocolError("Generation event sequence must be a positive integer.");
   }
@@ -243,10 +251,17 @@ export function advanceGenerationEventCursor(
   if (generationId !== cursor.generationId) {
     throw new GenerationProtocolError("Generation event belongs to a different generation.");
   }
+  if (!Number.isSafeInteger(cursor.lastSequence) || cursor.lastSequence < 0) {
+    throw new GenerationProtocolError("Event cursor lastSequence must be a non-negative integer.");
+  }
   const sequence = item.sequence;
-  if (sequence < cursor.lastSequence || eventId === cursor.lastEventId) {
+  if (eventId === cursor.lastEventId) {
+    if (sequence !== cursor.lastSequence) {
+      throw new GenerationProtocolError("A replayed event ID has a conflicting sequence.");
+    }
     return { cursor, duplicate: true };
   }
+  if (sequence < cursor.lastSequence) return { cursor, duplicate: true };
   if (sequence === cursor.lastSequence) {
     throw new GenerationProtocolError("Conflicting generation events share the same sequence.");
   }
@@ -263,16 +278,16 @@ export function createGenerationClient(transport: GenerationTransport) {
   return Object.freeze({
     async create(request: GenerationRequest, idempotencyKey: string): Promise<GenerationAccepted> {
       validateGenerationRequest(request);
-      requiredString(idempotencyKey, "Idempotency-Key");
+      boundedString(idempotencyKey, "Idempotency-Key", 16, 128);
       return validateGenerationAccepted(await transport.createGeneration(request, idempotencyKey));
     },
     async get(generationId: string): Promise<GenerationSnapshot> {
-      requiredString(generationId, "generation_id");
+      boundedString(generationId, "generation_id", 16, 128);
       return validateGenerationSnapshot(await transport.getGeneration(generationId));
     },
     async cancel(generationId: string, idempotencyKey: string): Promise<GenerationAccepted> {
-      requiredString(generationId, "generation_id");
-      requiredString(idempotencyKey, "Idempotency-Key");
+      boundedString(generationId, "generation_id", 16, 128);
+      boundedString(idempotencyKey, "Idempotency-Key", 16, 128);
       return validateGenerationAccepted(await transport.cancelGeneration(generationId, idempotencyKey));
     },
     async stream(
@@ -281,6 +296,8 @@ export function createGenerationClient(transport: GenerationTransport) {
       signal: AbortSignal,
       onEvent: (event: GenerationEvent) => void,
     ): Promise<GenerationEventCursor> {
+      boundedString(generationId, "generation_id", 16, 128);
+      boundedString(cursor.generationId, "cursor.generationId", 16, 128);
       if (cursor.generationId !== generationId) {
         throw new GenerationProtocolError("Event cursor belongs to a different generation.");
       }
