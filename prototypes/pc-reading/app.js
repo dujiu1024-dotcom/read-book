@@ -331,7 +331,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       toast("先回到当前主线，再继续阅读。");
       return;
     }
-    if (!state.discussed) {
+    if (!state.discussed && !isGithubCorpusMode) {
       const confirmed = window.confirm("当前论述单元还没有讨论。是否略读当前单元并继续？");
       if (!confirmed) return;
     }
@@ -342,7 +342,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     state.mainlineIndex += 1;
     state.displayedUnit = units[state.mainlineIndex];
     state.viewMode = "mainline";
-    state.discussed = false;
+    state.discussed = isGithubCorpusMode;
     renderSource();
     toast("已按主线顺序展示下一单元。");
   });
@@ -573,6 +573,9 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
         $("memoryPanel").hidden = true;
         $("menuButton").hidden = true;
         $("readerModeLabel").textContent = "GitHub 公开语料 · 只读模式";
+        $("backupButton").disabled = true;
+        $("backupButton").textContent = "备份未接入";
+        state.discussed = true;
         renderSource();
         updateCount();
         setGenerationStatus("已从原始 GitHub 仓库读取 " + units.length + " 个阅读单元。当前为只读语料模式，尚未接入本地持久化和真实 Agent。");
@@ -615,7 +618,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       });
     } catch (error) {
       $("sourceHeading").textContent = "书籍内容加载失败";
-      $("sourceText").textContent = "当前无法加载此书籍版本，请检查内容提供器与本地数据配置。";
+      $("sourceText").textContent = "当前无法加载此书籍版本，请检查网络、来源仓库和内容提供器配置。";
       setGenerationStatus("内容加载失败：" + error.message);
       $("messageInput").disabled = true;
       $("sendButton").disabled = true;
