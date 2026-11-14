@@ -30,7 +30,7 @@ function fixtureEntries(overrides = {}) {
     source: { file: "source/original.epub", format: "epub", sha256: hash(source), size_bytes: source.length },
     book: { title: book.title, authors: book.authors, language: book.language, isbn: null, edition: null, translator: null, publisher: null },
     processing: { processor_name: "fixture", processor_version: "1.0.0", rules_version: "1.0.0", parser: "fixture", parser_version: "1.0.0" },
-    artifacts: { book: "content/book.json", chapters: "content/chapters.json", chunks: "content/chunks.jsonl", embeddings: null, local_report: null },
+    artifacts: { book: "content/book.json", chapters: "content/chapters.json", chunks: "content/chunks.jsonl", assets: null, embeddings: null, local_report: null },
     counts: { chapters: 1, chunks: 1, assets: 0 },
   };
   const entries = {
@@ -108,4 +108,24 @@ test("rejects excessive ZIP compression ratios before decompression", async () =
 
 test("processing contract has known stage dependencies and retry scopes", () => {
   assert.deepEqual(validateProcessingContract(processingContract), []);
+});
+
+
+test("validates declared asset paths, sizes and hashes", async (t) => {
+  const entries = fixtureEntries();
+  const asset = Buffer.from("fixture image bytes");
+  const manifest = JSON.parse(entries["manifest.json"].toString("utf8"));
+  manifest.artifacts.assets = "content/assets.json";
+  manifest.counts.assets = 1;
+  entries["manifest.json"] = Buffer.from(JSON.stringify(manifest));
+  entries["content/assets.json"] = Buffer.from(JSON.stringify([{
+    asset_id: "asset-cover", path: "assets/cover.png", asset_type: "image",
+    mime_type: "image/png", sha256: hash(asset), size_bytes: asset.length,
+    caption: "封面", alt_text: "封面图", locator: null,
+  }]));
+  entries["assets/cover.png"] = asset;
+  const root = await writeFixture(t, entries);
+  const result = await validatePackage(root);
+  assert.equal(result.status, "valid");
+  assert.equal(result.counts.assets, 1);
 });
