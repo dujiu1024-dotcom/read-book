@@ -393,7 +393,7 @@ test("only citations from the current BookRevision and current source node becom
       { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-1", excerpt: "当前原文片段" },
       { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "other-node", excerpt: "当前原文片段" },
       { book_revision_id: "66666666-6666-4666-8666-666666666666", structure_node_id: request.context.current_source.structure_node_id, locator: "other-book", excerpt: "当前原文片段" },
-      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-1" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-1", excerpt: "当前原文片段" },
     ],
   };
   assert.deepEqual(verifiedGenerationSourceReferences(result, request), [{
@@ -416,7 +416,7 @@ test("generation turn persists only service-verified citations for its current s
         result: {
           content: "带原文来源的最终回答",
           citations: [
-            { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-current" },
+            { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-current", excerpt: "当前原文片段" },
             { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "locator-other-node" },
           ],
         },
@@ -439,6 +439,8 @@ test("generation turn persists only service-verified citations for its current s
     structureNodeId: request.context.current_source.structure_node_id,
     locator: "locator-current",
   }]);
+  assert.equal(repository.citations.length, 1);
+  assert.equal((repository.citations[0] as any).excerpt, "当前原文片段");
 });
 
 
