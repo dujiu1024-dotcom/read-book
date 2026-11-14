@@ -73,8 +73,8 @@ export async function createRecoveryBundle(datasetId, recoveryCredential = toBas
   if (!Number.isSafeInteger(iterations) || iterations < 100_000) throw new RangeError("PBKDF2 iterations must be >= 100000");
   const credentialBytes = fromBase64(recoveryCredential);
   if (credentialBytes.length < 32) throw new TypeError("Recovery credential must contain at least 256 bits");
-  const dataKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
-  const rawDataKey = await crypto.subtle.exportKey("raw", dataKey);
+  const dataKey = randomBytes(32);
+  const rawDataKey = dataKey;
   const salt = randomBytes(16);
   const wrappingMaterial = await crypto.subtle.importKey("raw", credentialBytes, "PBKDF2", false, ["deriveKey"]);
   const wrappingKey = await crypto.subtle.deriveKey(
@@ -120,7 +120,7 @@ async function unwrapDataKey(datasetId, keyEnvelope, recoveryCredential) {
     wrappingKey,
     fromBase64(keyEnvelope.wrappedKey),
   );
-  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  return new Uint8Array(raw);
 }
 
 export function createBackupPayload(snapshot, previousSnapshot = null) {
@@ -151,7 +151,24 @@ export function createBackupPayload(snapshot, previousSnapshot = null) {
   };
 }
 
-export async function encryptBackup(snapshot, options) {
+async function deriveBackupChunkKey(masterKey, datasetId, backupId) {
+  const material = await crypto.subtle.importKey("raw", masterKey, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: encoder.encode(datasetId + ":" + backupId), info: encoder.encode("read-book-backup-chunk-key-v1") },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+function nonceForChunk(index) {
+  if (!Number.isSafeInteger(index) || index < 0 || index > 0xffffffff) throw new RangeError("chunk index exceeds nonce counter range");
+  const nonce = new Uint8Array(12);
+  new DataView(nonce.buffer).setUint32(8, index, false);
+  return nonce;
+}
+
+export async function encryptBackup(snapshot, options = {}) {
   const dataKey = requireValue(options?.dataKey, "dataKey");
   const keyEnvelope = requireValue(options?.keyEnvelope, "keyEnvelope");
   const chunkBytes = options.chunkBytes ?? DEFAULT_CHUNK_BYTES;
@@ -159,12 +176,13 @@ export async function encryptBackup(snapshot, options) {
   const parentBackupId = options.parentBackupId ?? null;
   const backupId = options.backupId ?? crypto.randomUUID();
   const payload = createBackupPayload(snapshot, options.previousSnapshot ?? null);
+  const backupKey = await deriveBackupChunkKey(dataKey, snapshot.datasetId, backupId);
   const plaintext = encoder.encode(canonicalJson(payload));
   const chunks = [];
   const descriptors = [];
   for (let offset = 0, chunkIndex = 0; offset < plaintext.length; offset += chunkBytes, chunkIndex += 1) {
     const clear = plaintext.slice(offset, Math.min(offset + chunkBytes, plaintext.length));
-    const nonce = randomBytes(12);
+    const nonce = nonceForChunk(chunkIndex);
     const encrypted = new Uint8Array(await crypto.subtle.encrypt(
       {
         name: "AES-GCM",
@@ -178,7 +196,7 @@ export async function encryptBackup(snapshot, options) {
         }),
         tagLength: 128,
       },
-      dataKey,
+      backupKey,
       clear,
     ));
     chunks.push(encrypted);
@@ -213,7 +231,8 @@ async function decryptBackup(backup, recoveryCredential) {
       !Array.isArray(manifest.chunks) || manifest.chunks.length !== manifest.chunkCount) {
     throw new Error("Backup chunk set is incomplete");
   }
-  const key = await unwrapDataKey(manifest.datasetId, manifest.keyEnvelope, recoveryCredential);
+  const masterKey = await unwrapDataKey(manifest.datasetId, manifest.keyEnvelope, recoveryCredential);
+  const backupKey = await deriveBackupChunkKey(masterKey, manifest.datasetId, manifest.backupId);
   const clearChunks = [];
   for (let index = 0; index < manifest.chunkCount; index += 1) {
     const descriptor = manifest.chunks[index];
@@ -224,6 +243,7 @@ async function decryptBackup(backup, recoveryCredential) {
     if (await sha256(encrypted) !== descriptor.sha256 || encrypted.length !== descriptor.byteLength) {
       throw new Error("Backup chunk hash or length mismatch");
     }
+    if (toBase64(nonceForChunk(index)) !== descriptor.nonce) throw new Error("Backup chunk nonce counter is invalid");
     const clear = await crypto.subtle.decrypt(
       {
         name: "AES-GCM",
@@ -237,7 +257,7 @@ async function decryptBackup(backup, recoveryCredential) {
         }),
         tagLength: 128,
       },
-      key,
+      backupKey,
       encrypted,
     );
     clearChunks.push(new Uint8Array(clear));
