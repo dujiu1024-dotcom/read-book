@@ -286,6 +286,8 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 | BackupManifest | (dataset_id, backup_sequence) UNIQUE；(dataset_id, status, created_at) |
 | BackupUploadSession | (dataset_id, idempotency_key) UNIQUE |
 | ExternalIdentity | (provider, provider_subject) UNIQUE |
+| AccountDataSetBinding | (local_dataset_id) WHERE binding_status='active' UNIQUE；(account_id, local_dataset_id) |
+| RecoveryChallenge | (status, expires_at)；(recovery_key_id_hash, created_at) |
 | GenerationJob | (account_id, client_generation_id) UNIQUE |
 
 部分唯一索引、外键延迟策略和 JSON 校验方式须在目标 SQLite / 服务端数据库 PoC 中确认，不能只依赖 ORM 层校验。
