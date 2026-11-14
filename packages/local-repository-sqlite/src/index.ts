@@ -102,6 +102,7 @@ export class SqliteOpfsRepository implements LocalRepository {
           call("appendMemoryVersion", { version }),
         appendMemoryRelation: (relation) => call("appendMemoryRelation", { relation }),
         saveMemoryCandidate: (candidate: MemoryCandidateRecord) => call("saveMemoryCandidate", { candidate }),
+        resolveMemoryCandidate: (candidateId: string, status: "accepted" | "rejected", updatedAt: string) => call("resolveMemoryCandidate", { candidateId, status, updatedAt }),
         createAccountDataSetBinding: (binding: AccountDataSetBinding) => call("createAccountDataSetBinding", { binding }),
         getAccountDataSetBinding: (bindingId: string) => call("getAccountDataSetBinding", { bindingId }),
         softRevokeAccountDataSetBinding: (bindingId: string, revokedAt: string) =>
