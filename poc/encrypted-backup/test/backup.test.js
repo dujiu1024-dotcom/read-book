@@ -5,6 +5,8 @@ import {
   encryptBackup,
   restoreBackupChain,
   createMockBackupServer,
+  uploadBackupResumable,
+  shouldCreateFullCheckpoint,
 } from "../src/index.js";
 
 function snapshot(sequence, text) {
@@ -33,10 +35,8 @@ test("encrypts a full backup and incremental chain and restores the exact latest
     chunkBytes: 1024,
   });
   const server = createMockBackupServer();
-  const firstSession = server.beginUpload("dataset-1");
-  await server.completeUpload(firstSession, first);
-  const secondSession = server.beginUpload("dataset-1");
-  await server.completeUpload(secondSession, second);
+  await uploadBackupResumable(server, first);
+  await uploadBackupResumable(server, second);
   const chain = server.getBackupChain("dataset-1", second.manifest.backupId);
   const restored = await restoreBackupChain(chain, bundle.recoveryCredential);
   assert.deepEqual(restored, nextSnapshot);
@@ -74,6 +74,7 @@ test("cleared tombstone blocks a late upload and download while retaining cipher
   const server = createMockBackupServer();
   await server.completeUpload(server.beginUpload("dataset-1"), backup);
   const session = server.beginUpload("dataset-1");
+  server.uploadChunk(session, 0, backup.chunks[0]);
   const tombstone = server.clearDataset("dataset-1");
   assert.equal(tombstone.status, "cleared");
   await assert.rejects(server.completeUpload(session, backup), /cleared before upload completion/);
@@ -89,4 +90,25 @@ test("mock server makes repeated upload idempotent and rejects conflicting backu
   await server.completeUpload(server.beginUpload("dataset-1"), one);
   const again = await server.completeUpload(server.beginUpload("dataset-1"), one);
   assert.equal(again.idempotent, true);
+});
+
+test("resumes a partially uploaded backup without retransmitting accepted chunks", async () => {
+  const bundle = await createRecoveryBundle("dataset-1", undefined, { iterations: 100_000 });
+  const backup = await encryptBackup(snapshot(1, "large payload ".repeat(500)), {
+    dataKey: bundle.dataKey, keyEnvelope: bundle.keyEnvelope, chunkBytes: 1024,
+  });
+  const server = createMockBackupServer();
+  const session = server.beginUpload("dataset-1");
+  server.uploadChunk(session, 0, backup.chunks[0]);
+  const progressBefore = server.getUploadProgress(session);
+  assert.deepEqual(progressBefore, [0]);
+  const receipt = await uploadBackupResumable(server, backup, session);
+  assert.equal(receipt.backupId, backup.manifest.backupId);
+  assert.deepEqual(server.getBackupChain("dataset-1", backup.manifest.backupId).length, 1);
+});
+
+test("creates full checkpoints at the configured interval", () => {
+  assert.equal(shouldCreateFullCheckpoint(9, 10), false);
+  assert.equal(shouldCreateFullCheckpoint(10, 10), true);
+  assert.equal(shouldCreateFullCheckpoint(0, 1), false);
 });
