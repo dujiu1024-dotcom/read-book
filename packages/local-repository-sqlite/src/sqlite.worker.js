@@ -336,6 +336,7 @@ function txOperation(datasetId, operation, input) {
     }
     case "saveCitation": {
       const c=input.citation;
+      if (typeof c.excerpt !== "string" || !c.excerpt.trim()) throw new Error("Citation 必须包含可核对的原文摘录");
       const citationThread = assertSourceReferences(datasetId,c.threadId,[{bookRevisionId:c.bookRevisionId,structureNodeId:c.structureNodeId,locator:c.locator}]);
       const sourceMessage = first("SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [c.messageId,datasetId]);
       if (!sourceMessage || sourceMessage.thread_id !== c.threadId) throw new Error("Citation Message 必须属于同一 Thread");
