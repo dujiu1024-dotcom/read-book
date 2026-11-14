@@ -474,7 +474,7 @@ test("ReadingRound persists mainline presentation and unit progress through comp
     const progress = await repository.getReadingUnitProgress(ids.datasetA, ids.roundId);
     await repository.close();
     return { ...result, progress };
-  }, { datasetA, revision, threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", roundId: "77777777-7777-4777-8777-777777777777", sourceId: "66666666-6666-4666-8666-666666666666", messageId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" });
+  }, { datasetA: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", roundId: "77777777-7777-4777-8777-777777777777", sourceId: "66666666-6666-4666-8666-666666666666", messageId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" });
   expect(result.presentedSources).toHaveLength(1);
   expect(result.progress[0].status).toBe("discussed");
   expect(result.progress[0].lastActivityMessageId).toBe("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
@@ -501,7 +501,7 @@ test("ReadingUnitProgress rejects backward transitions and temporary presentatio
     });
     await repository.close();
     return { backwardRejected, before: result.before, after: result.after };
-  }, { datasetA, revision, threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", roundId: "77777777-7777-4777-8777-777777777777", sourceId: "66666666-6666-4666-8666-666666666666" });
+  }, { datasetA: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", roundId: "77777777-7777-4777-8777-777777777777", sourceId: "66666666-6666-4666-8666-666666666666" });
   expect(result.backwardRejected).toBe(true);
   expect(result.before[0].status).toBe("not_presented");
   expect(result.after[0].status).toBe("not_presented");
