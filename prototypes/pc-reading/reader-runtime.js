@@ -30,6 +30,61 @@ function getOrCreateLocalDataSetId() {
   }
 }
 
+function tokenizeSourceText(value) {
+  const terms = [];
+  const text = String(value || "").toLowerCase().normalize("NFKC");
+  const segments = text.match(/[a-z0-9]+|[\\u3400-\\u9fff]+/g) || [];
+  for (const segment of segments) {
+    if (/^[a-z0-9]+$/.test(segment)) {
+      if (segment.length > 1) terms.push(segment);
+      continue;
+    }
+    if (segment.length === 1) terms.push(segment);
+    for (let size = 2; size <= 3; size += 1) {
+      for (let index = 0; index + size <= segment.length; index += 1) {
+        terms.push(segment.slice(index, index + size));
+      }
+    }
+  }
+  return terms;
+}
+
+function createBookSourceSearch(units) {
+  const documents = units.map((unit, index) => {
+    const tokens = tokenizeSourceText([unit.title, unit.chapter, unit.text].join(" "));
+    const frequencies = new Map();
+    for (const token of tokens) frequencies.set(token, (frequencies.get(token) || 0) + 1);
+    return { unit, index, frequencies, length: tokens.length };
+  });
+  const documentFrequency = new Map();
+  for (const document of documents) {
+    for (const token of document.frequencies.keys()) {
+      documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1);
+    }
+  }
+  const averageLength = documents.reduce((sum, document) => sum + document.length, 0) / Math.max(documents.length, 1);
+  return (query, excludedUnitId, limit = 7) => {
+    const queryTerms = new Set(tokenizeSourceText(query));
+    if (!queryTerms.size || !documents.length) return [];
+    const ranked = [];
+    for (const document of documents) {
+      if (document.unit.id === excludedUnitId) continue;
+      let score = 0;
+      for (const token of queryTerms) {
+        const frequency = document.frequencies.get(token) || 0;
+        if (!frequency) continue;
+        const df = documentFrequency.get(token) || 0;
+        const inverseFrequency = Math.log(1 + (documents.length - df + 0.5) / (df + 0.5));
+        const lengthNorm = 1.2 * (0.25 + 0.75 * document.length / Math.max(averageLength, 1));
+        score += inverseFrequency * (frequency * 2.2) / (frequency + lengthNorm);
+      }
+      if (score > 0) ranked.push({ unit: document.unit, score, index: document.index });
+    }
+    ranked.sort((left, right) => right.score - left.score || left.index - right.index);
+    return ranked.slice(0, limit).map(({ unit }) => unit);
+  };
+}
+
 export async function createProductionReaderRuntime(config, bookRevision) {
   const localOnly = config.localOnly === true;
   let datasetId = required(config.localDataSetId || (localOnly ? getOrCreateLocalDataSetId() : ""), "READ_BOOK_CONFIG.localDataSetId");
@@ -39,6 +94,14 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   if (!localOnly && (typeof generationApiBaseUrl !== "string" || !generationApiBaseUrl.trim())) {
     throw new Error("缺少生成服务地址，请配置 READ_BOOK_CONFIG.generationApiBaseUrl（或复用 apiBaseUrl）。");
   }
+
+  const searchBookSources = createBookSourceSearch(bookRevision.units || []);
+  const buildAdditionalSources = (query, currentUnit) => searchBookSources(query, currentUnit.id, 7)
+    .map((unit) => ({
+      structure_node_id: unit.id,
+      locator: unit.locator,
+      excerpt: unit.text.slice(0, 30_000),
+    }));
 
   const repository = new SqliteOpfsRepository();
   await repository.initialize();
@@ -291,7 +354,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       book_revision_id: bookRevision.bookRevisionId,
       user_message: { local_message_id: userMessageId, content },
       context: {
-        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
+        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text.slice(0, 30_000) },
+        additional_sources: buildAdditionalSources(content, unit),
         recent_messages: recentMessages,
         response_preferences: { language: "zh-CN" },
       },
@@ -338,7 +402,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       book_revision_id: bookRevision.bookRevisionId,
       user_message: { local_message_id: userMessageId, content: user.content },
       context: {
-        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
+        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text.slice(0, 30_000) },
+        additional_sources: buildAdditionalSources(user.content, unit),
         recent_messages: priorMessages,
         response_preferences: { language: "zh-CN" },
       },
@@ -376,7 +441,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         book_revision_id: bookRevision.bookRevisionId,
         user_message: { local_message_id: user.id, content: user.content },
         context: {
-          current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
+          current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text.slice(0, 30_000) },
+          additional_sources: buildAdditionalSources(user.content, unit),
           recent_messages: messages.slice(-12).map(({ message }) => ({ role: message.role, content: message.content })),
           response_preferences: { language: "zh-CN" },
         },
