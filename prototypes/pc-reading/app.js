@@ -518,7 +518,11 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       setGenerationStatus("本地阅读数据已加载；讨论消息先保存到本地，再请求 Agent。");
       productionRuntime.resumePending({
         onDelta: () => {},
-      }).then(refreshPersistedMessages).catch(error => {
+        onMemoryUpdate: renderMemoryState,
+      }).then(async () => {
+        await refreshPersistedMessages();
+        renderMemoryState(await productionRuntime.loadMemoryState());
+      }).catch(error => {
         setGenerationStatus("有未完成的生成任务，自动恢复暂不可用：" + error.message);
       });
     } catch (error) {
