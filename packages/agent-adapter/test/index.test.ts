@@ -321,7 +321,7 @@ test("generation turn persists authoritative result and repeated submit reuses t
   assert.deepEqual(calls, { create: 1, get: 2, stream: 1 });
 });
 
-test("ambiguous create failure leaves a queued receipt for idempotent recovery", async () => {
+test("create failure marks the placeholder failed instead of leaving it generating", async () => {
   const repository = memoryTurnRepository();
   const client = createGenerationClient({
     async createGeneration() { throw new Error("connection lost after request"); },
@@ -339,8 +339,8 @@ test("ambiguous create failure leaves a queued receipt for idempotent recovery",
     signal: new AbortController().signal,
   };
   await assert.rejects(() => runGenerationTurn(repository as any, client, input), /connection lost/);
-  assert.equal(repository.deliveries.get(request.client_generation_id).status, "queued");
-  assert.equal(repository.messages.get(input.assistantMessageId).status, "generating");
+  assert.equal(repository.deliveries.get(request.client_generation_id).status, "failed");
+  assert.equal(repository.messages.get(input.assistantMessageId).status, "failed");
   assert.deepEqual(repository.counts, { appendUserCount: 1, appendAssistantCount: 1 });
 });
 
@@ -398,6 +398,88 @@ test("conversation controller resumes queued deliveries in its bound dataset", a
     content: "恢复后的权威结果",
   });
   assert.equal(controller.isBusy(), false);
+});
+
+function queuedDelivery(clientGenerationId: string, assistantMessageId: string, idempotencyKey: string) {
+  return {
+    clientGenerationId,
+    generationId: null,
+    threadId: request.thread_id,
+    userMessageId: request.user_message.local_message_id,
+    assistantMessageId,
+    idempotencyKey,
+    status: "queued" as const,
+    lastSequence: 0,
+    lastEventId: null,
+    expiresAt: null,
+    updatedAt: "2026-11-14T00:00:00.000Z",
+  };
+}
+
+test("one unrecoverable delivery does not abort the rest of the recovery batch", async () => {
+  const repository = memoryTurnRepository();
+  repository.deliveries.set("generation-outdated", queuedDelivery("generation-outdated", "assistant-outdated", "idempotency-outdated"));
+  repository.deliveries.set("generation-recoverable", queuedDelivery("generation-recoverable", "assistant-recoverable", "idempotency-recoverable"));
+  repository.messages.set("assistant-outdated", { status: "generating", content: "" });
+  repository.messages.set("assistant-recoverable", { status: "generating", content: "" });
+  const client = createGenerationClient({
+    async createGeneration() { return accepted; },
+    async getGeneration() {
+      return { generation_id: accepted.generation_id, status: "completed", expires_at: accepted.expires_at, result: { content: "后续任务仍被恢复" } };
+    },
+    async cancelGeneration() { return { ...accepted, status: "cancel_requested" }; },
+    async streamEvents() {},
+  });
+  const failures: string[] = [];
+  const controller = createGenerationTurnController(repository as any, client, "dataset-01");
+  const results = await controller.resumePending(async (delivery) => {
+    // Outdated cross-version tasks cannot rebuild their request context; that must stay local to them.
+    if (delivery.clientGenerationId === "generation-outdated") throw new Error("unsupported persisted task shape");
+    return { ...request, client_generation_id: delivery.clientGenerationId };
+  }, {
+    threadId: request.thread_id,
+    onError: (clientGenerationId) => failures.push(clientGenerationId),
+  });
+  assert.deepEqual(failures, ["generation-outdated"]);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].snapshot.result?.content, "后续任务仍被恢复");
+  assert.deepEqual(repository.messages.get("assistant-recoverable"), { status: "completed", content: "后续任务仍被恢复" });
+});
+
+test("recovery create failure fails only that delivery and continues the batch", async () => {
+  const repository = memoryTurnRepository();
+  repository.deliveries.set("generation-create-fails", queuedDelivery("generation-create-fails", "assistant-create-fails", "idempotency-create-fails"));
+  repository.deliveries.set("generation-create-works", queuedDelivery("generation-create-works", "assistant-create-works", "idempotency-create-works"));
+  repository.messages.set("assistant-create-fails", { status: "generating", content: "" });
+  repository.messages.set("assistant-create-works", { status: "generating", content: "" });
+  let createCalls = 0;
+  const client = createGenerationClient({
+    async createGeneration() {
+      createCalls += 1;
+      if (createCalls === 1) throw new Error("429 rate limited");
+      return accepted;
+    },
+    async getGeneration() {
+      return { generation_id: accepted.generation_id, status: "completed", expires_at: accepted.expires_at, result: { content: "批次内后一条已完成" } };
+    },
+    async cancelGeneration() { return { ...accepted, status: "cancel_requested" }; },
+    async streamEvents() {},
+  });
+  const failures: string[] = [];
+  const controller = createGenerationTurnController(repository as any, client, "dataset-01");
+  const results = await controller.resumePending(async (delivery) => ({
+    ...request,
+    client_generation_id: delivery.clientGenerationId,
+  }), {
+    threadId: request.thread_id,
+    onError: (clientGenerationId) => failures.push(clientGenerationId),
+  });
+  assert.deepEqual(failures, ["generation-create-fails"]);
+  assert.equal(repository.deliveries.get("generation-create-fails").status, "failed");
+  assert.equal(repository.messages.get("assistant-create-fails").status, "failed");
+  assert.equal(results.length, 1);
+  assert.equal(repository.deliveries.get("generation-create-works").status, "completed");
+  assert.equal(repository.messages.get("assistant-create-works").status, "completed");
 });
 
 test("conversation controller rejects sends outside its bound dataset", async () => {

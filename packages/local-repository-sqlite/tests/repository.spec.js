@@ -223,6 +223,51 @@ test("schema v1 to v6 migration preserves legacy dataset cursors and creates can
   expect(migrated.candidates).toEqual([]);
 });
 
+test("schema v5 to v8 migration keeps chunk-less citations in the legacy table instead of dropping them", async ({ page }) => {
+  await page.goto("/");
+  const seeded = await page.evaluate(async () => {
+    const worker = new Worker("/tests/legacy-db.worker.js", { type: "module" });
+    return await new Promise((resolve, reject) => {
+      worker.onmessage = ({ data }) => { worker.terminate(); resolve(data); };
+      worker.onerror = (event) => { worker.terminate(); reject(new Error(event.message)); };
+      worker.postMessage({ type: "seed-v5-citations" });
+    });
+  });
+  expect(seeded.ok).toBe(true);
+
+  const migrated = await page.evaluate(async () => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    const dataset = await repository.getDataSet("legacy-v5-dataset");
+    const messages = await repository.getMessages("legacy-v5-dataset", "legacy-v5-thread");
+    await repository.close();
+    return { dataset, messageCount: messages.length };
+  });
+  expect(migrated.dataset.schemaVersion).toBe(8);
+  // Citations are not cascaded into message deletion; only the chunk-level citation table is rebuilt.
+  expect(migrated.messageCount).toBe(2);
+
+  const inspected = await page.evaluate(async () => {
+    const worker = new Worker("/tests/legacy-db.worker.js", { type: "module" });
+    return await new Promise((resolve, reject) => {
+      worker.onmessage = ({ data }) => { worker.terminate(); resolve(data); };
+      worker.onerror = (event) => { worker.terminate(); reject(new Error(event.message)); };
+      worker.postMessage({ type: "inspect-citations" });
+    });
+  });
+  expect(inspected.ok, inspected.error).toBe(true);
+  expect(inspected.userVersion).toBe(8);
+  expect(inspected.newCitationColumns).toEqual(expect.arrayContaining(["chunk_id", "source_hash"]));
+  // The rebuilt chunk-level table starts empty: v5 rows carry no chunk_id/source_hash, so no fabricated backfill.
+  expect(inspected.newCitationCount).toBe(0);
+  // No row loss: the v5 rows stay readable in the read-only legacy table.
+  expect(inspected.legacyRows).toEqual([
+    { id: "legacy-citation-1", excerpt: "旧版无切片引文一", excerpt_hash: null },
+    { id: "legacy-citation-2", excerpt: "旧版无切片引文二", excerpt_hash: "hash-legacy-2" },
+    { id: "legacy-citation-3", excerpt: "旧版无切片引文三", excerpt_hash: null },
+  ]);
+});
+
 test("MemoryRelation persists only when both versions and source provenance belong to the dataset", async ({ page }) => {
   await page.goto("/");
   const result = await page.evaluate(async (ids) => {

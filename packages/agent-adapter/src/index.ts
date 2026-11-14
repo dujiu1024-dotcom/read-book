@@ -612,8 +612,21 @@ export async function runGenerationTurn(
   try {
     accepted = await client.create(input.request, input.idempotencyKey);
   } catch (error) {
-    // The request may have reached the server even if the response was lost. Keep the queued receipt
-    // and retry create with the same idempotency key during recovery; do not mark an ambiguous outcome failed.
+    // No server generation identity came back, so there is no session identity to resume: fail the
+    // placeholder explicitly instead of leaving the user with a permanently "generating" message.
+    await failUnidentifiedDelivery(repository, input.datasetId, {
+      clientGenerationId: input.request.client_generation_id,
+      generationId: null,
+      threadId: input.userMessage.threadId,
+      userMessageId: input.userMessage.id,
+      assistantMessageId: input.assistantMessageId,
+      idempotencyKey: input.idempotencyKey,
+      status: "queued",
+      lastSequence: 0,
+      lastEventId: null,
+      expiresAt: null,
+      updatedAt: now(),
+    }, now);
     throw error;
   }
   // If this local write fails, leave the queued receipt intact. Recovery retries create with the same idempotency key.
@@ -678,6 +691,25 @@ export async function runGenerationTurn(
   return { accepted, snapshot, assistantMessageId: input.assistantMessageId, lastCursor: cursor };
 }
 
+type PersistedGenerationDelivery = NonNullable<Awaited<ReturnType<GenerationTurnRepository["getGenerationDelivery"]>>>;
+
+/**
+ * A create request that never returned a server generation identity leaves nothing to resume:
+ * land the placeholder and its receipt in an explicit failed state so the user can retry
+ * instead of an assistant message that stays "generating" forever.
+ */
+async function failUnidentifiedDelivery(
+  repository: GenerationTurnRepository,
+  datasetId: string,
+  delivery: PersistedGenerationDelivery,
+  now: () => string,
+): Promise<void> {
+  await repository.transaction(datasetId, async (tx) => {
+    await tx.transitionAssistantMessage(delivery.assistantMessageId, "failed");
+    await tx.saveGenerationDelivery({ ...delivery, generationId: delivery.generationId, status: "failed", updatedAt: now() });
+  });
+}
+
 /** Resume a queued/running delivery after reload using its durable generation identity and SSE cursor. */
 export async function recoverGenerationTurn(
   repository: GenerationTurnRepository,
@@ -691,7 +723,11 @@ export async function recoverGenerationTurn(
   if (delivery.clientGenerationId !== input.request.client_generation_id) throw new GenerationProtocolError("Recovery request does not match the persisted delivery.");
   const accepted = delivery.generationId
     ? { generation_id: delivery.generationId, status: "running" as const, expires_at: delivery.expiresAt ?? now() }
-    : await client.create(input.request, delivery.idempotencyKey);
+    : await client.create(input.request, delivery.idempotencyKey).catch(async (error: unknown) => {
+      // Without a server identity this delivery cannot be resumed, so it must not stay queued forever.
+      await failUnidentifiedDelivery(repository, input.datasetId, delivery, now);
+      throw error;
+    });
   let cursor: GenerationEventCursor = { generationId: accepted.generation_id, lastSequence: delivery.lastSequence, lastEventId: delivery.lastEventId };
   const persist = async (status: "running" | "failed" | "cancelled", sequence: number, eventId: string | null) =>
     repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ ...delivery, generationId: accepted.generation_id, status, lastSequence: sequence, lastEventId: eventId, expiresAt: accepted.expires_at, updatedAt: now() }));
@@ -747,7 +783,7 @@ export interface GenerationTurnController {
   /** Resume all durable pending deliveries in creation order. */
   resumePending(
     requestForDelivery: (delivery: NonNullable<Awaited<ReturnType<GenerationTurnRepository["getGenerationDelivery"]>>>) => Promise<GenerationRequest>,
-    options?: { now?: () => string; threadId?: string; onDelta?: (clientGenerationId: string, text: string) => void; onStatus?: (clientGenerationId: string, status: GenerationStatus) => void },
+    options?: { now?: () => string; threadId?: string; onDelta?: (clientGenerationId: string, text: string) => void; onStatus?: (clientGenerationId: string, status: GenerationStatus) => void; onError?: (clientGenerationId: string, error: unknown) => void },
   ): Promise<GenerationTurnResult[]>;
   stop(): void;
   isBusy(): boolean;
@@ -804,19 +840,26 @@ export function createGenerationTurnController(
         const results: GenerationTurnResult[] = [];
         for (const delivery of pending) {
           if (signal.aborted) break;
-          const request = await requestForDelivery(delivery);
-          if (request.client_generation_id !== delivery.clientGenerationId) {
-            throw new GenerationProtocolError("Recovery request does not match its pending delivery.");
+          try {
+            const request = await requestForDelivery(delivery);
+            if (request.client_generation_id !== delivery.clientGenerationId) {
+              throw new GenerationProtocolError("Recovery request does not match its pending delivery.");
+            }
+            results.push(await recoverGenerationTurn(repository, client, {
+              datasetId,
+              clientGenerationId: delivery.clientGenerationId,
+              request,
+              signal,
+              now: resumeOptions.now,
+              onDelta: (text) => { resumeOptions.onDelta?.(delivery.clientGenerationId, text); options.onDelta?.(delivery.clientGenerationId, text); },
+              onStatus: (status) => { resumeOptions.onStatus?.(delivery.clientGenerationId, status); options.onStatus?.(delivery.clientGenerationId, status); },
+            }));
+          } catch (error) {
+            // One broken delivery (for example an outdated task left by a previous app version) must not
+            // stop the rest of the batch. The failing delivery is reported and already marked failed
+            // when it has no server identity to resume from.
+            resumeOptions.onError?.(delivery.clientGenerationId, error);
           }
-          results.push(await recoverGenerationTurn(repository, client, {
-            datasetId,
-            clientGenerationId: delivery.clientGenerationId,
-            request,
-            signal,
-            now: resumeOptions.now,
-            onDelta: (text) => { resumeOptions.onDelta?.(delivery.clientGenerationId, text); options.onDelta?.(delivery.clientGenerationId, text); },
-            onStatus: (status) => { resumeOptions.onStatus?.(delivery.clientGenerationId, status); options.onStatus?.(delivery.clientGenerationId, status); },
-          }));
         }
         return results;
       });

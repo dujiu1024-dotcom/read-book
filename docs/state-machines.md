@@ -163,6 +163,8 @@ submitted → streaming → completed / failed / cancelled / expired
 - cancel_requested → cancelled 表示取消成功；若任务在取消生效前自然完成或失败，则允许转为 completed / failed。所有终态只能原子提交一次；取消与自然完成竞态以服务端先提交的终态为准。
 - 客户端取消接口返回 202 只代表取消请求已接受，不代表最终状态已经 cancelled。
 - 网络断开不等于任务失败；客户端恢复连接后通过 generation_id 查询。
+- 创建请求未返回 generation_id 时本地没有可恢复的服务端身份：该轮必须落 failed（Assistant Message 与 GenerationReceipt 同事务转 failed），由用户重试；不得保留 queued 回执让占位消息永久停留在 generating。
+- 恢复批次按条隔离：单条 GenerationReceipt 恢复失败只影响该条，不得中止同批次其余可恢复任务。
 - 事件流 sequence 只用于增量显示和断点恢复，不是最终结果权威来源。
 - 服务端 completed 后必须可查询完整结果，直到 expires_at。
 - 客户端成功写入本地 Assistant Message 后，GenerationReceipt 标记 completed 并记录 result_message_id。
