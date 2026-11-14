@@ -3,19 +3,31 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
 import { createGithubCorpusProvider } from "./github-corpus-provider.js";
 import { createLocalCorpusRuntime } from "./local-corpus-runtime.js";
 import { createProductionReaderRuntime } from "./reader-runtime.js";
+import { createLocalBookPackageProvider, importBookPackageFile } from "./local-book-package-provider.js";
 
 (() => {
   let units = [];
   let bookRevision = null;
   const readerConfig = window.READ_BOOK_CONFIG || {};
-  const queryBookId = new URLSearchParams(window.location.search).get("book");
+  const queryParams = new URLSearchParams(window.location.search);
+  const queryBookId = queryParams.get("book");
+  const queryLocalBookId = queryParams.get("localBookRevision");
   const isGithubCorpusMode = Boolean(queryBookId && queryBookId !== "demo");
-  const isDemoProvider = queryBookId === "demo" || (!isGithubCorpusMode && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId);
+  const activeLocalBookPackageId = readerConfig.localBookPackageId || queryLocalBookId || (() => {
+    try { return window.localStorage.getItem("read-book:active-local-book") || ""; } catch { return ""; }
+  })();
+  const preferLocalBookPackage = Boolean(readerConfig.localBookPackageId || queryLocalBookId) || (() => {
+    try { return window.localStorage.getItem("read-book:prefer-local-book") === "true"; } catch { return false; }
+  })();
+  const useLocalBookPackage = Boolean(activeLocalBookPackageId && !queryBookId && (preferLocalBookPackage || !readerConfig.bookRevisionId));
+  const isDemoProvider = queryBookId === "demo" || (!isGithubCorpusMode && !useLocalBookPackage && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId);
   let bookContentProvider = null;
   let productionRuntime = null;
   const requestedBookRevisionId = isGithubCorpusMode
     ? "github-corpus-" + queryBookId
-    : isDemoProvider ? "demo-book-revision-1" : (readerConfig.bookRevisionId || "");
+    : isDemoProvider ? "demo-book-revision-1"
+      : useLocalBookPackage ? activeLocalBookPackageId
+        : (readerConfig.bookRevisionId || "");
 
   const state = {
     mainlineIndex: 1,
@@ -51,7 +63,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     $("bookTitle").textContent = bookRevision.title;
     $("topbarBookTitle").textContent = bookRevision.title;
     $("bookAuthor").textContent = bookRevision.author;
-    $("sourceTag").textContent = isGithubCorpusMode ? "GitHub 公开语料" : "原书内容";
+    $("sourceTag").textContent = isGithubCorpusMode ? "GitHub 公开语料" : useLocalBookPackage ? "本地书籍包" : "原书内容";
     const sourceLink = $("sourceSourceLink");
     if (sourceLink && unit.source?.url) {
       sourceLink.href = unit.source.url;
@@ -383,6 +395,29 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     toast(state.discussed ? "演示状态：当前单元标记为已讨论。" : "演示状态：当前单元标记为未讨论，可测试继续前确认。");
   });
 
+  $("importBookButton").addEventListener("click", () => $("bookPackageFile").click());
+  $("bookPackageFile").addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const button = $("importBookButton");
+    button.disabled = true;
+    setGenerationStatus("正在校验并导入标准书籍包…");
+    try {
+      const imported = await importBookPackageFile(file);
+      setGenerationStatus("已导入《" + imported.title + "》，共 " + imported.unitCount + " 个原文单元。正在打开…");
+      const params = new URLSearchParams(window.location.search);
+      params.delete("book");
+      params.set("localBookRevision", imported.bookRevisionId);
+      const query = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (query ? "?" + query : ""));
+      window.location.reload();
+    } catch (error) {
+      setGenerationStatus("书籍导入失败：" + error.message);
+      button.disabled = false;
+      event.target.value = "";
+    }
+  });
+
   messageList.addEventListener("scroll", () => {
     nearBottom = messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 48;
   });
@@ -526,13 +561,27 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
   const bookSelector = $("bookSelector");
   if (bookSelector) {
     const serviceOption = bookSelector.querySelector('option[value="service"]');
+    const localOption = bookSelector.querySelector('option[value="local"]');
     if (serviceOption) serviceOption.disabled = !(readerConfig.apiBaseUrl && readerConfig.bookRevisionId);
-    bookSelector.value = isGithubCorpusMode ? queryBookId : (queryBookId === "demo" || isDemoProvider ? "demo" : "service");
+    if (localOption) {
+      localOption.hidden = !activeLocalBookPackageId;
+      localOption.disabled = !activeLocalBookPackageId;
+    }
+    bookSelector.value = useLocalBookPackage ? "local" : isGithubCorpusMode ? queryBookId : (queryBookId === "demo" || isDemoProvider ? "demo" : "service");
     bookSelector.addEventListener("change", () => {
       const next = bookSelector.value;
       const params = new URLSearchParams(window.location.search);
-      if (next === "service") params.delete("book");
-      else params.set("book", next);
+      if (next === "service") {
+        params.delete("book");
+        params.delete("localBookRevision");
+        try { window.localStorage.removeItem("read-book:prefer-local-book"); } catch {}
+      } else if (next === "local") {
+        params.delete("book");
+        if (activeLocalBookPackageId) params.set("localBookRevision", activeLocalBookPackageId);
+      } else {
+        params.delete("localBookRevision");
+        params.set("book", next);
+      }
       const query = params.toString();
       window.location.search = query ? "?" + query : "";
     });
@@ -546,6 +595,10 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
         state.messages = [];
         messageList.replaceChildren();
         bookContentProvider = createGithubCorpusProvider();
+      } else if (useLocalBookPackage) {
+        state.messages = [];
+        messageList.replaceChildren();
+        bookContentProvider = createLocalBookPackageProvider();
       } else {
         state.messages = [];
         messageList.replaceChildren();
@@ -613,7 +666,13 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
         return;
       }
 
-      productionRuntime = await createProductionReaderRuntime(readerConfig, bookRevision);
+      productionRuntime = await createProductionReaderRuntime({
+        ...readerConfig,
+        // A locally generated BookRevision ID is not registered with the remote
+        // Generation service. Keep imported packages local until a server-side
+        // ingestion/registration handshake exists.
+        localOnly: useLocalBookPackage,
+      }, bookRevision);
       const position = productionRuntime.readingPosition;
       if (position) {
         const index = units.findIndex(unit => unit.id === position.mainlineNodeId);
@@ -625,13 +684,16 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       renderSource();
       await refreshPersistedMessages();
       renderMemoryState(await productionRuntime.loadMemoryState());
-      $("messageInput").disabled = false;
-      $("sendButton").disabled = false;
+      $("messageInput").disabled = !productionRuntime.generationConfigured;
+      $("sendButton").disabled = !productionRuntime.generationConfigured;
       $("simulateFailure").hidden = true;
       $("menuButton").hidden = true;
       $("backupButton").textContent = productionRuntime.backupStatus.label;
-      setGenerationStatus("本地阅读数据已加载；讨论消息先保存到本地，再请求 Agent。");
-      productionRuntime.resumePending({
+      $("readerModeLabel").textContent = productionRuntime.generationConfigured ? "本地阅读 · Agent 已配置" : "本地导入书籍 · 阅读模式";
+      setGenerationStatus(productionRuntime.generationConfigured
+        ? "本地阅读数据已加载；讨论消息先保存到本地，再请求 Agent。"
+        : "本地书籍、阅读主线和讨论历史已保存到当前浏览器。Agent 与云端备份尚未配置。");
+      if (productionRuntime.generationConfigured) productionRuntime.resumePending({
         onDelta: () => {},
         onMemoryUpdate: renderMemoryState,
       }).then(async () => {

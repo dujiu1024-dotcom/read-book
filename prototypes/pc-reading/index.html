@@ -23,9 +23,13 @@
           <option value="maoxuan-4">毛泽东选集 第四卷</option>
           <option value="maoxuan-5">毛泽东选集 第五卷</option>
           <option value="service">已配置的正式书籍服务</option>
+          <option value="local" hidden>本地导入书籍</option>
         </select>
       </div>
-      <button class="icon-button" id="menuButton" type="button" aria-label="演示：切换当前单元讨论状态" title="演示状态切换">···</button>
+      <div class="topbar-actions">
+        <button class="text-button" id="importBookButton" type="button">导入书籍</button>
+        <button class="icon-button" id="menuButton" type="button" aria-label="演示：切换当前单元讨论状态" title="演示状态切换">···</button>
+      </div>
     </header>
 
     <main class="reader" id="reader">
@@ -134,6 +138,7 @@
     </form>
   </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <input id="bookPackageFile" type="file" accept=".zip,application/zip" hidden>
   <script type="module" src="./app.js"></script>
 </body>
 </html>

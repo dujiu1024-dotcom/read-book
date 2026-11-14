@@ -17,12 +17,26 @@ function required(value, name) {
   return value.trim();
 }
 
+function getOrCreateLocalDataSetId() {
+  const key = "read-book:local-dataset-id";
+  try {
+    const existing = window.localStorage.getItem(key);
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    window.localStorage.setItem(key, created);
+    return created;
+  } catch {
+    throw new Error("无法持久化本地数据集标识；请允许当前站点使用本地存储后重试。");
+  }
+}
+
 export async function createProductionReaderRuntime(config, bookRevision) {
-  let datasetId = required(config.localDataSetId, "READ_BOOK_CONFIG.localDataSetId");
+  const localOnly = config.localOnly === true;
+  let datasetId = required(config.localDataSetId || (localOnly ? getOrCreateLocalDataSetId() : ""), "READ_BOOK_CONFIG.localDataSetId");
   const getAccessToken = config.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken;
-  if (typeof getAccessToken !== "function") throw new Error("缺少登录令牌提供器。");
   const generationApiBaseUrl = config.generationApiBaseUrl || config.apiBaseUrl;
-  if (typeof generationApiBaseUrl !== "string" || !generationApiBaseUrl.trim()) {
+  if (!localOnly && typeof getAccessToken !== "function") throw new Error("缺少登录令牌提供器。");
+  if (!localOnly && (typeof generationApiBaseUrl !== "string" || !generationApiBaseUrl.trim())) {
     throw new Error("缺少生成服务地址，请配置 READ_BOOK_CONFIG.generationApiBaseUrl（或复用 apiBaseUrl）。");
   }
 
@@ -42,15 +56,14 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       checkpointInterval: config.backupCheckpointInterval,
     });
   };
-  let encryptedBackupPort = makeBackupPort(datasetId);
-  let backupStatus = {
-    label: "备份：检查中",
-    detail: "正在检查本地数据与云端备份状态。",
-  };
+  let encryptedBackupPort = localOnly ? null : makeBackupPort(datasetId);
+  let backupStatus = localOnly
+    ? { label: "备份：未配置", detail: "当前仅使用本地阅读模式；配置加密备份服务后可启用云端备份。" }
+    : { label: "备份：检查中", detail: "正在检查本地数据与云端备份状态。" };
 
   let initialSnapshot = await repository.createConsistentSnapshot(datasetId);
   const hasLocalData = initialSnapshot.threads.length > 0 || initialSnapshot.messages.length > 0 || initialSnapshot.dirtySequence > 0;
-  if (!hasLocalData) {
+  if (!localOnly && !hasLocalData) {
     if (typeof encryptedBackupPort.listBackups !== "function") {
       throw new Error("新设备首次打开必须支持查询云端备份清单，不能在未知远端状态下直接创建新数据。");
     }
@@ -110,13 +123,16 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     }
   });
 
-  const transport = createHttpGenerationTransport({
-    baseUrl: generationApiBaseUrl,
-    getAccessToken,
-  });
-  const client = createGenerationClient(transport);
-  const turnRepository = createAgentGenerationTurnRepository(repository, datasetId);
-  const controller = createGenerationTurnController(turnRepository, client, datasetId);
+  let controller = null;
+  if (!localOnly) {
+    const transport = createHttpGenerationTransport({
+      baseUrl: generationApiBaseUrl,
+      getAccessToken,
+    });
+    const client = createGenerationClient(transport);
+    const turnRepository = createAgentGenerationTurnRepository(repository, datasetId);
+    controller = createGenerationTurnController(turnRepository, client, datasetId);
+  }
 
   async function loadMessages() {
     return repository.getMessages(datasetId, thread.id);
@@ -253,6 +269,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   }
 
   async function send(content, unit, callbacks = {}) {
+    if (!controller) throw new Error("真实 Agent 服务尚未配置；当前仅支持本地阅读与历史查看。");
     if (!unit) throw new Error("当前没有可关联的原文单元。");
     const messages = await loadMessages();
     const recentMessages = messages.slice(-12).map(({ message }) => ({
@@ -296,6 +313,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   }
 
   async function retryFailedGeneration(assistantMessageId, callbacks = {}) {
+    if (!controller) throw new Error("真实 Agent 服务尚未配置；当前无法重试生成。");
     const snapshot = await repository.createConsistentSnapshot(datasetId);
     const delivery = snapshot.generationDeliveries.find((item) => item.assistantMessageId === assistantMessageId);
     if (!delivery || !["failed", "expired", "cancelled"].includes(delivery.status)) {
@@ -343,6 +361,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   }
 
   async function resumePending(callbacks = {}) {
+    if (!controller) return [];
     const results = await controller.resumePending(async (delivery) => {
       const messages = await repository.getMessages(datasetId, delivery.threadId);
       const user = messages.find((item) => item.message.id === delivery.userMessageId)?.message;
@@ -373,7 +392,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   }
 
   const snapshot = await repository.createConsistentSnapshot(datasetId);
-  if (encryptedBackupPort && typeof encryptedBackupPort.uploadSnapshot === "function") {
+  if (!localOnly && encryptedBackupPort && typeof encryptedBackupPort.uploadSnapshot === "function") {
     try {
       const receipt = await encryptedBackupPort.uploadSnapshot(snapshot);
       if (!receipt || typeof receipt.backupId !== "string" || !receipt.backupId.trim()) {
@@ -392,6 +411,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     thread,
     readingPosition,
     backupStatus,
+    generationConfigured: Boolean(controller),
     loadMessages,
     loadMemoryState,
     extractMemories,
@@ -399,7 +419,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     savePosition,
     send,
     retryFailedGeneration,
-    stop: () => controller.stop(),
+    stop: () => controller?.stop(),
     resumePending,
     close: () => repository.close(),
   };
