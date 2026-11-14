@@ -280,12 +280,14 @@ export function verifiedGenerationCitationRecords(
   createdAt: string;
 }> {
   const references = verifiedGenerationSourceReferences(result, request);
+  const sourceText = request.context.current_source.excerpt.replace(/\\s+/g, " ").trim();
   return references.flatMap((reference) => {
     const citation = (result.citations || []).find((item) =>
       item.book_revision_id === reference.bookRevisionId &&
       item.structure_node_id === reference.structureNodeId &&
       item.locator === reference.locator &&
-      Boolean(item.excerpt?.trim())
+      Boolean(item.excerpt?.trim()) &&
+      sourceText.includes(item.excerpt.replace(/\\s+/g, " ").trim())
     );
     if (!citation?.excerpt) return [];
     return [{
