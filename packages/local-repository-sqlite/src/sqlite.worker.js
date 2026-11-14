@@ -401,6 +401,32 @@ function txOperation(datasetId, operation, input) {
       if (changed) transactionDirty=true;
       return changed;
     }
+    case "acknowledgeBackup": {
+      const sequence = input.snapshotSequence;
+      const backupId = input.backupId;
+      const backedUpAt = input.backedUpAt;
+      if (!Number.isSafeInteger(sequence) || sequence < 0) {
+        throw new Error("备份快照序号必须是非负安全整数");
+      }
+      if (typeof backupId !== "string" || !backupId.trim() || backupId.length > 256) {
+        throw new Error("backupId 必须是 1 到 256 字符的非空字符串");
+      }
+      if (typeof backedUpAt !== "string" || !Number.isFinite(Date.parse(backedUpAt))) {
+        throw new Error("backedUpAt 必须是有效时间");
+      }
+      const dataset = first("SELECT dirty_sequence,last_acked_sequence FROM local_dataset WHERE id=?", [datasetId]);
+      if (!dataset) throw new Error("数据集不存在");
+      if (sequence < dataset.last_acked_sequence) {
+        throw new Error("不能将备份确认序号回退到已确认位置之前");
+      }
+      if (sequence > dataset.dirty_sequence) {
+        throw new Error("不能确认尚未生成的备份快照序号");
+      }
+      execute("UPDATE local_dataset SET last_acked_sequence=?,last_backup_id=?,last_backup_at=? WHERE id=?",
+        [sequence,backupId,backedUpAt,datasetId]);
+      // Backup metadata is not user content and must not advance dirty_sequence.
+      return undefined;
+    }
     case "createConsistentSnapshot": {
       const ds=first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
       return {

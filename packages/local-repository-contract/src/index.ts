@@ -179,6 +179,8 @@ export interface LocalRepositoryTransaction {
   softRevokeAccountDataSetBinding(bindingId: string, revokedAt: string): Promise<boolean>;
 
   createConsistentSnapshot(): Promise<RepositorySnapshot>;
+  /** Acknowledge only the exact snapshot sequence accepted by remote backup; later writes remain dirty. */
+  acknowledgeBackup(snapshotSequence: number, backupId: string, backedUpAt: string): Promise<void>;
 }
 
 /**
