@@ -69,6 +69,21 @@ window.READ_BOOK_CONFIG = {
 若没有配置公共 API，页面明确使用 Demo Provider；若配置了真实书籍，页面不会展示演示讨论消息或固定演示回复，讨论输入暂时禁用，等待 #26/#27 接入。
 
 
+## 标准书籍包本地导入（Issue #25）
+
+阅读页提供“导入书籍”入口，选择由书籍加工 PoC 导出的 `.zip` 标准书籍包后，客户端会：
+
+1. 校验 ZIP 路径、文件数量与展开体积边界。
+2. 校验书籍包协议版本、BookRevision UUID、书目元数据和章节树。
+3. 校验原始文件大小与 SHA-256，并逐个校验带摘要的正文切片。
+4. 将通过校验的原始 ZIP 保存到独立 IndexedDB 书籍库，不写入用户私人阅读数据 Repository。
+5. 通过 `createLocalBookPackageProvider()` 将章节与正文切片映射为阅读单元，加载后进入本地只读阅读模式。
+
+本地导入不要求先部署公共书籍 API。未配置真实 Agent 服务时，讨论输入保持禁用，不展示固定演示回复；主线、临时查看、复习和引用定位仍可用于阅读。真实讨论仍需宿主配置认证与 Generation API。
+
+导入实现：`local-book-package-provider.js`。对应自动化测试：`node --test local-book-package-provider.test.mjs`；本目录脚本：`npm run test:book-package`。按项目统一验收约定，本轮未运行测试或构建。
+
+
 ## 本地运行（正式阅读客户端）
 
 本目录现由 Vite 构建，生产模式会接入 SQLite WASM + OPFS 本地 Repository、公共书籍 API Provider 和 HTTP/SSE Agent Transport，不再使用固定演示回复。
