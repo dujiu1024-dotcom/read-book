@@ -390,9 +390,11 @@ test("SQLite persists pending memory candidates with Thread and user-message pro
       await tx.saveMemoryCandidate(record);
     });
     const pending = await repository.getMemoryCandidates(ids.datasetA, ids.threadId);
+    await repository.transaction(ids.datasetA, (tx) => tx.resolveMemoryCandidate(candidate.id, "accepted", "2026-11-14T02:01:00.000Z"));
+    const pendingAfterResolution = await repository.getMemoryCandidates(ids.datasetA, ids.threadId);
     const snapshot = await repository.createConsistentSnapshot(ids.datasetA);
     await repository.close();
-    return { pending, snapshot };
+    return { pending, pendingAfterResolution, snapshot };
   }, {
     datasetA: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     revision: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -402,5 +404,7 @@ test("SQLite persists pending memory candidates with Thread and user-message pro
   expect(result.pending).toHaveLength(1);
   expect(result.pending[0].status).toBe("needs_confirmation");
   expect(result.pending[0].candidate.viewpoint).toBe("user");
+  expect(result.pendingAfterResolution).toHaveLength(0);
   expect(result.snapshot.memoryCandidates).toHaveLength(1);
+  expect(result.snapshot.memoryCandidates[0].status).toBe("accepted");
 });
