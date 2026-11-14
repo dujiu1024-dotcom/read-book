@@ -44,5 +44,6 @@ test("rejects missing provenance, invalid locators and empty datasets", () => {
   assert.throws(() => evaluateRecords([record({ source: { ...source, sha256: "bad" } })]), /SHA-256/);
   assert.throws(() => evaluateRecords([record({ retrieved_evidence_ids: [null] })]), /non-empty strings/);
   assert.throws(() => evaluateRecords([record({ citations: [{ evidence_id: "chunk-a", locator_correct: "yes", supports_point_ids: [] }] })]), /locator_correct/);
+  assert.throws(() => evaluateRecords([record()], { pricing: { input_per_million: -1, output_per_million: 1 } }), /non-negative/);
   assert.throws(() => evaluateRecords([]), /At least one/);
 });
