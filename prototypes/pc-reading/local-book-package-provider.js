@@ -333,13 +333,23 @@ export async function parseBookPackage(input, identity = {}) {
     for (const asset of assets) {
       const id = requiredText(asset.asset_id, "asset.asset_id");
       const path = requiredText(asset.path, "asset.path");
+      if (!["image", "page_render", "figure", "table", "other"].includes(asset.asset_type)) throw new Error("资源类型无效：" + id);
+      if (typeof asset.mime_type !== "string" || !/^[a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+$/.test(asset.mime_type)) throw new Error("资源 MIME 类型无效：" + id);
       if (!path.startsWith("assets/") || !files[path]) throw new Error("资源文件缺失或不在 assets/ 目录：" + path);
       if (ids.has(id) || paths.has(path)) throw new Error("资源清单存在重复 ID 或路径。");
+      if (typeof asset.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(asset.sha256) || !Number.isInteger(asset.size_bytes) || asset.size_bytes < 1) {
+        throw new Error("资源哈希或大小字段无效：" + id);
+      }
       ids.add(id); paths.add(path);
       const bytes = files[path];
-      if (bytes.byteLength !== asset.size_bytes || await sha256(bytes) !== asset.sha256?.toLowerCase()) {
+      if (bytes.byteLength !== asset.size_bytes || await sha256(bytes) !== asset.sha256.toLowerCase()) {
         throw new Error("资源文件大小或 SHA-256 校验失败：" + path);
       }
+      if (asset.locator && (
+        !["epub_cfi", "text_anchor", "pdf_page_text", "txt_offset", "paragraph_offset", "custom"].includes(asset.locator.locator_type) ||
+        typeof asset.locator.start_locator !== "string" || !asset.locator.start_locator ||
+        typeof asset.locator.end_locator !== "string" || !asset.locator.end_locator
+      )) throw new Error("资源原文定位字段无效：" + id);
     }
     if (paths.size !== assetPaths.length || assetPaths.some((path) => !paths.has(path))) throw new Error("存在未声明的资源文件。");
   } else if (assetPaths.length) {
