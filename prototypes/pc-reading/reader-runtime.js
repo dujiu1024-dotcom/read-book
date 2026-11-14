@@ -238,7 +238,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   }
 
   async function resumePending(callbacks = {}) {
-    return controller.resumePending(async (delivery) => {
+    const results = await controller.resumePending(async (delivery) => {
       const messages = await repository.getMessages(datasetId, delivery.threadId);
       const user = messages.find((item) => item.message.id === delivery.userMessageId)?.message;
       if (!user) throw new Error("待恢复任务关联的用户消息不存在，已保留本地记录。");
@@ -261,6 +261,10 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       onDelta: callbacks.onDelta,
       onStatus: callbacks.onStatus,
     });
+    if (results.length && config.memoryExtractionProvider && config.memoryCandidatePolicy) {
+      void extractMemories().then((memoryState) => callbacks.onMemoryUpdate?.(memoryState)).catch((error) => callbacks.onMemoryError?.(error));
+    }
+    return results;
   }
 
   let backupStatus = {
