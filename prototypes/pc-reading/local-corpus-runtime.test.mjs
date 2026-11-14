@@ -67,6 +67,7 @@ test("uses a separate local Thread for each immutable BookRevision", async () =>
     repositoryFactory: () => repository
   });
   const second = await createLocalCorpusRuntime({ bookRevisionId: "revision-b", initialMainlineUnitId: "b" }, {
+    datasetId: "test-dataset",
     repositoryFactory: () => repository
   });
   assert.notEqual(first.thread.id, second.thread.id);
