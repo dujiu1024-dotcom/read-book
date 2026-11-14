@@ -99,7 +99,7 @@ async function execute(task) {
   const alreadyProduced = task.events.filter((event) => event.type === 'delta').length;
   for (let index = alreadyProduced; index < tokens.length; index++) {
     await delay(TOKEN_DELAY_MS);
-    if (task.status === 'cancelled') return;
+    if (task.status !== 'running') return;
     emit(task, 'delta', { text: tokens[index] });
     await persist();
   }
@@ -108,6 +108,7 @@ async function execute(task) {
   task.finalResult = { text: tokens.join(''), completedAt: new Date().toISOString() };
   emit(task, 'completed', { result_available: true });
   await persist();
+  audit('generation.completed', { generation_id: task.id, sequence: task.sequence });
 }
 function schedule(task) {
   setImmediate(() => execute(task).catch(async (error) => {
@@ -115,6 +116,7 @@ function schedule(task) {
     task.failureCode = 'GENERATION_EXECUTION_FAILED';
     emit(task, 'failed', { code: task.failureCode });
     await persist();
+    audit('generation.failed', { generation_id: task.id, code: task.failureCode, sequence: task.sequence });
   }));
 }
 
