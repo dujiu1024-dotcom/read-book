@@ -64,6 +64,7 @@
         "book": "content/book.json",
         "chapters": "content/chapters.json",
         "chunks": "content/chunks.jsonl",
+        "assets": null,
         "embeddings": null,
         "local_report": "validation/local-report.json"
       },
