@@ -1,0 +1,36 @@
+name: Repository quality gates
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-quality-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
+      - name: Check Markdown internal links
+        run: node scripts/check-markdown-links.mjs
+      - name: Parse JSON and JSONL files
+        run: node scripts/validate-json-files.mjs
+      - name: Install package validator dependencies
+        working-directory: packages/book-package-validator
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Validate book package processing contract
+        working-directory: packages/book-package-validator
+        run: npm run validate:processing-contract
+      - name: Run book package validator fixtures
+        working-directory: packages/book-package-validator
+        run: npm test
+      - name: Lint OpenAPI 3.1 contract
+        run: npx --yes @redocly/cli@1.27.1 lint --config .redocly.yaml docs/api-contract.yaml
