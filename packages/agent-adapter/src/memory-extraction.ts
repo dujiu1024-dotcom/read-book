@@ -227,6 +227,8 @@ export interface MemoryVersionPlan {
   previousVersionId: string | null;
   /** Required for every non-first version so the domain evolution rules can be re-evaluated. */
   previousVersion?: MemoryVersion;
+  /** Set only when a user explicitly confirms a persisted low-confidence candidate. */
+  resolveCandidateId?: string;
   changeKind: "new" | "supplement" | "correction" | "conflict" | "rejection" | "extension";
   relation?: {
     id: string;
@@ -240,6 +242,7 @@ export interface MemoryCandidatePersistenceRepository {
   transaction<T>(datasetId: string, operation: (tx: {
     appendMemoryVersion(version: import("../../domain-core/src/index.ts").MemoryVersion): Promise<unknown>;
     appendMemoryRelation(relation: import("../../domain-core/src/index.ts").MemoryRelation): Promise<unknown>;
+    resolveMemoryCandidate(candidateId: string, status: "accepted" | "rejected", updatedAt: string): Promise<boolean>;
   }) => Promise<T>): Promise<T>;
 }
 
@@ -307,6 +310,10 @@ export async function persistAcceptedMemoryCandidates(
       }
       await tx.appendMemoryVersion(validated.version);
       if (validated.relation) await tx.appendMemoryRelation(validated.relation);
+      if (plan.resolveCandidateId) {
+        const resolved = await tx.resolveMemoryCandidate(plan.resolveCandidateId, "accepted", now());
+        if (!resolved) throw new MemoryExtractionError("The pending candidate no longer exists or has already been resolved.");
+      }
       persisted.push(candidate.id);
     }
     return persisted;
