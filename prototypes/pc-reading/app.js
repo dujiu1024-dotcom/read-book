@@ -64,7 +64,10 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       };
       $("viewNoticeText").textContent = descriptions[state.viewMode];
     }
-    if (productionRuntime) productionRuntime.savePosition(state, units).catch((error) => setGenerationStatus("阅读位置保存失败：" + error.message));
+    if (productionRuntime) {
+      productionRuntime.savePosition(state, units).catch((error) => setGenerationStatus("阅读位置保存失败：" + error.message));
+      productionRuntime.recordPresentedSource(unit, state.viewMode).catch((error) => setGenerationStatus("原文呈现记录失败：" + error.message));
+    }
   }
 
   function updateCount() {
@@ -200,7 +203,9 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       setGenerationStatus("正在将消息保存到本地…");
       try {
         const result = await productionRuntime.send(value, state.displayedUnit, {
+          presentationType: state.viewMode,
           onPersisted() {
+            if (state.viewMode === "mainline") state.discussed = true;
             userBubble.saving = false;
             userBubble.saved = true;
             const label = userArticle.querySelector(".saved-label");
@@ -215,7 +220,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
         });
         assistantText.textContent = result.snapshot.result?.content || assistantText.textContent;
         assistantBubble.citation = state.displayedUnit.id;
-        state.discussed = true;
+        if (state.viewMode === "mainline") state.discussed = true;
         setGenerationStatus("回复已完成并保存。");
         productionRuntime.savePosition(state, units).catch(() => {});
       } catch (error) {
@@ -270,17 +275,29 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
 
   $("returnMainline").addEventListener("click", returnToMainline);
 
-  $("continueButton").addEventListener("click", () => {
+  $("continueButton").addEventListener("click", async () => {
     if (state.viewMode !== "mainline") {
       toast("先回到当前主线，再继续阅读。");
       return;
     }
-    if (!state.discussed) {
-      const confirmed = window.confirm("当前论述单元还没有讨论。是否略读当前单元并继续？");
-      if (!confirmed) return;
+    const skipped = !state.discussed;
+    if (skipped && !window.confirm("当前论述单元还没有讨论。是否确认略读并继续？")) return;
+    if (productionRuntime) {
+      try {
+        const completion = await productionRuntime.completeMainlineUnit(state.displayedUnit.id, skipped);
+        if (completion.roundCompleted) {
+          $("continueButton").disabled = true;
+          $("startNewRoundButton").hidden = false;
+          toast("本轮主线已完成。可以开启新一轮阅读。");
+          return;
+        }
+      } catch (error) {
+        toast("无法完成当前单元：" + error.message);
+        return;
+      }
     }
     if (state.mainlineIndex >= units.length - 1) {
-      toast("演示主线已到最后一个单元。");
+      toast("当前主线已到最后一个单元。");
       return;
     }
     state.mainlineIndex += 1;
@@ -288,7 +305,24 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     state.viewMode = "mainline";
     state.discussed = false;
     renderSource();
-    toast("已按主线顺序展示下一单元。");
+    toast(skipped ? "已确认略读并进入下一单元。" : "当前单元已完成讨论，进入下一单元。");
+  });
+
+  $("startNewRoundButton").addEventListener("click", async () => {
+    if (!productionRuntime) return;
+    try {
+      await productionRuntime.startNewReadingRound();
+      state.mainlineIndex = 0;
+      state.displayedUnit = units[0];
+      state.viewMode = "mainline";
+      state.discussed = false;
+      $("continueButton").disabled = false;
+      $("startNewRoundButton").hidden = true;
+      renderSource();
+      toast("已开启新一轮阅读，单元进度重新开始记录。");
+    } catch (error) {
+      toast("开启新一轮失败：" + error.message);
+    }
   });
 
   $("messageInput").addEventListener("keydown", event => {
