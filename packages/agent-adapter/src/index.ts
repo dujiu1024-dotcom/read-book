@@ -336,3 +336,85 @@ export async function persistUserMessageBeforeGeneration(
   await repository.saveUserMessage(message);
   return client.create(request, idempotencyKey);
 }
+
+export interface GenerationTurnRepository {
+  transaction<T>(datasetId: string, operation: (tx: {
+    appendUserMessage(message: { id: string; threadId: string; content: string; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
+    appendAssistantMessage(message: { id: string; threadId: string; content: string; status: "generating"; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
+    transitionAssistantMessage(messageId: string, status: "completed" | "failed" | "cancelled", content?: string): Promise<unknown>;
+  }) => Promise<T>): Promise<T>;
+}
+
+export interface GenerationTurnInput {
+  datasetId: string;
+  userMessage: PersistedUserMessage;
+  assistantMessageId: string;
+  request: GenerationRequest;
+  idempotencyKey: string;
+  sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }>;
+  now?: () => string;
+  signal: AbortSignal;
+  onDelta?: (text: string) => void;
+  onStatus?: (status: GenerationStatus) => void;
+}
+
+export interface GenerationTurnResult {
+  accepted: GenerationAccepted;
+  snapshot: GenerationSnapshot;
+  assistantMessageId: string;
+  lastCursor: GenerationEventCursor;
+}
+
+/** Persists both sides of a conversation turn before network work; only GET completed results become durable assistant content. */
+export async function runGenerationTurn(
+  repository: GenerationTurnRepository,
+  client: ReturnType<typeof createGenerationClient>,
+  input: GenerationTurnInput,
+): Promise<GenerationTurnResult> {
+  const now = input.now ?? (() => new Date().toISOString());
+  if (input.userMessage.threadId !== input.request.thread_id || input.userMessage.id !== input.request.user_message.local_message_id) {
+    throw new GenerationProtocolError("Conversation turn message does not match generation request.");
+  }
+  await repository.transaction(input.datasetId, async (tx) => {
+    await tx.appendUserMessage({ ...input.userMessage, createdAt: now(), sourceReferences: input.sourceReferences, idempotencyKey: input.idempotencyKey });
+    await tx.appendAssistantMessage({ id: input.assistantMessageId, threadId: input.userMessage.threadId, content: "", status: "generating", createdAt: now(), sourceReferences: [], idempotencyKey: input.idempotencyKey + ":assistant" });
+  });
+  let accepted: GenerationAccepted;
+  try {
+    accepted = await client.create(input.request, input.idempotencyKey);
+  } catch (error) {
+    await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "failed"));
+    throw error;
+  }
+  let cursor: GenerationEventCursor = { generationId: accepted.generation_id, lastSequence: 0, lastEventId: null };
+  let streamError: unknown = null;
+  try {
+    cursor = await client.stream(accepted.generation_id, cursor, input.signal, (event) => {
+      if (event.type === "delta") input.onDelta?.(event.text);
+      if (event.type === "started") input.onStatus?.("running");
+      if (event.type === "failed") input.onStatus?.("failed");
+      if (event.type === "cancelled") input.onStatus?.("cancelled");
+    });
+  } catch (error) {
+    streamError = error;
+  }
+  let snapshot: GenerationSnapshot;
+  try {
+    snapshot = await client.get(accepted.generation_id);
+  } catch (error) {
+    if (input.signal.aborted) {
+      await client.cancel(accepted.generation_id, input.idempotencyKey + ":cancel").catch(() => undefined);
+      await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "cancelled"));
+    }
+    throw streamError ?? error;
+  }
+  if (snapshot.status === "completed" && snapshot.result) {
+    await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "completed", snapshot.result!.content));
+  } else if (snapshot.status === "failed" || snapshot.status === "expired") {
+    await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "failed"));
+  } else if (snapshot.status === "cancelled") {
+    await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "cancelled"));
+  }
+  input.onStatus?.(snapshot.status);
+  return { accepted, snapshot, assistantMessageId: input.assistantMessageId, lastCursor: cursor };
+}
