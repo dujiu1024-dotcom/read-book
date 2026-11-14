@@ -1,0 +1,52 @@
+name: Generate reproducible npm lockfiles
+
+on:
+  push:
+    branches: [chore/issue-1-reproducible-lockfiles]
+    paths:
+      - ".github/workflows/generate-lockfiles.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  lockfiles:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+      - name: Generate package-lock.json for every isolated npm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dir in \
+            packages/domain-core \
+            packages/agent-adapter \
+            packages/local-repository-contract \
+            packages/local-repository-sqlite \
+            poc/local-storage \
+            poc/book-ingestion
+          do
+            if [[ -f "$dir/package.json" ]]; then
+              echo "Generating lockfile: $dir"
+              (cd "$dir" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
+            fi
+          done
+      - name: Commit generated lockfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- ':(glob)**/package-lock.json'
+          if git diff --cached --quiet; then
+            echo "No lockfile changes."
+          else
+            git commit -m "chore: add reproducible npm lockfiles"
+            git push origin HEAD
+          fi
