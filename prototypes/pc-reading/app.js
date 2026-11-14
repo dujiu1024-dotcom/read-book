@@ -210,6 +210,8 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
           onDelta(text) {
             assistantText.textContent += text;
           },
+          onMemoryUpdate(memoryState) { renderMemoryState(memoryState); },
+          onMemoryError(error) { setGenerationStatus("回复已保存，但自动认知抽取失败：" + error.message); },
         });
         assistantText.textContent = result.snapshot.result?.content || assistantText.textContent;
         assistantBubble.citation = state.displayedUnit.id;
@@ -331,6 +333,88 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     button.addEventListener("click", () => showCitation(button.dataset.citation));
   });
 
+  function renderMemoryState(data) {
+    const panel = $("memoryPanel");
+    const status = $("memoryStatus");
+    const list = $("memoryList");
+    const pending = $("pendingMemoryList");
+    panel.hidden = false;
+    list.replaceChildren();
+    pending.replaceChildren();
+    if (!data.providerConfigured) {
+      status.textContent = "自动认知抽取 Provider 尚未由宿主环境配置；现有认知记录仍可查看。";
+    } else if (data.extractionStatus === "completed") {
+      const persistedCount = data.persistedIds?.length || 0;
+      const waitingCount = data.acceptedNotPersisted?.length || 0;
+      status.textContent = persistedCount
+        ? "本轮自动沉淀 " + persistedCount + " 条认知。"
+        : waitingCount
+          ? "识别到 " + waitingCount + " 条候选，但缺少跨批次演变规划器，暂不写入，避免重复或错误覆盖。"
+          : "本轮未发现需要新增或演变的长期认知。";
+    } else if (data.extractionStatus === "provider_not_configured") {
+      status.textContent = "自动认知抽取尚未配置。";
+    } else {
+      status.textContent = "认知记录来自当前 Thread 的本地持久化数据。";
+    }
+
+    const viewpointLabel = (value) => ({
+      user: "用户观点",
+      author: "作者观点",
+      assistant_inference: "AI 推演",
+    }[value] || "观点来源未标注");
+
+    for (const memory of data.memories || []) {
+      const versions = (data.versions || []).filter((item) => item.memoryId === memory.id).sort((a, b) => a.version - b.version);
+      const current = versions[versions.length - 1];
+      if (!current) continue;
+      const card = document.createElement("article");
+      card.className = "memory-card";
+      const heading = document.createElement("h3");
+      heading.textContent = current.title || "认知记录";
+      const meta = document.createElement("div");
+      meta.className = "memory-meta";
+      meta.textContent = viewpointLabel(current.viewpoint) + " · v" + current.version + " · 置信度 " + Math.round((current.confidence ?? 1) * 100) + "%";
+      const content = document.createElement("p");
+      content.textContent = current.content;
+      card.append(heading, meta, content);
+      if (versions.length > 1) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = "查看认知演变历史（" + versions.length + " 个版本）";
+        details.append(summary);
+        for (const version of versions) {
+          const item = document.createElement("p");
+          item.className = "memory-history-item";
+          item.textContent = "v" + version.version + " · " + version.changeKind + " · " + version.content;
+          details.append(item);
+        }
+        card.append(details);
+      }
+      list.append(card);
+    }
+    for (const record of data.pendingCandidates || []) {
+      const card = document.createElement("article");
+      card.className = "memory-card pending-memory";
+      const heading = document.createElement("h3");
+      heading.textContent = record.candidate.title;
+      const meta = document.createElement("div");
+      meta.className = "memory-meta";
+      meta.textContent = "待确认 · " + viewpointLabel(record.candidate.viewpoint) + " · 置信度 " + Math.round(record.candidate.confidence * 100) + "%";
+      const content = document.createElement("p");
+      content.textContent = record.candidate.content;
+      card.append(heading, meta, content);
+      pending.append(card);
+    }
+    if (!(data.memories || []).length && !(data.pendingCandidates || []).length) {
+      const empty = document.createElement("p");
+      empty.className = "memory-empty";
+      empty.textContent = "暂时没有沉淀的认知。系统只保留经过价值判断且有来源依据的内容。";
+      list.append(empty);
+    }
+    if (!(data.pendingCandidates || []).length) pending.hidden = true;
+    else pending.hidden = false;
+  }
+
   async function refreshPersistedMessages() {
     if (!productionRuntime) return;
     const persisted = await productionRuntime.loadMessages();
@@ -393,6 +477,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       }
       renderSource();
       await refreshPersistedMessages();
+      renderMemoryState(await productionRuntime.loadMemoryState());
       $("messageInput").disabled = false;
       $("sendButton").disabled = false;
       $("simulateFailure").hidden = true;
