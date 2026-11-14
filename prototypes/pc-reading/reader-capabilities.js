@@ -10,9 +10,10 @@ export function hasGenerationService(config = {}, getAccessToken = config.getAcc
 export function hasEncryptedBackupService(config = {}) {
   if (typeof config.createEncryptedBackupPort === "function") return true;
   const port = config.encryptedBackupPort;
-  if (port &&
-      typeof port.uploadSnapshot === "function" &&
+  if (port) {
+    return typeof port.uploadSnapshot === "function" &&
       typeof port.listBackups === "function" &&
-      typeof port.restoreToRepository === "function") return true;
+      typeof port.restoreToRepository === "function";
+  }
   return typeof config.apiBaseUrl === "string" && config.apiBaseUrl.trim().length > 0;
 }
