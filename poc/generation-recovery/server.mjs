@@ -7,11 +7,19 @@ const PORT = Number(process.env.PORT || 4177);
 const STATE_FILE = resolve(process.env.GENERATION_STATE_FILE || './.poc-generation-state.json');
 const tokens = ['这是', '一条', '模拟', '生成', '结果。'];
 const TOKEN_DELAY_MS = Number(process.env.GENERATION_TOKEN_DELAY_MS || 180);
+const HEARTBEAT_MS = Number(process.env.GENERATION_HEARTBEAT_MS || 15_000);
+const TASK_TTL_MS = Number(process.env.GENERATION_TASK_TTL_MS || 24 * 60 * 60 * 1000);
+if (!Number.isSafeInteger(HEARTBEAT_MS) || HEARTBEAT_MS < 1000) throw new Error('GENERATION_HEARTBEAT_MS must be an integer >= 1000');
+if (!Number.isSafeInteger(TASK_TTL_MS) || TASK_TTL_MS < 1000) throw new Error('GENERATION_TASK_TTL_MS must be an integer >= 1000');
 const tasks = new Map();
 const idempotency = new Map();
 const subscribers = new Map();
 let persistQueue = Promise.resolve();
 
+function audit(event, fields = {}) {
+  // Deliberately exclude message content, access tokens and idempotency keys.
+  process.stdout.write(JSON.stringify({ at: new Date().toISOString(), event, ...fields }) + '\\n');
+}
 function json(res, status, value) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(value));
@@ -63,7 +71,7 @@ function emit(task, type, data = {}) {
   const event = { event_id: task.id + ':' + (task.sequence + 1), sequence: ++task.sequence, generation_id: task.id, type, ...data };
   task.events.push(event);
   for (const response of subscribers.get(task.id) || []) response.write(`id: ${event.event_id}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
-  if (['completed', 'cancelled', 'failed'].includes(type)) {
+  if (['completed', 'cancelled', 'failed', 'expired'].includes(type)) {
     for (const response of subscribers.get(task.id) || []) response.end();
     subscribers.delete(task.id);
   }
@@ -116,7 +124,7 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 200, { ...existing, reused: true });
       }
-      const task = { id: randomUUID(), idempotencyKey, requestHash, status: 'queued', sequence: 0, events: [], finalResult: null };
+      const createdAt = new Date().toISOString();\n      const task = { id: randomUUID(), idempotencyKey, requestHash, status: 'queued', sequence: 0, events: [], finalResult: null, createdAt, expiresAt: new Date(Date.now() + TASK_TTL_MS).toISOString() };
       tasks.set(task.id, task);
       const receipt = { generation_id: task.id, status: task.status, idempotency_key: idempotencyKey, request_hash: requestHash };
       idempotency.set(idempotencyKey, receipt);
@@ -128,7 +136,7 @@ const server = http.createServer(async (req, res) => {
     const match = url.pathname.match(/^\/api\/generations\/([^/]+)(?:\/(events|cancel))?$/);
     if (match) {
       const task = tasks.get(match[1]);
-      if (!task) return json(res, 404, { error: 'generation not found' });
+      if (!task) return json(res, 404, { error: 'generation not found' });\n      expireTasks();
       if (req.method === 'GET' && !match[2]) {
         return json(res, 200, { generation_id: task.id, status: task.status, sequence: task.sequence, final_result: task.status === 'completed' ? task.finalResult : null });
       }
