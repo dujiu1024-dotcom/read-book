@@ -152,7 +152,7 @@ test("client delegates create, get, cancel and resumes events after the saved se
   const client = createGenerationClient(fake.transport);
   await client.create(request, "idempotency-key-0001");
   await client.get("generation-1234567890");
-  await client.cancel("generation-1234567890", "cancel-key-0001");
+  await client.cancel("generation-1234567890", "cancel-idempotency-key-0001");
   const cursor = { generationId: "generation-1234567890", lastSequence: 0, lastEventId: null };
   const seen: unknown[] = [];
   const nextCursor = await client.stream("generation-1234567890", cursor, new AbortController().signal, (item) => seen.push(item));
