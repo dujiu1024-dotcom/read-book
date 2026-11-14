@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.artifacts/
+.qa-evidence/
+.trae-html-share-packages/
+playwright-report/
+test-results/
+*.log
+.DS_Store
