@@ -289,16 +289,19 @@ async function decryptBackup(backup, recoveryCredential) {
   const plaintext = new Uint8Array(length);
   let offset = 0;
   for (const chunk of clearChunks) { plaintext.set(chunk, offset); offset += chunk.length; }
-  return { manifest, payload: JSON.parse(decoder.decode(plaintext)) };
+  return { manifest, payload: JSON.parse(decoder.decode(plaintext)), dataKey: masterKey };
 }
 
-export async function restoreBackupChain(backups, recoveryCredential) {
+async function restoreBackupChainInternal(backups, recoveryCredential) {
   if (!Array.isArray(backups) || backups.length === 0) throw new Error("Backup chain is empty");
   let snapshot = null;
   let previousBackupId = null;
   let datasetId = null;
+  let latest = null;
+  let backupsSinceFull = 0;
   for (let index = 0; index < backups.length; index += 1) {
-    const { manifest, payload } = await decryptBackup(backups[index], recoveryCredential);
+    const decoded = await decryptBackup(backups[index], recoveryCredential);
+    const { manifest, payload } = decoded;
     if (index === 0 && (manifest.kind !== "full" || manifest.parentBackupId !== null || payload.kind !== "full")) {
       throw new Error("Backup chain must start with a full backup");
     }
@@ -310,6 +313,7 @@ export async function restoreBackupChain(backups, recoveryCredential) {
     if (payload.kind === "full") {
       if (index !== 0) throw new Error("A full backup cannot appear inside an incremental chain");
       snapshot = payload.snapshot;
+      backupsSinceFull = 0;
     } else {
       if (!snapshot || payload.datasetId !== datasetId) throw new Error("Incremental backup has no matching full parent");
       snapshot = { ...snapshot, schemaVersion: payload.schemaVersion, dirtySequence: payload.dirtySequence };
@@ -319,14 +323,31 @@ export async function restoreBackupChain(backups, recoveryCredential) {
         for (const item of payload.upserts[collection] || []) map.set(recordKey(collection, item), item);
         snapshot[collection] = [...map.values()];
       }
+      backupsSinceFull += 1;
     }
     if (snapshot.datasetId !== datasetId || snapshot.schemaVersion !== manifest.schemaVersion ||
         snapshot.dirtySequence !== manifest.dirtySequence) {
       throw new Error("Restored snapshot does not match the encrypted manifest");
     }
+    latest = { manifest, dataKey: decoded.dataKey };
     previousBackupId = manifest.backupId;
   }
-  return snapshot;
+  return {
+    snapshot,
+    backupId: latest.manifest.backupId,
+    dataKey: latest.dataKey,
+    keyEnvelope: latest.manifest.keyEnvelope,
+    keyVersion: latest.manifest.keyVersion,
+    backupsSinceFull,
+  };
+}
+
+export async function restoreBackupChain(backups, recoveryCredential) {
+  return (await restoreBackupChainInternal(backups, recoveryCredential)).snapshot;
+}
+
+export async function restoreBackupChainWithKey(backups, recoveryCredential) {
+  return restoreBackupChainInternal(backups, recoveryCredential);
 }
 
 export async function uploadBackupResumable(server, backup, token = server.beginUpload(backup.manifest.datasetId)) {
