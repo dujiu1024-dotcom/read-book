@@ -1,5 +1,6 @@
-import type {
-  LocalRepository,
+import {
+  RepositoryError,
+  type LocalRepository,
   LocalRepositoryTransaction,
   RepositorySnapshot,
   PersistedMessage,
@@ -31,7 +32,17 @@ export class SqliteOpfsRepository implements LocalRepository {
       const pending = this.pending.get(data.id);
       if (!pending) return;
       this.pending.delete(data.id);
-      if (data.error) pending.reject(new Error(data.error.message));
+      if (data.error) {
+        const code = data.error.code;
+        const knownCodes = new Set([
+          "DATASET_NOT_FOUND", "THREAD_REVISION_CONFLICT", "MESSAGE_IDEMPOTENCY_CONFLICT",
+          "MESSAGE_SEQUENCE_CONFLICT", "READ_ONLY", "QUOTA_EXCEEDED", "MIGRATION_FAILED",
+          "INTEGRITY_FAILED", "WRITER_LOCK_UNAVAILABLE", "ACCOUNT_BINDING_NOT_FOUND",
+        ]);
+        pending.reject(knownCodes.has(code)
+          ? new RepositoryError(code, data.error.message)
+          : new Error(data.error.message));
+      }
       else pending.resolve(data.result);
     };
     this.worker.onerror = (event) => {
