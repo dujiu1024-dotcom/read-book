@@ -288,3 +288,35 @@ test("plan-and-persist is idempotent for candidate IDs already stored as version
   assert.deepEqual(result.alreadyPersistedCandidateIds, [candidate.id]);
   assert.equal(writes, 0);
 });
+
+
+test("persists exact duplicate as an explicit duplicate_of relation to the existing version", async () => {
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const target = {
+    id: "version-existing", memoryId: "memory-existing", version: 1, previousVersionId: null,
+    changeKind: "new" as const, title: candidate.title, content: candidate.content,
+    viewpoint: "user" as const, sourceMessageIds: ["older-user"], sourceReferences: [],
+    createdAt: "2026-11-13T00:00:00.000Z",
+  };
+  const writes: any[] = [];
+  const repository = {
+    async transaction(_datasetId: string, operation: (tx: any) => Promise<unknown>) {
+      return operation({
+        async appendMemoryVersion(version: unknown) { writes.push({ kind: "version", version }); },
+        async appendMemoryRelation(relation: unknown) { writes.push({ kind: "relation", relation }); },
+        async resolveMemoryCandidate() { return true; },
+      });
+    },
+  };
+  const plan = {
+    candidateId: candidate.id, memoryId: "memory-duplicate", version: 1,
+    previousVersionId: null, changeKind: "new" as const, relationTargetVersion: target,
+    relation: { id: "relation-duplicate", toVersionId: target.id, relationType: "duplicate_of" as const, createdAt: "2026-11-14T00:00:00.000Z" },
+  };
+  await persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, [plan], () => "2026-11-14T00:00:00.000Z");
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].relation.relationType, "duplicate_of");
+  assert.equal(writes[1].relation.toVersionId, target.id);
+});
