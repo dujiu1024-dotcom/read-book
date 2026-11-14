@@ -408,3 +408,43 @@ test("SQLite persists pending memory candidates with Thread and user-message pro
   expect(result.snapshot.memoryCandidates).toHaveLength(1);
   expect(result.snapshot.memoryCandidates[0].status).toBe("accepted");
 });
+
+
+test("restores a verified snapshot only into an empty dataset and preserves the committed backup cursor", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    const datasetId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const threadId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const snapshot = {
+      datasetId,
+      schemaVersion: 5,
+      dirtySequence: 7,
+      threads: [{ id: threadId, datasetId, bookRevisionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", createdAt: "2026-11-14T00:00:00.000Z" }],
+      messages: [{
+        message: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", threadId, role: "user", content: "restored", status: "saved", createdAt: "2026-11-14T00:00:01.000Z", sourceReferences: [] },
+        sequence: 1, idempotencyKey: null,
+      }],
+      readingRounds: [], readingPositions: [], citations: [], notes: [], memories: [],
+      memoryVersions: [], memoryRelations: [], memoryCandidates: [], generationDeliveries: [],
+    };
+    await repository.restoreSnapshot(datasetId, snapshot, "backup-restore-1", "2026-11-14T00:01:00.000Z");
+    const restored = await repository.createConsistentSnapshot(datasetId);
+    const dataset = await repository.getDataSet(datasetId);
+    let overwriteRejected = false;
+    try {
+      await repository.restoreSnapshot(datasetId, snapshot, "backup-restore-2", "2026-11-14T00:02:00.000Z");
+    } catch { overwriteRejected = true; }
+    const afterRejectedRestore = await repository.createConsistentSnapshot(datasetId);
+    await repository.close();
+    return { restored, dataset, overwriteRejected, afterRejectedRestore };
+  });
+  expect(result.restored.threads).toHaveLength(1);
+  expect(result.restored.messages).toHaveLength(1);
+  expect(result.dataset.dirtySequence).toBe(7);
+  expect(result.dataset.lastAckedSequence).toBe(7);
+  expect(result.dataset.lastBackupId).toBe("backup-restore-1");
+  expect(result.overwriteRejected).toBe(true);
+  expect(result.afterRejectedRestore.messages).toHaveLength(1);
+});
