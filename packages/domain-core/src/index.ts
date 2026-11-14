@@ -37,6 +37,7 @@ export interface SourceReference {
   structureNodeId: StructureNodeId;
   locator: string;
   excerptHash?: string;
+  presentationType?: PresentationType;
 }
 
 export interface UserMessage {
