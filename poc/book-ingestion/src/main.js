@@ -1,6 +1,7 @@
 import './style.css';
 import { getFixture } from './fixtures.js';
 import { parseBook } from './parsers.js';
+import { buildBookPackage } from './package-export.js';
 import { saveBook, getBook, listBooks } from './storage.js';
 
 const $ = (id) => document.getElementById(id);
@@ -30,11 +31,47 @@ async function importFile(file) {
   const parsed = await parseBook(file.name, bytes);
   const id = await digest(bytes);
   current = { id, name: file.name, type: file.type, bytes: bytes.buffer, parsed, importedAt: new Date().toISOString() };
+  $('book-title').value = parsed.title || file.name.replace(/\.[^.]+$/, '');
+  $('book-author').value = Array.isArray(parsed.author) ? parsed.author.join('、') : (parsed.author || '');
+  $('book-language').value = parsed.language || 'zh-CN';
+  $('export-package').disabled = false;
   await saveBook(current);
   setCitations(parsed);
   show({ id, name: file.name, size: bytes.length, parsed, citationCount: citations.length });
   $('status').textContent = '导入成功，文件与解析结果已保存到 IndexedDB。';
-  await renderSaved();
+  $('export-package').addEventListener('click', async () => {
+  if (!current) return;
+  try {
+    $('status').textContent = '正在生成标准书籍包…';
+    const result = await buildBookPackage({
+      fileName: current.name,
+      sourceBytes: new Uint8Array(current.bytes),
+      parsed: current.parsed,
+      metadata: {
+        title: $('book-title').value,
+        author: $('book-author').value,
+        language: $('book-language').value,
+        isbn: $('book-isbn').value,
+        edition: $('book-edition').value,
+        translator: $('book-translator').value,
+        publisher: $('book-publisher').value
+      }
+    });
+    const blob = new Blob([result.archive], { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = (result.manifest.book.title.replace(/[\\/:*?"<>|]/g, '_') || 'book') + '.read-book.zip';
+    anchor.click();
+    URL.revokeObjectURL(url);
+    $('status').textContent = '标准书籍包已生成：' + result.manifest.counts.chapters + ' 个章节、' + result.manifest.counts.chunks + ' 个正文切片。可使用 packages/book-package-validator 校验。';
+    show({ manifest: result.manifest, archiveBytes: result.archive.byteLength });
+  } catch (error) {
+    $('status').textContent = '标准书籍包生成失败：' + error.message;
+    show({ error: error.message });
+  }
+});
+await renderSaved();
 }
 async function openSavedBook(id) {
   const book = await getBook(id);
