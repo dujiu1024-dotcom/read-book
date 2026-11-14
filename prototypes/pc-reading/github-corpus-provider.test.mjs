@@ -73,3 +73,20 @@ test("rejects unknown corpus identifiers and empty source files", async () => {
   await assert.rejects(() => provider.loadBookRevision("github-corpus-unknown"), /不支持/);
   await assert.rejects(() => provider.loadBookRevision("github-corpus-chuanxilu"), /来源文件为空/);
 });
+
+test("rejects stale cached bytes when the GitHub directory advertises a different blob SHA", async () => {
+  const expected = "原文版本A";
+  const advertisedSha = await gitBlobSha(expected);
+  const provider = createGithubCorpusProvider({
+    fetchImpl: async (url) => String(url).includes("/contents/")
+      ? new Response(JSON.stringify({
+          type: "file", sha: advertisedSha,
+          download_url: "https://raw.githubusercontent.com/garychowcmu/daizhigev20/master/source.txt"
+        }), { status: 200 })
+      : new Response("原文版本B", { status: 200 })
+  });
+  await assert.rejects(
+    () => provider.loadBookRevision("github-corpus-chuanxilu"),
+    /Git Blob SHA 校验失败/
+  );
+});
