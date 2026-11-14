@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHttpGenerationTransport, GenerationTransportError } from "../src/http-transport.ts";
 
 const accepted = {
-  generation_id: "generation-1234567890",
+  generation_id: "generation-1234567890234567890",
   status: "queued",
   expires_at: "2026-11-14T00:00:00.000Z",
 };
@@ -27,22 +27,22 @@ test("create, get and cancel use the OpenAPI paths, bearer token and idempotency
       return jsonResponse({ ...accepted, status: "completed", result: { content: "final" } });
     },
   });
-  await transport.createGeneration({ client_generation_id: "client-generation-1234" } as never, "create-idempotency-123");
-  await transport.getGeneration("generation-1234567890");
-  await transport.cancelGeneration("generation-1234567890", "cancel-idempotency-123");
+  await transport.createGeneration({ client_generation_id: "client-generation-1234567890234" } as never, "create-idempotency-123");
+  await transport.getGeneration("generation-1234567890234567890");
+  await transport.cancelGeneration("generation-1234567890234567890", "cancel-idempotency-123");
 
   assert.equal(calls[0].url, "https://api.example.test/v1/generations");
   assert.equal(calls[0].init.headers.Authorization, "Bearer short-lived-token");
   assert.equal(calls[0].init.headers["Idempotency-Key"], "create-idempotency-123");
-  assert.equal(calls[1].url, "https://api.example.test/v1/generations/generation-1234567890");
-  assert.equal(calls[2].url, "https://api.example.test/v1/generations/generation-1234567890/cancel");
+  assert.equal(calls[1].url, "https://api.example.test/v1/generations/generation-1234567890234567890");
+  assert.equal(calls[2].url, "https://api.example.test/v1/generations/generation-1234567890234567890/cancel");
   assert.equal(calls[2].init.headers["Idempotency-Key"], "cancel-idempotency-123");
 });
 
 test("SSE resumes after the last processed sequence and validates id/event/data frames", async () => {
   const events = [
-    { event_id: "generation-1:4", sequence: 4, generation_id: "generation-1", type: "delta", text: "你好" },
-    { event_id: "generation-1:5", sequence: 5, generation_id: "generation-1", type: "completed", result_available: true },
+    { event_id: "generation-1234567890:4", sequence: 4, generation_id: "generation-1234567890", type: "delta", text: "你好" },
+    { event_id: "generation-1234567890:5", sequence: 5, generation_id: "generation-1234567890", type: "completed", result_available: true },
   ];
   const body = events.map((event) =>
     `id: ${event.event_id}\r\nevent: ${event.type}\r\ndata: ${JSON.stringify(event)}\r\n\r\n`
@@ -57,13 +57,13 @@ test("SSE resumes after the last processed sequence and validates id/event/data 
     },
   });
   const seen = [];
-  await transport.streamEvents("generation-1", 3, new AbortController().signal, (event) => seen.push(event));
-  assert.equal(requestedUrl, "https://api.example.test/v1/generations/generation-1/events?after=3");
+  await transport.streamEvents("generation-1234567890", 3, new AbortController().signal, (event) => seen.push(event));
+  assert.equal(requestedUrl, "https://api.example.test/v1/generations/generation-1234567890/events?after=3");
   assert.deepEqual(seen, events);
 });
 
 test("SSE rejects event IDs or names that do not match the JSON payload", async () => {
-  const event = { event_id: "id-1", sequence: 1, generation_id: "generation-1", type: "started" };
+  const event = { event_id: "id-1", sequence: 1, generation_id: "generation-1234567890", type: "started" };
   const body = `id: wrong-id\nevent: started\ndata: ${JSON.stringify(event)}\n\n`;
   const transport = createHttpGenerationTransport({
     baseUrl: "https://api.example.test",
@@ -71,7 +71,7 @@ test("SSE rejects event IDs or names that do not match the JSON payload", async 
     fetchImpl: async () => new Response(body, { headers: { "Content-Type": "text/event-stream" } }),
   });
   await assert.rejects(
-    () => transport.streamEvents("generation-1", 0, new AbortController().signal, () => undefined),
+    () => transport.streamEvents("generation-1234567890", 0, new AbortController().signal, () => undefined),
     /SSE id does not match/,
   );
 });
@@ -86,7 +86,7 @@ test("API errors preserve status, code, request ID and retryability", async () =
     }, 503),
   });
   await assert.rejects(
-    () => transport.getGeneration("generation-1"),
+    () => transport.getGeneration("generation-1234567890"),
     (error) => error instanceof GenerationTransportError &&
       error.status === 503 &&
       error.code === "GENERATION_BUSY" &&
@@ -112,6 +112,6 @@ test("aborted SSE stream exits without emitting incomplete data", async () => {
     fetchImpl: async () => new Response(stream, { headers: { "Content-Type": "text/event-stream" } }),
   });
   const seen = [];
-  await transport.streamEvents("generation-1", 0, controller.signal, (event) => seen.push(event));
+  await transport.streamEvents("generation-1234567890", 0, controller.signal, (event) => seen.push(event));
   assert.deepEqual(seen, []);
 });
