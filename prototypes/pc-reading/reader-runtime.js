@@ -150,7 +150,16 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   }
 
   async function loadMessages() {
-    return repository.getMessages(datasetId, thread.id);
+    const snapshot = await repository.createConsistentSnapshot(datasetId);
+    return snapshot.messages
+      .filter((item) => item.message.threadId === thread.id)
+      .map((item) => ({
+        ...item,
+        message: {
+          ...item.message,
+          citationRecords: snapshot.citationRecords.filter((citation) => citation.messageId === item.message.id),
+        },
+      }));
   }
 
   async function loadMemoryState() {
