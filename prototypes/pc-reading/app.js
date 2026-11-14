@@ -539,8 +539,13 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
         if (index >= 0) state.mainlineIndex = index;
         state.viewMode = position.viewMode || "mainline";
         state.displayedUnit = units.find(unit => unit.id === position.displayedNodeId) || units[state.mainlineIndex];
-        state.discussed = Boolean(position.currentUnitDiscussed);
       }
+      const unitProgress = await productionRuntime.getReadingUnitProgress();
+      const currentProgress = unitProgress.find((item) => item.structureNodeId === state.displayedUnit.id);
+      state.discussed = currentProgress?.status === "discussion_active" || currentProgress?.status === "discussed";
+      const roundCompleted = productionRuntime.readingRound?.status === "completed";
+      $("continueButton").disabled = roundCompleted;
+      $("startNewRoundButton").hidden = !roundCompleted;
       renderSource();
       await refreshPersistedMessages();
       renderMemoryState(await productionRuntime.loadMemoryState());
