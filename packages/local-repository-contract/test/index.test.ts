@@ -44,13 +44,9 @@ test("Agent user-message port propagates transaction failure without reporting a
   } as unknown as LocalRepositoryTransaction;
   const port = createAgentUserMessageRepository({
     async transaction<T>(_datasetId: string, operation: (transaction: LocalRepositoryTransaction) => Promise<T>) {
-      try {
-        return await operation(tx);
-      } catch (error) {
-        throw error;
-      } finally {
-        if (!committed) committed = false;
-      }
+      const result = await operation(tx);
+      committed = true;
+      return result;
     },
   }, "dataset-1", (input) => ({
     ...input,
@@ -95,7 +91,7 @@ test("binding revocation contract is soft-delete only and cannot imply dataset d
       return operation(tx);
     },
   };
-  await repository.transaction((transaction) =>
+  await repository.transaction("dataset-1", (transaction) =>
     transaction.softRevokeAccountDataSetBinding("binding-1", "2026-11-14T00:00:00.000Z"));
   assert.deepEqual(calls, ["revoke:binding-1:2026-11-14T00:00:00.000Z"]);
 });
