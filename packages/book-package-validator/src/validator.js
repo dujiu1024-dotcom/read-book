@@ -13,7 +13,7 @@ import issueSchema from "../schemas/validation-issue.schema.json" with { type: "
 import processingSchema from "../schemas/processing-contract.schema.json" with { type: "json" };
 import { preflightZip } from "./zip-safety.js";
 
-const ajv = new Ajv2020({ allErrors: true, strict: true });
+const ajv = new Ajv2020({ allErrors: true, strict: true, allowUnionTypes: true });
 addFormats(ajv);
 for (const schema of [issueSchema, manifestSchema, bookSchema, chaptersSchema, chunkSchema, embeddingSchema, localReportSchema, processingSchema]) ajv.addSchema(schema);
 const validators = {
