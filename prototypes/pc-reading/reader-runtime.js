@@ -157,7 +157,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         ...item,
         message: {
           ...item.message,
-          citationRecords: snapshot.citationRecords.filter((citation) => citation.messageId === item.message.id),
+          citationRecords: snapshot.citations.filter((citation) => citation.messageId === item.message.id),
         },
       }));
   }
