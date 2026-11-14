@@ -152,3 +152,11 @@ button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px sol
 .pending-memory {
   border-style: dashed;
 }
+
+.memory-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.memory-actions button { min-height: 36px; }
