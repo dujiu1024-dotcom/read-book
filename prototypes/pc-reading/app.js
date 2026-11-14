@@ -640,18 +640,11 @@ import { createSourceRetriever } from "./source-retriever.js";
       state.displayedUnit = units[state.mainlineIndex];
       renderChapterOptions();
       if (isGithubCorpusMode) {
-        $("conversationSection").hidden = true;
-        $("composerSection").hidden = true;
-        $("memoryPanel").hidden = true;
-        $("menuButton").hidden = true;
-        $("backupButton").disabled = true;
-        $("backupButton").textContent = "备份未配置";
         state.discussed = true;
-        let localPositionMessage = "本地阅读位置持久化未启用。";
+        $("menuButton").hidden = true;
+        $("simulateFailure").hidden = true;
         try {
-          productionRuntime = await createLocalCorpusRuntime(bookRevision, {
-            datasetId: readerConfig.localDataSetId || undefined,
-          });
+          productionRuntime = await createProductionReaderRuntime(readerConfig, bookRevision);
           const position = productionRuntime.readingPosition;
           if (position) {
             const index = units.findIndex((unit) => unit.id === position.mainlineNodeId);
@@ -660,20 +653,38 @@ import { createSourceRetriever } from "./source-retriever.js";
             state.displayedUnit = units.find((unit) => unit.id === position.displayedNodeId) || units[state.mainlineIndex];
             state.discussed = Boolean(position.currentUnitDiscussed);
           }
-          $("readerModeLabel").textContent = "本地阅读位置 · GitHub 原文";
-          localPositionMessage = "阅读位置已从本地 SQLite/OPFS 恢复。";
-        } catch (storageError) {
+          $("conversationSection").hidden = false;
+          $("composerSection").hidden = !productionRuntime.generationConfigured;
+          $("memoryPanel").hidden = false;
+          $("backupButton").disabled = false;
+          $("backupButton").textContent = productionRuntime.backupStatus.label;
+          $("readerModeLabel").textContent = productionRuntime.generationConfigured
+            ? "GitHub 原文 · Agent 接口已配置"
+            : "GitHub 原文 · 本地阅读";
+          await refreshPersistedMessages();
+          renderMemoryState(await productionRuntime.loadMemoryState());
+          renderSource();
+          updateCount();
+          const cachedCount = bookRevision.sourceMetadata?.cacheFallbackCount || 0;
+          const cacheMessage = cachedCount
+            ? "本次有 " + cachedCount + " 个来源资源由离线缓存提供。"
+            : "已启用在线优先的本机来源缓存。";
+          const agentMessage = productionRuntime.generationConfigured
+            ? "Agent 接口已配置，生成结果仍以服务端权威响应为准。"
+            : "Agent 服务尚未配置，当前仅支持原文阅读和历史查看。";
+          setGenerationStatus("已从 GitHub 读取 " + units.length + " 个阅读单元。" + cacheMessage + " " + agentMessage + " " + productionRuntime.backupStatus.detail);
+        } catch (runtimeError) {
           productionRuntime = null;
-          $("readerModeLabel").textContent = "GitHub 公开语料 · 在线只读";
-          localPositionMessage = "本地阅读位置持久化不可用：" + storageError.message;
+          $("conversationSection").hidden = true;
+          $("composerSection").hidden = true;
+          $("memoryPanel").hidden = true;
+          $("backupButton").disabled = true;
+          $("backupButton").textContent = "备份未配置";
+          $("readerModeLabel").textContent = "GitHub 原文 · 在线只读";
+          renderSource();
+          updateCount();
+          setGenerationStatus("本地 Repository 初始化失败，当前仅显示在线原文：" + runtimeError.message);
         }
-        renderSource();
-        updateCount();
-        const cachedCount = bookRevision.sourceMetadata?.cacheFallbackCount || 0;
-        const cacheMessage = cachedCount
-          ? "本次有 " + cachedCount + " 个来源资源由离线缓存提供。"
-          : "已启用在线优先的本机来源缓存。";
-        setGenerationStatus("已从 GitHub 读取 " + units.length + " 个阅读单元。" + localPositionMessage + " " + cacheMessage + " 备份未配置，真实 Agent 尚未接入。");
         return;
       }
       if (isDemoProvider) {
