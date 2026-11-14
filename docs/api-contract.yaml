@@ -748,7 +748,7 @@ components:
               items:
                 type: object
                 additionalProperties: false
-                required: [book_revision_id, structure_node_id, locator]
+                required: [book_revision_id, structure_node_id, locator, excerpt]
                 properties:
                   book_revision_id: { type: string, format: uuid }
                   structure_node_id: { type: string, format: uuid }
