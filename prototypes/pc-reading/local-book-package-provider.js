@@ -429,12 +429,18 @@ async function withStore(mode, operation, indexedDBImpl) {
   } finally { db.close(); }
 }
 
-export async function importBookPackageFile(file, options = {}) {
+async function readPackageBytes(file) {
   if (!file || typeof file.arrayBuffer !== "function") throw new TypeError("请选择标准书籍包 ZIP 文件。");
   if (!file.name.toLowerCase().endsWith(".zip")) throw new Error("仅支持 .zip 标准书籍包。");
   if (file.size > MAX_ARCHIVE_BYTES) throw new RangeError("书籍包不能超过 256 MiB。");
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const revision = await parseBookPackage(bytes);
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+export async function importBookPackageFile(file, options = {}) {
+  const bytes = await readPackageBytes(file);
+  // 旧版本记录（本修复之前导入）没有稳定身份。导入前可由调用方传入其 bookId/bookRevisionId，
+  // 让重复导入沿用旧记录，而不是静默生成一个新的 revision。
+  const revision = await parseBookPackage(bytes, options.identity || {});
   await withStore("readwrite", (store) => store.put({
     bookRevisionId: revision.bookRevisionId,
     bookId: revision.bookId,
@@ -451,13 +457,44 @@ export async function importBookPackageFile(file, options = {}) {
   return { bookRevisionId: revision.bookRevisionId, title: revision.title, author: revision.author, unitCount: revision.units.length };
 }
 
+/**
+ * 在真正写入前检查同一个 package_id 是否已有记录。
+ * legacy 指修复前创建的随机 revision —— 这些记录没有稳定身份，
+ * 重复导入必须让用户明确选择“沿用旧记录”或“新建独立版本”。
+ */
+export async function inspectBookPackageFile(file, options = {}) {
+  const bytes = await readPackageBytes(file);
+  const revision = await parseBookPackage(bytes);
+  const records = await listImportedBookPackages({ indexedDB: options.indexedDB });
+  const packageId = revision.packageMetadata.packageId;
+  const related = records.filter((item) => item.packageId === packageId);
+  const legacy = related.filter((item) => item.bookRevisionId !== revision.bookRevisionId);
+  return {
+    packageId,
+    title: revision.title,
+    author: revision.author,
+    unitCount: revision.units.length,
+    deterministicRevisionId: revision.bookRevisionId,
+    related,
+    legacy,
+  };
+}
+
 export async function listImportedBookPackages(options = {}) {
   const db = await openDatabase(options.indexedDB);
   try {
     return await new Promise((resolve, reject) => {
       const transaction = db.transaction(STORE_NAME, "readonly");
       const request = transaction.objectStore(STORE_NAME).getAll();
-      request.onsuccess = () => resolve(request.result.map(({ bookRevisionId, title, author, importedAt }) => ({ bookRevisionId, title, author, importedAt })));
+      request.onsuccess = () => resolve(request.result.map((record) => ({
+        bookRevisionId: record.bookRevisionId,
+        bookId: record.bookId,
+        packageId: record.packageId || record.packageMetadata?.packageId || "",
+        title: record.title,
+        author: record.author,
+        importedAt: record.importedAt,
+        archiveBytes: record.archive?.byteLength || 0,
+      })));
       request.onerror = () => reject(request.error || new Error("读取本地书籍清单失败。"));
     });
   } finally { db.close(); }

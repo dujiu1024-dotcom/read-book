@@ -580,6 +580,25 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     return updated;
   }
 
+  // 本地书库用它区分多个 revision：按 bookRevisionId 统计消息与笔记数量。
+  async function getRevisionActivity(revisionIds) {
+    const wanted = new Set((revisionIds || []).filter(Boolean));
+    const result = {};
+    for (const id of wanted) result[id] = { messages: 0, notes: 0 };
+    if (!wanted.size) return result;
+    const snapshot = await repository.createConsistentSnapshot(datasetId);
+    const revisionByThread = new Map(snapshot.threads.map((thread) => [thread.id, thread.bookRevisionId]));
+    for (const record of snapshot.messages) {
+      const revisionId = revisionByThread.get(record.message.threadId);
+      if (revisionId && result[revisionId]) result[revisionId].messages += 1;
+    }
+    for (const note of snapshot.notes || []) {
+      const revisionId = revisionByThread.get(note.threadId);
+      if (revisionId && result[revisionId]) result[revisionId].notes += 1;
+    }
+    return result;
+  }
+
   return {
     repository,
     thread,
@@ -597,6 +616,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     savePosition,
     send,
     retryFailedGeneration,
+    getRevisionActivity,
     stop: () => controller?.stop(),
     resumePending,
     close: () => repository.close(),

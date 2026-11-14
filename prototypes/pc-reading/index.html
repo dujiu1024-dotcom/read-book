@@ -205,6 +205,20 @@
     <p class="panel-empty" id="libraryListEmpty" hidden>还没有导入任何本地书籍包。可以先用右上角“导入书籍”添加。</p>
   </dialog>
 
+  <dialog id="importIdentityDialog" class="dialog import-identity-dialog">
+    <div class="dialog-head">
+      <div><div class="eyebrow">重复导入</div><h2>这本书已有旧版本记录</h2></div>
+      <button class="icon-button" id="importIdentityCloseButton" type="button" aria-label="关闭">×</button>
+    </div>
+    <p class="dialog-description" id="importIdentityDescription"></p>
+    <div class="library-list" id="importIdentityList" role="radiogroup" aria-label="选择导入方式"></div>
+    <p class="note-dialog-status" id="importIdentityStatus" role="status"></p>
+    <div class="dialog-actions">
+      <button class="soft-button" id="importIdentityCancelButton" type="button">取消导入</button>
+      <button class="send-button" id="importIdentityConfirmButton" type="button">按所选方式导入</button>
+    </div>
+  </dialog>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <input id="bookPackageFile" type="file" accept=".zip,application/zip" hidden>
   <script type="module" src="./app.js"></script>

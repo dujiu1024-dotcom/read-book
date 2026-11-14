@@ -247,6 +247,15 @@ h1, h2, h3, p { overflow-wrap: anywhere; }
 .library-item.active { border-color: var(--accent); background: var(--accent-soft); }
 .library-item strong { font-size: 13px; }
 .library-item span { color: var(--muted); font-size: 11px; }
+.library-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.library-badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 10px; }
+.library-badge.current { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.library-counts { color: var(--muted); font-size: 11px; }
+.import-identity-option { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: white; cursor: pointer; }
+.import-identity-option.active { border-color: var(--accent); background: var(--accent-soft); }
+.import-identity-option input { margin-top: 3px; }
+.import-identity-option div { display: grid; gap: 3px; }
+.import-identity-option strong { font-size: 13px; }
 .toast {
   position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 15px); opacity: 0; pointer-events: none;
   padding: 9px 15px; border-radius: 20px; background: #263c33; color: white; font-size: 12px;

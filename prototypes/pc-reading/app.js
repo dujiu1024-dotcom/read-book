@@ -3,7 +3,7 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
 import { createGithubCorpusProvider } from "./github-corpus-provider.js";
 import { createLocalCorpusRuntime } from "./local-corpus-runtime.js";
 import { createProductionReaderRuntime } from "./reader-runtime.js";
-import { createLocalBookPackageProvider, importBookPackageFile, listImportedBookPackages } from "./local-book-package-provider.js";
+import { createLocalBookPackageProvider, importBookPackageFile, inspectBookPackageFile, listImportedBookPackages } from "./local-book-package-provider.js";
 import { createBundledBookContentProvider, BUNDLED_BOOK_REVISION_ID } from "./bundled-book-content-provider.js";
 import { createSourceRetriever } from "./source-retriever.js";
 import { hasGenerationService } from "./reader-capabilities.js";
@@ -561,8 +561,34 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
     button.disabled = true;
     setGenerationStatus("正在校验并导入标准书籍包…");
     try {
-      const imported = await importBookPackageFile(file);
-      setGenerationStatus("已导入《" + imported.title + "》，共 " + imported.unitCount + " 个原文单元。正在打开…");
+      const inspection = await inspectBookPackageFile(file);
+      let choice = null;
+      if (inspection.legacy.length) {
+        const activity = await loadRevisionActivity([
+          ...inspection.legacy.map((item) => item.bookRevisionId),
+          inspection.deterministicRevisionId,
+        ]);
+        choice = await chooseImportIdentity(inspection, activity);
+        if (!choice) {
+          setGenerationStatus("已取消导入；现有旧记录与书籍包都没有改动。");
+          button.disabled = false;
+          event.target.value = "";
+          return;
+        }
+      }
+      const imported = await importBookPackageFile(file, { identity: choice?.identity || {} });
+      const activity = await loadRevisionActivity([imported.bookRevisionId]);
+      const counts = activity[imported.bookRevisionId] || {};
+      setLibrarySwitchNotice({
+        title: imported.title,
+        messages: counts.messages ?? choice?.messages,
+        notes: counts.notes ?? choice?.notes,
+        adoptedLegacy: Boolean(choice?.adoptedLegacy),
+      });
+      setGenerationStatus((choice?.adoptedLegacy
+        ? "已沿用旧记录导入《" + imported.title + "》，原有讨论与笔记会继续可见。"
+        : "已导入《" + imported.title + "》，共 " + imported.unitCount + " 个原文单元。")
+        + " 正在打开…");
       const params = new URLSearchParams(window.location.search);
       params.delete("book");
       params.set("localBookRevision", imported.bookRevisionId);
@@ -1029,6 +1055,138 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
     });
   }
 
+  function setLibrarySwitchNotice(notice) {
+    try { window.localStorage.setItem("read-book:library-switch-notice", JSON.stringify(notice)); } catch {}
+  }
+
+  function announceLibrarySwitch() {
+    let raw = null;
+    try {
+      raw = window.localStorage.getItem("read-book:library-switch-notice");
+      if (raw) window.localStorage.removeItem("read-book:library-switch-notice");
+    } catch {}
+    if (!raw) return;
+    try {
+      const notice = JSON.parse(raw);
+      const counts = Number.isFinite(notice.messages)
+        ? "消息 " + notice.messages + " 条 · 笔记 " + notice.notes + " 条"
+        : "活动数据暂不可用";
+      setGenerationStatus("已切换到《" + notice.title + "》：" + counts + "。讨论与笔记已按书籍身份恢复。");
+      toast("已切换书籍：《" + notice.title + "》");
+    } catch {}
+  }
+
+  async function loadRevisionActivity(revisionIds) {
+    if (!productionRuntime || typeof productionRuntime.getRevisionActivity !== "function") return {};
+    try { return await productionRuntime.getRevisionActivity(revisionIds); } catch { return {}; }
+  }
+
+  function formatImportTime(value) {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) return "";
+    return "导入于 " + date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+
+  function activityLabel(activity) {
+    if (!activity) return "活动数据暂不可用";
+    return "消息 " + (activity.messages || 0) + " 条 · 笔记 " + (activity.notes || 0) + " 条";
+  }
+
+  /**
+   * 修复前导入的 revision 没有稳定身份。重复导入前必须让用户明确选择：
+   * 沿用某条旧记录（消息/笔记继续可见），或新建独立版本。
+   */
+  function chooseImportIdentity(inspection, activity) {
+    return new Promise((resolve) => {
+      const dialog = $("importIdentityDialog");
+      const list = $("importIdentityList");
+      const description = $("importIdentityDescription");
+      const status = $("importIdentityStatus");
+      if (!dialog || !list) { resolve(null); return; }
+      list.replaceChildren();
+      status.textContent = "";
+      const legacySorted = [...inspection.legacy].sort((a, b) => {
+        const aa = activity[a.bookRevisionId] || { messages: 0, notes: 0 };
+        const bb = activity[b.bookRevisionId] || { messages: 0, notes: 0 };
+        return (bb.messages + bb.notes) - (aa.messages + aa.notes)
+          || (new Date(b.importedAt).getTime() || 0) - (new Date(a.importedAt).getTime() || 0);
+      });
+      const stableRecord = inspection.related.find((item) => item.bookRevisionId === inspection.deterministicRevisionId);
+      const options = legacySorted.map((item) => ({
+        value: "legacy:" + item.bookRevisionId,
+        title: "沿用旧记录 · " + item.bookRevisionId.slice(0, 8),
+        meta: [item.author || "", formatImportTime(item.importedAt), "书籍包 " + inspection.packageId.slice(0, 8)].filter(Boolean).join(" · "),
+        counts: activityLabel(activity[item.bookRevisionId]),
+        identity: { bookId: item.bookId, bookRevisionId: item.bookRevisionId },
+        messages: activity[item.bookRevisionId]?.messages,
+        notes: activity[item.bookRevisionId]?.notes,
+        adoptedLegacy: true,
+      }));
+      options.push({
+        value: "new",
+        title: stableRecord ? "使用独立版本（稳定身份）" : "新建独立版本",
+        meta: stableRecord
+          ? [formatImportTime(stableRecord.importedAt), "书籍包 " + inspection.packageId.slice(0, 8)].filter(Boolean).join(" · ")
+          : "不沿用旧记录；旧记录仍保留在书库，可随时切回",
+        counts: stableRecord ? activityLabel(activity[stableRecord.bookRevisionId]) : "从空讨论开始",
+        identity: null,
+        messages: stableRecord ? activity[stableRecord.bookRevisionId]?.messages : 0,
+        notes: stableRecord ? activity[stableRecord.bookRevisionId]?.notes : 0,
+        adoptedLegacy: false,
+      });
+
+      description.textContent = "检测到这本书有 " + inspection.legacy.length
+        + " 个修复前创建的旧版本记录。直接重复导入会生成新的书籍身份，旧消息和笔记不会出现在当前讨论里。请选择沿用哪条旧记录，或明确新建独立版本。";
+
+      for (const option of options) {
+        const label = document.createElement("label");
+        label.className = "import-identity-option";
+        const input = document.createElement("input");
+        input.type = "radio";
+        input.name = "importIdentityChoice";
+        input.value = option.value;
+        if (option === options[0]) { input.checked = true; label.classList.add("active"); }
+        const body = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = option.title;
+        const meta = document.createElement("span");
+        meta.textContent = option.meta;
+        const counts = document.createElement("span");
+        counts.className = "library-counts";
+        counts.textContent = option.counts;
+        body.append(title, meta, counts);
+        label.append(input, body);
+        input.addEventListener("change", () => {
+          for (const element of list.querySelectorAll(".import-identity-option")) element.classList.toggle("active", element === label);
+        });
+        list.append(label);
+      }
+
+      const close = (result) => {
+        cleanup();
+        dialog.close();
+        resolve(result);
+      };
+      const confirm = () => {
+        const checked = list.querySelector('input[name="importIdentityChoice"]:checked');
+        if (!checked) { status.textContent = "请先选择一个处理方式。"; return; }
+        const option = options.find((item) => item.value === checked.value);
+        close(option || null);
+      };
+      const cancel = () => close(null);
+      const cleanup = () => {
+        $("importIdentityConfirmButton")?.removeEventListener("click", confirm);
+        $("importIdentityCancelButton")?.removeEventListener("click", cancel);
+        $("importIdentityCloseButton")?.removeEventListener("click", cancel);
+        dialog.removeEventListener("cancel", cancel);
+      };
+      $("importIdentityConfirmButton")?.addEventListener("click", confirm);
+      $("importIdentityCancelButton")?.addEventListener("click", cancel);
+      $("importIdentityCloseButton")?.addEventListener("click", cancel);
+      dialog.addEventListener("cancel", cancel);
+      dialog.showModal();
+    });
+  }
   const libraryButton = $("libraryButton");
   const libraryDialog = $("libraryDialog");
   if (libraryButton && libraryDialog) {
@@ -1041,22 +1199,52 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
       libraryButton.disabled = true;
       try {
         const packages = await listImportedBookPackages();
-        for (const item of packages) {
+        const activity = await loadRevisionActivity(packages.map((item) => item.bookRevisionId));
+        const sorted = [...packages].sort((a, b) => {
+          const aCurrent = useLocalBookPackage && a.bookRevisionId === activeLocalBookPackageId ? 1 : 0;
+          const bCurrent = useLocalBookPackage && b.bookRevisionId === activeLocalBookPackageId ? 1 : 0;
+          return (bCurrent - aCurrent)
+            || (new Date(b.importedAt).getTime() || 0) - (new Date(a.importedAt).getTime() || 0);
+        });
+        for (const item of sorted) {
+          const current = useLocalBookPackage && item.bookRevisionId === activeLocalBookPackageId;
+          const itemActivity = activity[item.bookRevisionId];
           const button = document.createElement("button");
           button.type = "button";
-          button.className = "library-item" + (item.bookRevisionId === activeLocalBookPackageId ? " active" : "");
+          button.className = "library-item" + (current ? " active" : "");
+          if (current) button.setAttribute("aria-current", "true");
+          const badges = document.createElement("div");
+          badges.className = "library-badges";
+          const statusBadge = document.createElement("span");
+          statusBadge.className = "library-badge" + (current ? " current" : "");
+          statusBadge.textContent = current ? "当前使用中" : "本地版本";
+          badges.append(statusBadge);
+          if (item.packageId) {
+            const packageBadge = document.createElement("span");
+            packageBadge.className = "library-badge";
+            packageBadge.textContent = "书籍包 " + item.packageId.slice(0, 8);
+            badges.append(packageBadge);
+          }
           const title = document.createElement("strong");
           title.textContent = item.title || "未命名书籍";
           const meta = document.createElement("span");
-          const importedAt = item.importedAt ? new Date(item.importedAt) : null;
-          meta.textContent = [
-            item.author || "",
-            importedAt && !Number.isNaN(importedAt.getTime())
-              ? "导入于 " + importedAt.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
-              : "",
-          ].filter(Boolean).join(" · ");
-          button.append(title, meta);
+          meta.textContent = [item.author || "", formatImportTime(item.importedAt)].filter(Boolean).join(" · ");
+          const counts = document.createElement("span");
+          counts.className = "library-counts";
+          counts.textContent = itemActivity
+            ? activityLabel(itemActivity)
+            : "活动数据暂不可用（当前阅读运行时未启用）";
+          button.append(badges, title, meta, counts);
           button.addEventListener("click", () => {
+            try {
+              window.localStorage.setItem("read-book:active-local-book", item.bookRevisionId);
+              window.localStorage.setItem("read-book:prefer-local-book", "true");
+            } catch {}
+            setLibrarySwitchNotice({
+              title: item.title,
+              messages: itemActivity?.messages,
+              notes: itemActivity?.notes,
+            });
             const params = new URLSearchParams(window.location.search);
             params.delete("book");
             params.set("localBookRevision", item.bookRevisionId);
@@ -1276,5 +1464,5 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
     }
   }
 
-  initializeReader();
+  initializeReader().finally(announceLibrarySwitch);
 })();
