@@ -5,6 +5,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import manifestSchema from "../schemas/manifest.schema.json" with { type: "json" };
 import bookSchema from "../schemas/book.schema.json" with { type: "json" };
+import assetSchema from "../schemas/asset.schema.json" with { type: "json" };
 import chaptersSchema from "../schemas/chapters.schema.json" with { type: "json" };
 import chunkSchema from "../schemas/chunk.schema.json" with { type: "json" };
 import embeddingSchema from "../schemas/embedding-manifest.schema.json" with { type: "json" };
@@ -15,9 +16,9 @@ import { preflightZip } from "./zip-safety.js";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true, allowUnionTypes: true });
 addFormats(ajv);
-for (const schema of [issueSchema, manifestSchema, bookSchema, chaptersSchema, chunkSchema, embeddingSchema, localReportSchema, processingSchema]) ajv.addSchema(schema);
+for (const schema of [issueSchema, manifestSchema, bookSchema, assetSchema, chaptersSchema, chunkSchema, embeddingSchema, localReportSchema, processingSchema]) ajv.addSchema(schema);
 const validators = {
-  manifest: ajv.getSchema(manifestSchema.$id), book: ajv.getSchema(bookSchema.$id),
+  manifest: ajv.getSchema(manifestSchema.$id), book: ajv.getSchema(bookSchema.$id), asset: ajv.getSchema(assetSchema.$id),
   chapters: ajv.getSchema(chaptersSchema.$id), chunk: ajv.getSchema(chunkSchema.$id),
   embedding: ajv.getSchema(embeddingSchema.$id), localReport: ajv.getSchema(localReportSchema.$id),
   processing: ajv.getSchema(processingSchema.$id),
@@ -150,11 +151,12 @@ export async function validatePackage(inputPath, options = {}) {
   requirePrefix(manifest.artifacts.book, "content/", "manifest.artifacts.book", issues);
   requirePrefix(manifest.artifacts.chapters, "content/", "manifest.artifacts.chapters", issues);
   requirePrefix(manifest.artifacts.chunks, "content/", "manifest.artifacts.chunks", issues);
+  if (manifest.artifacts.assets) requirePrefix(manifest.artifacts.assets, "content/", "manifest.artifacts.assets", issues);
   if (manifest.artifacts.embeddings) requirePrefix(manifest.artifacts.embeddings, "embeddings/", "manifest.artifacts.embeddings", issues);
   if (manifest.artifacts.local_report) requirePrefix(manifest.artifacts.local_report, "validation/", "manifest.artifacts.local_report", issues);
   for (const [value, label, required] of [
     [manifest.source.file, "manifest.source.file", true], [manifest.artifacts.book, "manifest.artifacts.book", true],
-    [manifest.artifacts.chapters, "manifest.artifacts.chapters", true], [manifest.artifacts.chunks, "manifest.artifacts.chunks", true],
+    [manifest.artifacts.chapters, "manifest.artifacts.chapters", true], [manifest.artifacts.chunks, "manifest.artifacts.chunks", true], [manifest.artifacts.assets, "manifest.artifacts.assets", false],
     [manifest.artifacts.embeddings, "manifest.artifacts.embeddings", false], [manifest.artifacts.local_report, "manifest.artifacts.local_report", false],
   ]) checkPackagePath(value, label, files, issues, required);
   if (manifest.source.file && files.has(manifest.source.file)) {
@@ -170,7 +172,35 @@ export async function validatePackage(inputPath, options = {}) {
   const chunks = chapters ? validateChunks(files, manifest.artifacts.chunks, chapters, issues) : [];
   if (chapters && manifest.counts.chapters !== chapters.length) issues.push(issue("CHAPTER_COUNT_MISMATCH", "manifest chapter count does not match chapters.json"));
   if (manifest.counts.chunks !== chunks.length) issues.push(issue("CHUNK_COUNT_MISMATCH", "manifest chunk count does not match chunks.jsonl"));
-  const assetCount = [...files.keys()].filter((filePath) => filePath.startsWith("assets/") && !filePath.endsWith("/")).length;
+  const assetPaths = [...files.keys()].filter((filePath) => filePath.startsWith("assets/") && !filePath.endsWith("/"));
+  const assetCount = assetPaths.length;
+  if (manifest.artifacts.assets && files.has(manifest.artifacts.assets)) {
+    const assets = parseJson(files, manifest.artifacts.assets, issues);
+    if (assets && checkSchema(validators.asset, assets, manifest.artifacts.assets, issues, "ASSET_SCHEMA_INVALID")) {
+      const assetIds = new Set();
+      const declaredPaths = new Set();
+      for (const asset of assets) {
+        if (!validRelativePath(asset.path) || !asset.path.startsWith("assets/")) {
+          issues.push(issue("ASSET_PATH_INVALID", "Asset path must be a safe path under assets/", { artifact: manifest.artifacts.assets, record_id: asset.asset_id }));
+          continue;
+        }
+        if (assetIds.has(asset.asset_id)) issues.push(issue("ASSET_ID_DUPLICATE", "Duplicate asset_id: " + asset.asset_id, { record_id: asset.asset_id }));
+        if (declaredPaths.has(asset.path)) issues.push(issue("ASSET_PATH_DUPLICATE", "Duplicate asset path: " + asset.path, { artifact: asset.path }));
+        assetIds.add(asset.asset_id);
+        declaredPaths.add(asset.path);
+        if (!files.has(asset.path)) issues.push(issue("ASSET_FILE_MISSING", "Asset file is missing: " + asset.path, { artifact: asset.path, record_id: asset.asset_id }));
+        else {
+          const bytes = files.get(asset.path);
+          if (bytes.byteLength !== asset.size_bytes) issues.push(issue("ASSET_SIZE_MISMATCH", "Asset size does not match manifest", { artifact: asset.path, record_id: asset.asset_id }));
+          if (sha256(bytes) !== asset.sha256.toLowerCase()) issues.push(issue("ASSET_HASH_MISMATCH", "Asset SHA-256 does not match manifest", { artifact: asset.path, record_id: asset.asset_id }));
+        }
+      }
+      for (const assetPath of assetPaths) if (!declaredPaths.has(assetPath)) issues.push(issue("ASSET_UNDECLARED", "Asset file has no descriptor: " + assetPath, { artifact: assetPath }));
+      if (assets.length !== assetCount) issues.push(issue("ASSET_DESCRIPTOR_COUNT_MISMATCH", "Asset descriptor count does not match assets/ files"));
+    }
+  } else if (assetCount > 0) {
+    issues.push(issue("ASSET_MANIFEST_MISSING", "assets/ files exist but manifest.artifacts.assets is null or missing"));
+  }
   if (manifest.counts.assets !== assetCount) issues.push(issue("ASSET_COUNT_MISMATCH", "manifest asset count does not match assets/ files"));
   if (manifest.artifacts.embeddings && files.has(manifest.artifacts.embeddings)) {
     const embedding = parseJson(files, manifest.artifacts.embeddings, issues);
