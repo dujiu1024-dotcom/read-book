@@ -1,6 +1,20 @@
 import { SqliteOpfsRepository } from "../../packages/local-repository-sqlite/src/index.ts";
 
-const DEFAULT_DATASET_ID = "read-book-public-corpus-local-v1";
+const LOCAL_DATASET_STORAGE_KEY = "read-book:local-dataset-id";
+
+function getOrCreateLocalDataSetId() {
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) throw new Error("当前浏览器不支持 localStorage。");
+    const existing = storage.getItem(LOCAL_DATASET_STORAGE_KEY);
+    if (existing) return existing;
+    const created = uuid();
+    storage.setItem(LOCAL_DATASET_STORAGE_KEY, created);
+    return created;
+  } catch {
+    throw new Error("无法持久化本地数据集标识；请允许当前站点使用本地存储后重试。");
+  }
+}
 
 function uuid() {
   if (!globalThis.crypto?.randomUUID) throw new Error("当前浏览器不支持安全 UUID，无法创建本地阅读 Thread。");
@@ -19,7 +33,7 @@ function required(value, label) {
  * services are configured.
  */
 export async function createLocalCorpusRuntime(bookRevision, {
-  datasetId = DEFAULT_DATASET_ID,
+  datasetId = getOrCreateLocalDataSetId(),
   repositoryFactory = () => new SqliteOpfsRepository(),
   now = () => new Date().toISOString(),
 } = {}) {

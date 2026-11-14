@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "test:book-package": "node --test local-book-package-provider.test.mjs"
+    "test:book-package": "node --test local-book-package-provider.test.mjs",
+    "test:reader": "node --test *.test.mjs"
   },
   "dependencies": {
     "@sqlite.org/sqlite-wasm": "3.54.1-build1",
