@@ -294,3 +294,43 @@ Revision 总状态：
 - 超大书籍包的分片上传、断点续传和保留策略。
 
 V1 优先冻结包结构、版本标识、阶段状态和失败报告四个契约。质量阈值和具体解析器实现应通过真实样本验证后再冻结。
+
+
+## V1.0.0 机器校验器（2026-11-14）
+
+独立校验器位于 `packages/book-package-validator`，Node.js 22.12+。它不依赖阅读端数据库，也不替代实际解析流水线。
+
+### Schema 文件
+- `schemas/manifest.schema.json`：包身份、原始来源、书籍元数据、处理器版本、工件路径和数量。
+- `schemas/book.schema.json`：规范化书籍元数据。
+- `schemas/chapters.schema.json`：章节树、父子关系、顺序和原文定位。
+- `schemas/chunk.schema.json`：Chunk 内容、哈希、章节引用和定位。
+- `schemas/asset.schema.json`：图片/页面渲染/图表等资源的路径、MIME、哈希、大小和可选原文定位。
+- `schemas/embedding-manifest.schema.json`：模型、维度、归一化、距离度量、向量文件哈希和 Chunk 关联。
+- `schemas/local-report.schema.json` 与 `schemas/validation-issue.schema.json`：本地校验报告和可追溯问题结构。
+- `schemas/processing-contract.schema.json` 与 `processing-contract.json`：Revision/Attempt 状态、阶段依赖、重试范围、状态迁移、幂等键和验收门禁。
+
+### 命令
+```sh
+cd packages/book-package-validator
+npm install
+node src/cli.js /path/to/book-package-or.zip
+npm run validate:processing-contract
+npm test
+```
+
+退出码：0=结构与完整性校验通过，1=校验失败，2=命令参数错误。CLI 输出机器可读 JSON。
+
+### 额外完整性与安全检查
+- 原始文件大小、SHA-256 和扩展名一致。
+- 工件路径必须是安全相对路径，并位于约定目录；拒绝路径穿越。
+- 章节 ID、父节点、同级顺序和循环关系校验。
+- Chunk ID、章节引用、章节标题、同章节顺序和内容 SHA-256 校验。
+- 资源清单与实际文件逐一匹配；校验大小、哈希和未声明资源。
+- Embedding 向量文件哈希及 Chunk 引用校验。
+- ZIP 解压前检查中央目录；拒绝绝对路径、路径穿越、反斜杠、重复/大小写冲突路径、符号链接、加密条目、不支持的压缩算法、ZIP64、超大文件、超大解压总量和高压缩比压缩炸弹。
+
+### 验收边界
+- 校验器只确认包结构和文件完整性，不证明 EPUB/PDF/TXT 的语义解析质量。
+- OCR、章节结构质量、Chunk 可读性、检索召回、版权和授权仍由部署策略及授权样本评估；不在缺少真实样本时臆造固定阈值。
+- 本地报告是结构化诊断信息，不是云端接收、版权批准或发布成功证明。
