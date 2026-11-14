@@ -398,3 +398,41 @@ test("only citations from the current BookRevision and current source node becom
     locator: "locator-1",
   }]);
 });
+
+
+test("generation turn persists only service-verified citations for its current source", async () => {
+  const repository = memoryTurnRepository();
+  const client = createGenerationClient({
+    async createGeneration() { return accepted; },
+    async getGeneration() {
+      return {
+        generation_id: accepted.generation_id,
+        status: "completed",
+        expires_at: accepted.expires_at,
+        result: {
+          content: "带原文来源的最终回答",
+          citations: [
+            { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-current" },
+            { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "locator-other-node" },
+          ],
+        },
+      };
+    },
+    async cancelGeneration() { return { ...accepted, status: "cancel_requested" }; },
+    async streamEvents() {},
+  });
+  await runGenerationTurn(repository as any, client, {
+    datasetId: "dataset-01",
+    userMessage: { id: request.user_message.local_message_id, threadId: request.thread_id, content: request.user_message.content },
+    assistantMessageId: "assistant-message-citations",
+    request,
+    idempotencyKey: "idempotency-key-citations",
+    sourceReferences: [],
+    signal: new AbortController().signal,
+  });
+  assert.deepEqual(repository.references.get("assistant-message-citations"), [{
+    bookRevisionId: request.book_revision_id,
+    structureNodeId: request.context.current_source.structure_node_id,
+    locator: "locator-current",
+  }]);
+});
