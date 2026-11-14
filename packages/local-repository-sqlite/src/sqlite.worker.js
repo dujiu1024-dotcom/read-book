@@ -18,7 +18,7 @@ function parseJson(value, fallback = []) {
 function ensureDataset(datasetId) {
   if (typeof datasetId !== "string" || !datasetId.trim()) throw new Error("datasetId 非法");
   execute(
-    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,2,?,?,0,0,'active')",
+    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,3,?,?,0,0,'active')",
     [datasetId, new Date().toISOString(), new Date().toISOString()],
   );
   const dataset = first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
@@ -153,7 +153,7 @@ async function initialize() {
   // Existing installations have the v1 schema and no PRAGMA user_version marker.
   // Treat version 0 as the shipped v1 baseline, then migrate atomically to v2.
   const storedVersion = Number(first("PRAGMA user_version")?.user_version ?? 0);
-  if (storedVersion > 2) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
+  if (storedVersion > 3) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
   if (storedVersion < 2) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -178,6 +178,35 @@ async function initialize() {
     } catch (error) {
       db.exec({ sql: "ROLLBACK" });
       throw new Error("数据库 Schema v2 迁移失败，已回滚", { cause: error });
+    }
+  }
+  if (storedVersion < 3) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      db.exec({ sql: `
+        CREATE TABLE IF NOT EXISTS generation_delivery (
+          client_generation_id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          generation_id TEXT UNIQUE,
+          thread_id TEXT NOT NULL REFERENCES thread(id),
+          user_message_id TEXT NOT NULL REFERENCES message(id),
+          assistant_message_id TEXT NOT NULL REFERENCES message(id),
+          idempotency_key TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','cancelled','expired')),
+          last_sequence INTEGER NOT NULL DEFAULT 0 CHECK(last_sequence >= 0),
+          last_event_id TEXT,
+          expires_at TEXT,
+          updated_at TEXT NOT NULL,
+          UNIQUE(dataset_id,idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_generation_delivery_pending ON generation_delivery(dataset_id,thread_id,status,updated_at);
+        UPDATE local_dataset SET schema_version=3;
+        PRAGMA user_version=3;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v3 迁移失败，已回滚", { cause: error });
     }
   }
 }
@@ -401,6 +430,29 @@ function txOperation(datasetId, operation, input) {
       if (changed) transactionDirty=true;
       return changed;
     }
+    case "saveGenerationDelivery": {
+      const d=input.delivery;
+      const statuses=["queued","running","completed","failed","cancelled","expired"];
+      if (!d || typeof d.clientGenerationId!=="string" || d.clientGenerationId.length<16 || d.clientGenerationId.length>128 ||
+          typeof d.idempotencyKey!=="string" || d.idempotencyKey.length<16 || d.idempotencyKey.length>128 ||
+          !statuses.includes(d.status) || !Number.isSafeInteger(d.lastSequence) || d.lastSequence<0 ||
+          typeof d.updatedAt!=="string" || !Number.isFinite(Date.parse(d.updatedAt)) ||
+          (d.generationId!==null && (typeof d.generationId!=="string" || !d.generationId.trim())) ||
+          (d.lastEventId!==null && typeof d.lastEventId!=="string") ||
+          (d.expiresAt!==null && !Number.isFinite(Date.parse(d.expiresAt)))) throw new Error("GenerationDelivery 字段非法");
+      const thread=first("SELECT id FROM thread WHERE id=? AND dataset_id=?",[d.threadId,datasetId]);
+      const user=first("SELECT id,thread_id,role FROM message WHERE id=? AND dataset_id=?",[d.userMessageId,datasetId]);
+      const assistant=first("SELECT id,thread_id,role FROM message WHERE id=? AND dataset_id=?",[d.assistantMessageId,datasetId]);
+      if (!thread || !user || user.role!=="user" || user.thread_id!==d.threadId || !assistant || assistant.role!=="assistant" || assistant.thread_id!==d.threadId) throw new Error("GenerationDelivery 必须引用当前数据集同一 Thread 的用户和助手消息");
+      const old=first("SELECT * FROM generation_delivery WHERE client_generation_id=? AND dataset_id=?",[d.clientGenerationId,datasetId]);
+      if (old && (old.thread_id!==d.threadId || old.user_message_id!==d.userMessageId || old.assistant_message_id!==d.assistantMessageId || old.idempotency_key!==d.idempotencyKey)) throw new Error("GenerationDelivery 不允许更换原始消息或幂等键");
+      if (old && d.lastSequence<old.last_sequence) throw new Error("GenerationDelivery 事件游标不允许回退");
+      if (old && old.generation_id && d.generationId && old.generation_id!==d.generationId) throw new Error("GenerationDelivery generation_id 不允许变更");
+      execute("INSERT INTO generation_delivery(client_generation_id,dataset_id,generation_id,thread_id,user_message_id,assistant_message_id,idempotency_key,status,last_sequence,last_event_id,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(client_generation_id) DO UPDATE SET generation_id=COALESCE(excluded.generation_id,generation_delivery.generation_id),status=excluded.status,last_sequence=excluded.last_sequence,last_event_id=excluded.last_event_id,expires_at=COALESCE(excluded.expires_at,generation_delivery.expires_at),updated_at=excluded.updated_at",
+        [d.clientGenerationId,datasetId,d.generationId,d.threadId,d.userMessageId,d.assistantMessageId,d.idempotencyKey,d.status,d.lastSequence,d.lastEventId,d.expiresAt,d.updatedAt]);
+      transactionDirty=true;
+      return d;
+    }
     case "acknowledgeBackup": {
       const sequence = input.snapshotSequence;
       const backupId = input.backupId;
@@ -440,6 +492,7 @@ function txOperation(datasetId, operation, input) {
         memories:execute("SELECT * FROM memory WHERE dataset_id=?", [datasetId]).map(m=>({id:m.id,datasetId:m.dataset_id,threadId:m.thread_id,currentVersionId:m.current_version_id,createdAt:m.created_at,updatedAt:m.updated_at})),
         memoryVersions:execute("SELECT * FROM memory_version WHERE dataset_id=? ORDER BY memory_id,version", [datasetId]).map(v=>({id:v.id,memoryId:v.memory_id,version:v.version,previousVersionId:v.previous_version_id,changeKind:v.change_kind,content:v.content,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references),createdAt:v.created_at})),
         memoryRelations:execute("SELECT * FROM memory_relation WHERE dataset_id=? ORDER BY created_at,id", [datasetId]).map(r=>({id:r.id,fromVersionId:r.from_version_id,toVersionId:r.to_version_id,relationType:r.relation_type,sourceMessageIds:parseJson(r.source_message_ids),sourceReferences:parseJson(r.source_references),createdAt:r.created_at})),
+        generationDeliveries:execute("SELECT * FROM generation_delivery WHERE dataset_id=? ORDER BY updated_at,client_generation_id", [datasetId]).map(r=>({clientGenerationId:r.client_generation_id,generationId:r.generation_id,threadId:r.thread_id,userMessageId:r.user_message_id,assistantMessageId:r.assistant_message_id,idempotencyKey:r.idempotency_key,status:r.status,lastSequence:r.last_sequence,lastEventId:r.last_event_id,expiresAt:r.expires_at,updatedAt:r.updated_at})),
       };
     }
     default: throw new Error("未知 Repository 事务操作：" + operation);
@@ -491,6 +544,13 @@ function handle(message) {
   }
   if (type === "getMessages") {
     return execute("SELECT * FROM message WHERE dataset_id=? AND thread_id=? AND sequence>? ORDER BY sequence", [message.datasetId,message.threadId,message.afterSequence||0]).map(rowToMessage);
+  }
+  if (type === "getGenerationDelivery") {
+    const r=first("SELECT * FROM generation_delivery WHERE dataset_id=? AND client_generation_id=?",[message.datasetId,message.clientGenerationId]);
+    return r ? {clientGenerationId:r.client_generation_id,generationId:r.generation_id,threadId:r.thread_id,userMessageId:r.user_message_id,assistantMessageId:r.assistant_message_id,idempotencyKey:r.idempotency_key,status:r.status,lastSequence:r.last_sequence,lastEventId:r.last_event_id,expiresAt:r.expires_at,updatedAt:r.updated_at} : null;
+  }
+  if (type === "listPendingGenerationDeliveries") {
+    return execute("SELECT * FROM generation_delivery WHERE dataset_id=? AND status IN ('queued','running') ORDER BY updated_at,client_generation_id",[message.datasetId]).map(r=>({clientGenerationId:r.client_generation_id,generationId:r.generation_id,threadId:r.thread_id,userMessageId:r.user_message_id,assistantMessageId:r.assistant_message_id,idempotencyKey:r.idempotency_key,status:r.status,lastSequence:r.last_sequence,lastEventId:r.last_event_id,expiresAt:r.expires_at,updatedAt:r.updated_at}));
   }
   if (type === "getMemoryVersions") {
     return execute("SELECT * FROM memory_version WHERE dataset_id=? AND memory_id=? ORDER BY version", [message.datasetId,message.memoryId]).map(v=>({...v,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references)}));
