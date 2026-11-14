@@ -17,7 +17,7 @@
 - #3：EPUB/PDF/TXT 导入 PoC 已实现；真实授权出版物、复杂版式、OCR 和定位人工抽样仍未完成。
 - #4：Mock Generation Server 的幂等、SSE、断线恢复和取消验证已完成；正式 HTTP/SSE Transport 已在产品运行时实现，但生产服务端仍需部署。
 - #5：PR #52 已合并书籍包 v1 Schema、目录/ZIP 校验器 CLI 和处理契约校验；不代表云端加工服务已实现。
-- #6：PR #59 已合并离线 JSONL 评测工具，覆盖 Recall@K、引用准确/覆盖、Groundedness、拒答、行为违规、延迟和 Token Cost；真实中文书籍、授权记录、人工标注和模型实测仍未完成。
+- #6：PR #59 已合并通用 JSONL 指标运行器；另有离线 Agent/RAG 评测 PoC（12 个合成 chunk、30 道六类问题、gold-blind mock 检索、人工标注规范和评测报告）正在合并；真实中文书籍、授权记录、人工标注和模型实测仍未完成。
 - #7：状态机、数据字典和 OpenAPI 已有一致性修订；Message.pending、账号 ID 类型、恢复挑战证明等语义仍需产品/安全决策。
 - #9：PR #53 已合并 Markdown、JSON/JSONL、OpenAPI 和书籍包契约质量门禁；当前仅手动触发，最终验收后再启用 PR/main 自动触发。
 - MVP 主链路：PR #40、#43–#45、#48–#49、#51、#58–#63 已合并，覆盖本地消息与认知持久化、PC 阅读运行时、标准书籍包导出、Agent 会话控制、备份上传/恢复、评测工具和服务端引用校验。
