@@ -253,3 +253,20 @@ export function assertDataSetSequenceInvariant(dataSet: LocalDataSet): void {
     );
   }
 }
+
+/** Structural adapter for the Agent turn orchestrator; both messages commit atomically before network work. */
+export function createAgentGenerationTurnRepository(
+  repository: Pick<LocalRepository, "transaction">,
+  datasetId: string,
+) {
+  return {
+    transaction<T>(id: string, operation: (tx: {
+      appendUserMessage(message: NewUserMessage): Promise<PersistedMessage>;
+      appendAssistantMessage(message: NewAssistantMessage): Promise<PersistedMessage>;
+      transitionAssistantMessage(messageId: string, status: AssistantMessageStatus, content?: string): Promise<AssistantMessage>;
+    }) => Promise<T>): Promise<T> {
+      if (id !== datasetId) throw new RepositoryError("DATASET_NOT_FOUND", "Agent turn dataset does not match the bound local dataset.");
+      return repository.transaction(datasetId, (tx) => operation(tx));
+    },
+  };
+}
