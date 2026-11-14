@@ -9,7 +9,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
   const readerConfig = window.READ_BOOK_CONFIG || {};
   const queryBookId = new URLSearchParams(window.location.search).get("book");
   const isGithubCorpusMode = Boolean(queryBookId && queryBookId !== "demo");
-  const isDemoProvider = !isGithubCorpusMode && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId;
+  const isDemoProvider = queryBookId === "demo" || (!isGithubCorpusMode && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId);
   let bookContentProvider = null;
   let productionRuntime = null;
   const requestedBookRevisionId = isGithubCorpusMode
@@ -336,7 +336,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       if (!confirmed) return;
     }
     if (state.mainlineIndex >= units.length - 1) {
-      toast("演示主线已到最后一个单元。");
+      toast(isGithubCorpusMode ? "当前书籍已到最后一个阅读单元。" : "演示主线已到最后一个单元。");
       return;
     }
     state.mainlineIndex += 1;
@@ -526,7 +526,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
   if (bookSelector) {
     const serviceOption = bookSelector.querySelector('option[value="service"]');
     if (serviceOption) serviceOption.disabled = !(readerConfig.apiBaseUrl && readerConfig.bookRevisionId);
-    bookSelector.value = isGithubCorpusMode ? queryBookId : (isDemoProvider ? "demo" : "service");
+    bookSelector.value = isGithubCorpusMode ? queryBookId : (queryBookId === "demo" || isDemoProvider ? "demo" : "service");
     bookSelector.addEventListener("change", () => {
       const next = bookSelector.value;
       const params = new URLSearchParams(window.location.search);
