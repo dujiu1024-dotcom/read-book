@@ -687,6 +687,8 @@ function txOperation(datasetId, operation, input) {
         messages:execute("SELECT * FROM message WHERE dataset_id=? ORDER BY thread_id,sequence", [datasetId]).map(rowToMessage),
         readingRounds:execute("SELECT id,thread_id AS threadId,started_at AS startedAt,completed_at AS completedAt,round_number AS roundNumber,status FROM reading_round WHERE dataset_id=?", [datasetId]),
         readingPositions:execute("SELECT thread_id AS threadId,mainline_node_id AS mainlineNodeId,displayed_node_id AS displayedNodeId,view_mode AS viewMode,current_unit_discussed AS currentUnitDiscussed,updated_at AS updatedAt FROM reading_position WHERE dataset_id=?", [datasetId]),
+        presentedSources:execute("SELECT * FROM presented_source WHERE dataset_id=? ORDER BY presented_at,id",[datasetId]).map(s=>({id:s.id,threadId:s.thread_id,bookRevisionId:s.book_revision_id,structureNodeId:s.structure_node_id,chunkId:s.chunk_id,presentationType:s.presentation_type,readingRoundId:s.reading_round_id,presentedAt:s.presented_at,sourceLocator:parseJson(s.source_locator,{})})),
+        readingUnitProgress:execute("SELECT * FROM reading_unit_progress WHERE dataset_id=? ORDER BY reading_round_id,structure_node_id",[datasetId]).map(p=>({readingRoundId:p.reading_round_id,structureNodeId:p.structure_node_id,status:p.status,firstPresentedSourceId:p.first_presented_source_id,lastActivityMessageId:p.last_activity_message_id,completedAt:p.completed_at,updatedAt:p.updated_at})),
         citations:execute("SELECT * FROM citation WHERE dataset_id=?", [datasetId]).map(c=>({id:c.id,threadId:c.thread_id,messageId:c.message_id,bookRevisionId:c.book_revision_id,structureNodeId:c.structure_node_id,locator:c.locator,excerpt:c.excerpt,excerptHash:c.excerpt_hash,createdAt:c.created_at})),
         notes:execute("SELECT * FROM note WHERE dataset_id=?", [datasetId]).map(n=>({id:n.id,datasetId:n.dataset_id,threadId:n.thread_id,readingRoundId:n.reading_round_id,content:n.content,sourceMessageIds:parseJson(n.source_message_ids),sourceReferences:parseJson(n.source_references),createdAt:n.created_at,updatedAt:n.updated_at,revision:n.revision})),
         memories:execute("SELECT * FROM memory WHERE dataset_id=?", [datasetId]).map(m=>({id:m.id,datasetId:m.dataset_id,threadId:m.thread_id,currentVersionId:m.current_version_id,createdAt:m.created_at,updatedAt:m.updated_at})),
@@ -777,6 +779,8 @@ function handle(message) {
       }
       for (const round of snapshot.readingRounds || []) txOperation(datasetId,"createReadingRound",{round});
       for (const position of snapshot.readingPositions || []) txOperation(datasetId,"saveReadingPosition",{position});
+      for (const source of snapshot.presentedSources || []) txOperation(datasetId,"createPresentedSource",{source});
+      for (const progress of snapshot.readingUnitProgress || []) txOperation(datasetId,"restoreReadingUnitProgress",{progress});
       for (const citation of snapshot.citations || []) txOperation(datasetId,"saveCitation",{citation});
       for (const note of snapshot.notes || []) txOperation(datasetId,"saveNote",{note});
       const versions=[...(snapshot.memoryVersions || [])].sort((a,b)=>a.memoryId.localeCompare(b.memoryId) || a.version-b.version);
