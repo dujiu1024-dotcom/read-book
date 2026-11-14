@@ -10,10 +10,13 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
   const activeLocalBookPackageId = readerConfig.localBookPackageId || (() => {
     try { return window.localStorage.getItem("read-book:active-local-book") || ""; } catch { return ""; }
   })();
+  const useLocalBookPackage = Boolean(activeLocalBookPackageId && !readerConfig.apiBaseUrl);
   const isDemoProvider = !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId && !activeLocalBookPackageId;
   let bookContentProvider = null;
   let productionRuntime = null;
-  const requestedBookRevisionId = readerConfig.bookRevisionId || activeLocalBookPackageId || (isDemoProvider ? "demo-book-revision-1" : "");
+  const requestedBookRevisionId = useLocalBookPackage
+    ? activeLocalBookPackageId
+    : readerConfig.bookRevisionId || (isDemoProvider ? "demo-book-revision-1" : "");
 
   const state = {
     mainlineIndex: 1,
@@ -533,7 +536,7 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
     try {
       if (isDemoProvider) {
         bookContentProvider = createDemoBookContentProvider();
-      } else if (activeLocalBookPackageId) {
+      } else if (useLocalBookPackage) {
         state.messages = [];
         messageList.replaceChildren();
         bookContentProvider = createLocalBookPackageProvider();
@@ -567,7 +570,7 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
         return;
       }
 
-      if (activeLocalBookPackageId && !readerConfig.apiBaseUrl) {
+      if (useLocalBookPackage) {
         renderSource();
         updateCount();
         $("messageInput").disabled = true;
