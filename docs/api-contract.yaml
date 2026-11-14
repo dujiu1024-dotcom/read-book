@@ -741,6 +741,18 @@ components:
           properties:
             content: { type: string }
             content_hash: { type: string }
+            citations:
+              type: array
+              maxItems: 20
+              items:
+                type: object
+                additionalProperties: false
+                required: [book_revision_id, structure_node_id, locator]
+                properties:
+                  book_revision_id: { type: string, format: uuid }
+                  structure_node_id: { type: string, format: uuid }
+                  locator: { type: string, minLength: 1, maxLength: 512 }
+                  excerpt: { type: string, maxLength: 2000 }
             usage:
               type: [object, 'null']
               additionalProperties: true
