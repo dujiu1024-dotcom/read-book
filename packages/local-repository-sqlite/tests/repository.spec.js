@@ -478,3 +478,38 @@ test("SQLite OPFS persists verified Assistant source references on completion", 
     locator: "epubcfi(/6/4!/4/2)"
   }]);
 });
+
+
+test("SQLite OPFS persists CitationRecord with the completed Assistant message", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    const assistantId = "99999999-9999-4999-8999-999999999999";
+    const nodeId = "88888888-8888-4888-8888-888888888888";
+    const citationId = "77777777-7777-4777-8777-777777777777";
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({ id: ids.threadId, datasetId: ids.datasetA, bookRevisionId: ids.revision, createdAt: "2026-11-14T00:00:00.000Z" });
+      await tx.appendAssistantMessage({
+        id: assistantId, threadId: ids.threadId, content: "", status: "generating",
+        createdAt: "2026-11-14T00:00:01.000Z", sourceReferences: []
+      });
+      await tx.transitionAssistantMessage(assistantId, "completed", "有来源的最终回答", [{
+        bookRevisionId: ids.revision, structureNodeId: nodeId, locator: "epubcfi(/6/4!/4/2)"
+      }]);
+      await tx.saveCitation({
+        id: citationId, threadId: ids.threadId, messageId: assistantId,
+        bookRevisionId: ids.revision, structureNodeId: nodeId,
+        locator: "epubcfi(/6/4!/4/2)", excerpt: "原文片段",
+        excerptHash: null, createdAt: "2026-11-14T00:00:02.000Z"
+      });
+    });
+    const snapshot = await repository.createConsistentSnapshot(ids.datasetA);
+    const messages = await repository.getMessages(ids.datasetA, ids.threadId);
+    await repository.close();
+    return { citation: snapshot.citations[0], message: messages[0].message };
+  }, { datasetA, revision, threadId });
+  expect(result.message.sourceReferences).toHaveLength(1);
+  expect(result.citation.messageId).toBe("99999999-9999-4999-8999-999999999999");
+  expect(result.citation.excerpt).toBe("原文片段");
+});

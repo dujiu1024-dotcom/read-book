@@ -14,7 +14,7 @@ export interface GenerationRequest {
   book_revision_id: string;
   user_message: { local_message_id: string; content: string };
   context: {
-    current_source: { structure_node_id: string; excerpt: string };
+    current_source: { structure_node_id: string; locator: string; excerpt: string };
     recent_messages: Array<{ role: "user" | "assistant"; content: string }>;
     relevant_memory?: Array<Record<string, unknown>>;
     response_preferences?: { language?: string };
@@ -31,7 +31,7 @@ export interface GenerationCitation {
   book_revision_id: string;
   structure_node_id: string;
   locator: string;
-  excerpt?: string;
+  excerpt: string;
 }
 
 export interface GenerationResult {
@@ -143,6 +143,7 @@ export function validateGenerationRequest(value: GenerationRequest): void {
     throw new GenerationProtocolError("user_message.content exceeds 50000 characters.");
   }
   requiredUuid(value.context.current_source.structure_node_id, "context.current_source.structure_node_id");
+  boundedString(value.context.current_source.locator, "context.current_source.locator", 1, 512);
   if (typeof value.context.current_source.excerpt !== "string" || value.context.current_source.excerpt.length > 30_000) {
     throw new GenerationProtocolError("context.current_source.excerpt must be a string up to 30000 characters.");
   }
@@ -209,14 +210,14 @@ export function validateGenerationSnapshot(value: unknown): GenerationSnapshot {
       citations = raw.citations.map((value, index) => {
         const citation = record(value);
         const excerpt = citation.excerpt;
-        if (excerpt !== undefined && (typeof excerpt !== "string" || excerpt.length > 2000)) {
-          throw new GenerationProtocolError("Generation citation excerpt must be a string up to 2000 characters.");
+        if (typeof excerpt !== "string" || !excerpt.trim() || excerpt.length > 2000) {
+          throw new GenerationProtocolError("Generation citation excerpt must be a non-empty string up to 2000 characters.");
         }
         return {
           book_revision_id: requiredUuid(citation.book_revision_id, "result.citations[" + index + "].book_revision_id"),
           structure_node_id: requiredUuid(citation.structure_node_id, "result.citations[" + index + "].structure_node_id"),
           locator: boundedString(citation.locator, "result.citations[" + index + "].locator", 1, 512),
-          ...(typeof excerpt === "string" ? { excerpt } : {}),
+          excerpt,
         };
       });
     }
@@ -237,6 +238,71 @@ export function validateGenerationSnapshot(value: unknown): GenerationSnapshot {
     result,
     ...(item.error_code === undefined ? {} : { error_code: item.error_code as string | null }),
   };
+}
+
+export function verifiedGenerationSourceReferences(
+  result: GenerationResult,
+  request: GenerationRequest,
+): Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> {
+  const expectedRevision = request.book_revision_id;
+  const expectedNode = request.context.current_source.structure_node_id;
+  const sourceText = request.context.current_source.excerpt.replace(/\s+/g, " ").trim();
+  const references = new Map<string, { bookRevisionId: string; structureNodeId: string; locator: string }>();
+  for (const citation of result.citations || []) {
+    if (citation.book_revision_id !== expectedRevision || citation.structure_node_id !== expectedNode || citation.locator !== request.context.current_source.locator) continue;
+    if (!citation.excerpt?.trim()) continue;
+    const excerpt = citation.excerpt.replace(/\s+/g, " ").trim();
+    if (!sourceText.includes(excerpt)) continue;
+    const key = citation.book_revision_id + ":" + citation.structure_node_id + ":" + citation.locator;
+    references.set(key, {
+      bookRevisionId: citation.book_revision_id,
+      structureNodeId: citation.structure_node_id,
+      locator: citation.locator,
+    });
+  }
+  return [...references.values()];
+}
+
+export function verifiedGenerationCitationRecords(
+  result: GenerationResult,
+  request: GenerationRequest,
+  messageId: string,
+  threadId: string,
+  createdAt: string,
+): Array<{
+  id: string;
+  threadId: string;
+  messageId: string;
+  bookRevisionId: string;
+  structureNodeId: string;
+  locator: string;
+  excerpt: string;
+  excerptHash: string | null;
+  createdAt: string;
+}> {
+  const references = verifiedGenerationSourceReferences(result, request);
+  const sourceText = request.context.current_source.excerpt.replace(/\s+/g, " ").trim();
+  return references.flatMap((reference) => {
+    const citation = (result.citations || []).find((item) =>
+      item.book_revision_id === reference.bookRevisionId &&
+      item.structure_node_id === reference.structureNodeId &&
+      item.locator === reference.locator &&
+      Boolean(item.excerpt?.trim()) &&
+      sourceText.includes(item.excerpt.replace(/\s+/g, " ").trim())
+    );
+    if (!citation?.excerpt) return [];
+    return [{
+      id: crypto.randomUUID(),
+      threadId,
+      messageId,
+      bookRevisionId: reference.bookRevisionId,
+      structureNodeId: reference.structureNodeId,
+      locator: reference.locator,
+      excerpt: citation.excerpt,
+      excerptHash: null,
+      createdAt,
+    }];
+  });
 }
 
 /** SSE deltas are provisional; only a completed GET snapshot is authoritative. */
@@ -370,6 +436,7 @@ export interface GenerationTurnRepository {
     appendUserMessage(message: { id: string; threadId: string; content: string; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
     appendAssistantMessage(message: { id: string; threadId: string; content: string; status: "generating"; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
     transitionAssistantMessage(messageId: string, status: "completed" | "failed" | "cancelled", content?: string, sourceReferences?: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }>): Promise<unknown>;
+    saveCitation(citation: { id: string; threadId: string; messageId: string; bookRevisionId: string; structureNodeId: string; locator: string; excerpt: string; excerptHash: string | null; createdAt: string }): Promise<unknown>;
     saveGenerationDelivery(delivery: { clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }): Promise<unknown>;
   }) => Promise<T>): Promise<T>;
   getGenerationDelivery(clientGenerationId: string): Promise<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string } | null>;
@@ -484,6 +551,7 @@ export async function runGenerationTurn(
   if (snapshot.status === "completed" && snapshot.result) {
     await repository.transaction(input.datasetId, async (tx) => {
       await tx.transitionAssistantMessage(input.assistantMessageId, "completed", snapshot.result!.content, verifiedGenerationSourceReferences(snapshot.result!, input.request));
+      for (const citation of verifiedGenerationCitationRecords(snapshot.result!, input.request, input.assistantMessageId, input.userMessage.threadId, now())) await tx.saveCitation(citation);
       await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "completed", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
     });
   } else if (snapshot.status === "failed" || snapshot.status === "expired") {
@@ -538,6 +606,7 @@ export async function recoverGenerationTurn(
   if (snapshot.status === "completed" && snapshot.result) {
     await repository.transaction(input.datasetId, async (tx) => {
       await tx.transitionAssistantMessage(delivery.assistantMessageId, "completed", snapshot.result!.content, verifiedGenerationSourceReferences(snapshot.result!, input.request));
+      for (const citation of verifiedGenerationCitationRecords(snapshot.result!, input.request, delivery.assistantMessageId, delivery.threadId, now())) await tx.saveCitation(citation);
       await tx.saveGenerationDelivery({ ...delivery, generationId: accepted.generation_id, status: "completed", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
     });
   } else if (snapshot.status === "failed" || snapshot.status === "expired" || snapshot.status === "cancelled") {

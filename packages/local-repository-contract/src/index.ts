@@ -315,6 +315,7 @@ export function createAgentGenerationTurnRepository(
       appendUserMessage(message: NewUserMessage): Promise<PersistedMessage>;
       appendAssistantMessage(message: NewAssistantMessage): Promise<PersistedMessage>;
       transitionAssistantMessage(messageId: string, status: AssistantMessageStatus, content?: string, sourceReferences?: SourceReference[]): Promise<AssistantMessage>;
+      saveCitation(citation: CitationRecord): Promise<void>;
       saveGenerationDelivery(delivery: GenerationDeliveryRecord): Promise<GenerationDeliveryRecord>;
     }) => Promise<T>): Promise<T> {
       if (id !== datasetId) throw new RepositoryError("DATASET_NOT_FOUND", "Agent turn dataset does not match the bound local dataset.");

@@ -274,7 +274,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       book_revision_id: bookRevision.bookRevisionId,
       user_message: { local_message_id: userMessageId, content },
       context: {
-        current_source: { structure_node_id: unit.id, excerpt: unit.text },
+        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
         recent_messages: recentMessages,
         response_preferences: { language: "zh-CN" },
       },
@@ -320,7 +320,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       book_revision_id: bookRevision.bookRevisionId,
       user_message: { local_message_id: userMessageId, content: user.content },
       context: {
-        current_source: { structure_node_id: unit.id, excerpt: unit.text },
+        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
         recent_messages: priorMessages,
         response_preferences: { language: "zh-CN" },
       },
@@ -357,7 +357,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         book_revision_id: bookRevision.bookRevisionId,
         user_message: { local_message_id: user.id, content: user.content },
         context: {
-          current_source: { structure_node_id: unit.id, excerpt: unit.text },
+          current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
           recent_messages: messages.slice(-12).map(({ message }) => ({ role: message.role, content: message.content })),
           response_preferences: { language: "zh-CN" },
         },

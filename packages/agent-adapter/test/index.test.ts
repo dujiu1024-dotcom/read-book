@@ -11,6 +11,7 @@ import {
   validateGenerationRequest,
   validateGenerationSnapshot,
   verifiedGenerationSourceReferences,
+  verifiedGenerationCitationRecords,
   type GenerationRequest,
 } from "../src/index.ts";
 
@@ -20,7 +21,7 @@ const request: GenerationRequest = {
   book_revision_id: "22222222-2222-4222-8222-222222222222",
   user_message: { local_message_id: "33333333-3333-4333-8333-333333333333", content: "用户原始表达" },
   context: {
-    current_source: { structure_node_id: "44444444-4444-4444-8444-444444444444", excerpt: "当前原文片段" },
+    current_source: { structure_node_id: "44444444-4444-4444-8444-444444444444", locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
     recent_messages: [{ role: "user", content: "之前的讨论" }],
     relevant_memory: [],
   },
@@ -202,6 +203,7 @@ function memoryTurnRepository() {
   const messages = new Map<string, { status: string; content: string }>();
   const deliveries = new Map<string, any>();
   const references = new Map<string, unknown[]>();
+  const citations: unknown[] = [];
   let appendUserCount = 0;
   let appendAssistantCount = 0;
   const repository = {
@@ -218,6 +220,7 @@ function memoryTurnRepository() {
           references.set(id, sourceReferences);
           return { id, status, content };
         },
+        async saveCitation(citation: unknown) { citations.push(citation); return citation; },
         async saveGenerationDelivery(delivery: any) {
           deliveries.set(delivery.clientGenerationId, { ...delivery });
           return delivery;
@@ -230,6 +233,7 @@ function memoryTurnRepository() {
     messages,
     deliveries,
     references,
+    citations,
   };
   return repository;
 }
@@ -380,22 +384,28 @@ test("validates structured citations and rejects malformed citation identity", (
     expires_at: accepted.expires_at,
     result: { content: "回答", citations: [{ book_revision_id: "invalid", structure_node_id: request.context.current_source.structure_node_id, locator: "x" }] },
   }), GenerationProtocolError);
+  assert.throws(() => validateGenerationSnapshot({
+    generation_id: accepted.generation_id,
+    status: "completed",
+    expires_at: accepted.expires_at,
+    result: { content: "回答", citations: [{ book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: request.context.current_source.locator }] },
+  }), GenerationProtocolError);
 });
 
 test("only citations from the current BookRevision and current source node become persisted references", () => {
   const result = {
     content: "回答",
     citations: [
-      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-1" },
-      { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "other-node" },
-      { book_revision_id: "66666666-6666-4666-8666-666666666666", structure_node_id: request.context.current_source.structure_node_id, locator: "other-book" },
-      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-1" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
+      { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "other-node", excerpt: "当前原文片段" },
+      { book_revision_id: "66666666-6666-4666-8666-666666666666", structure_node_id: request.context.current_source.structure_node_id, locator: "other-book", excerpt: "当前原文片段" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
     ],
   };
   assert.deepEqual(verifiedGenerationSourceReferences(result, request), [{
     bookRevisionId: request.book_revision_id,
     structureNodeId: request.context.current_source.structure_node_id,
-    locator: "locator-1",
+    locator: "epubcfi(/6/4!/4/2)",
   }]);
 });
 
@@ -412,7 +422,7 @@ test("generation turn persists only service-verified citations for its current s
         result: {
           content: "带原文来源的最终回答",
           citations: [
-            { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-current" },
+            { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
             { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "locator-other-node" },
           ],
         },
@@ -433,6 +443,23 @@ test("generation turn persists only service-verified citations for its current s
   assert.deepEqual(repository.references.get("assistant-message-citations"), [{
     bookRevisionId: request.book_revision_id,
     structureNodeId: request.context.current_source.structure_node_id,
-    locator: "locator-current",
+    locator: "epubcfi(/6/4!/4/2)",
   }]);
+  assert.equal(repository.citations.length, 1);
+  assert.equal((repository.citations[0] as any).excerpt, "当前原文片段");
+});
+
+
+test("citation records require a quoted excerpt found in the current source text", () => {
+  const result = {
+    content: "回答",
+    citations: [
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "fabricated", excerpt: "不存在的引用片段" },
+    ],
+  };
+  const records = verifiedGenerationCitationRecords(result, request, "assistant-message-citation", request.thread_id, "2026-11-14T00:00:00.000Z");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].excerpt, "当前原文片段");
+  assert.equal(records[0].messageId, "assistant-message-citation");
 });
