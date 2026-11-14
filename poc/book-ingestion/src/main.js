@@ -6,7 +6,7 @@ import { saveBook, getBook, listBooks } from './storage.js';
 
 const $ = (id) => document.getElementById(id);
 let current = null;
-let citations = [];
+let citations = [];\nlet savedBooks = [];\nconst CORPUS = [\n  { key: 'chuanxilu', match: /传习录/i, title: '传习录', author: '王阳明' },\n  ...[1,2,3,4,5].map((volume) => ({ key: 'maoxuan-' + volume, match: new RegExp('毛泽东选集.*(第)?' + volume + '(卷)?|毛选.*(第)?' + volume, 'i'), title: '毛泽东选集 第' + volume + '卷', author: '毛泽东' }))\n];\nfunction identifyBook(fileName, parsed) {\n  const entry = CORPUS.find((item) => item.match.test(fileName));\n  return { corpusKey: entry?.key || null, title: entry?.title || parsed.title || fileName.replace(/\\.[^.]+$/, ''), author: entry?.author || (Array.isArray(parsed.author) ? parsed.author.join('、') : (parsed.author || '')), language: parsed.language || 'zh-CN' };\n}
 const digest = async (bytes) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((v) => v.toString(16).padStart(2, '0')).join('');
 function show(value) { $('output').textContent = JSON.stringify(value, null, 2); }
 function setCitations(parsed) {
@@ -92,7 +92,7 @@ async function renderSaved() {
     const item = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = book.name + ' · ' + book.id.slice(0, 12) + ' · ' + book.parsed.format;
+    button.textContent = (book.metadata?.title || book.name) + ' · ' + book.id.slice(0, 12) + ' · ' + book.parsed.format;
     button.addEventListener('click', async () => {
       try { await openSavedBook(book.id); }
       catch (error) { $('status').textContent = '本地恢复失败：' + error.message; }
@@ -109,7 +109,43 @@ $('file').addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
   if (file) { try { await importFile(file); } catch (error) { $('status').textContent = '导入失败：' + error.message; show({ error: error.message }); } }
 });
-function resolveCitationSource(citation) {
+
+$('export-package').addEventListener('click', async () => {
+  if (!current) return;
+  try {
+    $('status').textContent = '正在生成标准书籍包…';
+    const metadata = {
+      title: $('book-title').value,
+      author: $('book-author').value,
+      language: $('book-language').value,
+      isbn: $('book-isbn').value,
+      edition: $('book-edition').value,
+      translator: $('book-translator').value,
+      publisher: $('book-publisher').value
+    };
+    current.metadata = metadata;
+    await saveBook(current);
+    const result = await buildBookPackage({
+      fileName: current.name,
+      sourceBytes: new Uint8Array(current.bytes),
+      parsed: current.parsed,
+      metadata
+    });
+    const blob = new Blob([result.archive], { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = (result.manifest.book.title.replace(/[\\\\/:*?"<>|]/g, '_') || 'book') + '.read-book.zip';
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    $('status').textContent = '标准书籍包已生成：' + result.manifest.counts.chapters + ' 个章节、' + result.manifest.counts.chunks + ' 个正文切片。';
+    show({ manifest: result.manifest, archiveBytes: result.archive.byteLength });
+  } catch (error) {
+    $('status').textContent = '标准书籍包生成失败：' + error.message;
+    show({ error: error.message });
+  }
+});
+\nfunction resolveCitationSource(citation) {
   if (!current || !citation) return { unit: null, text: '' };
   if (current.parsed.format === 'EPUB') {
     const chapter = current.parsed.chapters.find((item) => item.href === citation.detail);
