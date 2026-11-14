@@ -42,7 +42,8 @@ test("parses a valid standard package into stable reading units", async () => {
   assert.match(book.bookId, /^[0-9a-f-]{36}$/i);
   assert.match(book.bookRevisionId, /^[0-9a-f-]{36}$/i);
   assert.notEqual(book.bookRevisionId, book.packageMetadata.packageId);
-  assert.equal(book.initialMainlineUnitId, "chunk-000001");
+  assert.match(book.initialMainlineUnitId, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(book.units[0].sourceChunkId, "chunk-000001");
   assert.equal(book.units[0].chapter, "第一章");
   assert.equal(book.units[0].text, "第一段正文内容。");
 });
@@ -89,5 +90,14 @@ test("keeps the generated local BookRevision identity stable when reopening a pa
   });
   assert.equal(reopened.bookId, first.bookId);
   assert.equal(reopened.bookRevisionId, first.bookRevisionId);
+  assert.equal(reopened.initialMainlineUnitId, first.initialMainlineUnitId);
   assert.equal(reopened.packageMetadata.packageId, first.packageMetadata.packageId);
+});
+
+test("reuses the same book identity when the same package is imported again", async () => {
+  const first = await parseBookPackage(fixture());
+  const second = await parseBookPackage(fixture());
+  assert.equal(second.bookId, first.bookId);
+  assert.equal(second.bookRevisionId, first.bookRevisionId);
+  assert.equal(second.initialMainlineUnitId, first.initialMainlineUnitId);
 });

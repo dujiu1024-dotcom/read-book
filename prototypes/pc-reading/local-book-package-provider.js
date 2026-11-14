@@ -24,6 +24,20 @@ async function sha256(bytes) {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+/** 把任意稳定字符串映射为确定性 UUID（v5 形状）。 */
+async function deterministicUuid(seed) {
+  const hex = (await sha256(new TextEncoder().encode(seed))).slice(0, 32).split("");
+  hex[12] = "5";
+  hex[16] = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  const value = hex.join("");
+  return [value.slice(0, 8), value.slice(8, 12), value.slice(12, 16), value.slice(16, 20), value.slice(20)].join("-");
+}
+
+/** 把任意稳定字符串映射为确定性 UUID（v5 形状），供阅读/生成契约使用。 */
+async function stableUnitId(bookRevisionId, chunkId) {
+  return deterministicUuid(bookRevisionId + "\n" + chunkId);
+}
+
 function safeArchivePath(name) {
   if (typeof name !== "string" || !name || name.includes("\\") || name.includes("\0") || name.startsWith("/") || /^[A-Za-z]:/.test(name)) {
     throw new Error("ZIP 包含绝对路径或格式异常的路径。");
@@ -164,8 +178,10 @@ export async function parseBookPackage(input, identity = {}) {
   }
   const packageId = requiredText(manifest.package_id, "manifest.package_id");
   if (!UUID.test(packageId)) throw new Error("manifest.package_id 必须是 UUID。");
-  const bookId = identity.bookId || crypto.randomUUID();
-  const bookRevisionId = identity.bookRevisionId || crypto.randomUUID();
+  // 书籍身份由 package_id 确定性派生：重复导入同一个包会复用同一个 BookRevision，
+  // 已存在的讨论消息、笔记和阅读位置因此继续可见，而不是新建一个孤立 revision。
+  const bookId = identity.bookId || await deterministicUuid("read-book:book:" + packageId);
+  const bookRevisionId = identity.bookRevisionId || await deterministicUuid("read-book:revision:" + packageId);
   if (!UUID.test(bookId) || !UUID.test(bookRevisionId)) throw new Error("本地 Book/BookRevision 标识必须是 UUID。");
 
   const sourcePath = requiredText(manifest.source?.file, "manifest.source.file");
@@ -294,6 +310,7 @@ export async function parseBookPackage(input, identity = {}) {
     return leftPath.length - rightPath.length || left.order_index - right.order_index;
   });
   const ids = new Set();
+  const unitIds = new Set();
   const units = [];
   for (const chunk of chunks) {
     if (ids.has(chunk.chunk_id)) throw new Error("书籍包存在重复正文切片 ID：" + chunk.chunk_id);
@@ -302,8 +319,15 @@ export async function parseBookPackage(input, identity = {}) {
       throw new Error("正文切片 SHA-256 校验失败：" + chunk.chunk_id);
     }
     const chapter = chaptersById.get(chunk.chapter_id);
+    // 书籍包 schema 允许任意非空 chunk_id（例如入库工具生成的 chunk-000001），
+    // 但阅读/生成契约要求 structure_node_id 是 UUID，否则提问会在协议校验处失败。
+    // 这里做确定性映射，既满足契约，也保证同一本书重复导入时引用保持稳定。
+    const id = UUID.test(chunk.chunk_id) ? chunk.chunk_id : await stableUnitId(bookRevisionId, chunk.chunk_id);
+    if (unitIds.has(id)) throw new Error("书籍包正文切片映射后 ID 冲突：" + chunk.chunk_id);
+    unitIds.add(id);
     units.push({
-      id: chunk.chunk_id,
+      id,
+      sourceChunkId: chunk.chunk_id,
       chapter: chapterPath(chapter, chaptersById),
       title: chapter.title,
       locator: chunk.start_locator,
