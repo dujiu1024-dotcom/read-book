@@ -37,7 +37,7 @@ PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不�
 - [x] [#22 移动触控适配模拟视口自动化验收](https://github.com/dujiu1024-dotcom/read-book/pull/22)（已合并，不要求实体设备测试）
 - [x] [#8 PC 阅读交互原型](https://github.com/dujiu1024-dotcom/read-book/issues/8)（PR #20/#22 已合并；原型验收完成）
 - [ ] [#25 正式阅读客户端](https://github.com/dujiu1024-dotcom/read-book/issues/25)（PR #30 已合并：BookContentProvider 解耦；真实书籍 Provider 待接入）
-- [ ] [#26 本地个人数据 Repository](https://github.com/dujiu1024-dotcom/read-book/issues/26)（PR #32 已合并 Repository 契约；PR #33 SQLite OPFS 适配器开发中）
+- [ ] [#26 本地个人数据 Repository](https://github.com/dujiu1024-dotcom/read-book/issues/26)（PR #32 Repository 契约与 PR #33 SQLite OPFS 首版适配器均已合并；迁移/恢复/备份验收仍待完成）
 - [ ] [#27 Agent 生成适配器与可靠消息交付](https://github.com/dujiu1024-dotcom/read-book/issues/27)（PR #31 已合并：协议适配与先保存后请求；真实 Transport 待接入）
 - [ ] [#28 自动认知沉淀、版本演变与来源追溯](https://github.com/dujiu1024-dotcom/read-book/issues/28)（PR #29 已合并：认知候选评估规则）
 
