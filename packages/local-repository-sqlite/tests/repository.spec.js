@@ -193,3 +193,93 @@ test("message source references cannot cross immutable BookRevision boundaries",
   expect(result.rejected).toBe(true);
   expect(result.messages).toHaveLength(0);
 });
+
+
+test("schema v2 migration preserves a legacy v1 dataset and advances its schema marker", async ({ page }) => {
+  await page.goto("/");
+  const seeded = await page.evaluate(async () => {
+    const worker = new Worker("/tests/legacy-db.worker.js", { type: "module" });
+    return await new Promise((resolve, reject) => {
+      worker.onmessage = ({ data }) => { worker.terminate(); resolve(data); };
+      worker.onerror = (event) => { worker.terminate(); reject(new Error(event.message)); };
+      worker.postMessage({ type: "seed-v1" });
+    });
+  });
+  expect(seeded.ok).toBe(true);
+
+  const migrated = await page.evaluate(async () => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    const dataset = await repository.getDataSet("legacy-v1-dataset");
+    await repository.close();
+    return dataset;
+  });
+  expect(migrated.id).toBe("legacy-v1-dataset");
+  expect(migrated.schemaVersion).toBe(2);
+  expect(migrated.dirtySequence).toBe(7);
+  expect(migrated.lastAckedSequence).toBe(2);
+});
+
+test("MemoryRelation persists only when both versions and source provenance belong to the dataset", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    const relation = {
+      id: "relation-1",
+      fromVersionId: "version-a1",
+      toVersionId: "version-b1",
+      relationType: "contradicts",
+      sourceMessageIds: [ids.messageA],
+      sourceReferences: [],
+      createdAt: "2026-11-14T01:00:00.000Z",
+    };
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({
+        id: ids.threadId,
+        datasetId: ids.datasetA,
+        bookRevisionId: ids.revision,
+        createdAt: "2026-11-14T00:00:00.000Z",
+      });
+      await tx.appendUserMessage({
+        id: ids.messageA, threadId: ids.threadId, content: "观点 A",
+        createdAt: "2026-11-14T00:00:01.000Z", sourceReferences: [],
+      });
+      await tx.appendUserMessage({
+        id: ids.messageB, threadId: ids.threadId, content: "观点 B",
+        createdAt: "2026-11-14T00:00:02.000Z", sourceReferences: [],
+      });
+      await tx.appendMemoryVersion({
+        id: "version-a1", memoryId: "memory-a", version: 1, previousVersionId: null,
+        changeKind: "new", content: "观点 A", sourceMessageIds: [ids.messageA],
+        sourceReferences: [], createdAt: "2026-11-14T00:00:03.000Z",
+      });
+      await tx.appendMemoryVersion({
+        id: "version-b1", memoryId: "memory-b", version: 1, previousVersionId: null,
+        changeKind: "new", content: "观点 B", sourceMessageIds: [ids.messageB],
+        sourceReferences: [], createdAt: "2026-11-14T00:00:04.000Z",
+      });
+      await tx.appendMemoryRelation(relation);
+    });
+    const relations = await repository.getMemoryRelations(ids.datasetA, "version-a1");
+    const snapshot = await repository.transaction(ids.datasetA, (tx) => tx.createConsistentSnapshot());
+    let invalidRejected = false;
+    try {
+      await repository.transaction(ids.datasetA, (tx) => tx.appendMemoryRelation({
+        ...relation, id: "relation-invalid", toVersionId: "missing-version",
+      }));
+    } catch { invalidRejected = true; }
+    await repository.close();
+    return { relations, snapshot, invalidRejected };
+  }, {
+    datasetA: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    revision: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    messageA: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    messageB: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+  });
+  expect(result.relations).toHaveLength(1);
+  expect(result.relations[0].relationType).toBe("contradicts");
+  expect(result.snapshot.memoryRelations).toHaveLength(1);
+  expect(result.invalidRejected).toBe(true);
+});

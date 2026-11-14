@@ -12,13 +12,13 @@ import type {
   NewAssistantMessage,
   AccountDataSetBinding,
 } from "../../local-repository-contract/src/index.ts";
-import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion } from "../../domain-core/src/index.ts";
+import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, MemoryRelation } from "../../domain-core/src/index.ts";
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
-  readonly schemaVersion = 1;
+  readonly schemaVersion = 2;
   private worker: Worker;
   private nextId = 0;
   private pending = new Map<number, Pending>();
@@ -78,6 +78,7 @@ export class SqliteOpfsRepository implements LocalRepository {
         saveNote: (note: NoteRecord) => call("saveNote", { note }),
         appendMemoryVersion: (version: MemoryVersion) =>
           call("appendMemoryVersion", { version }),
+        appendMemoryRelation: (relation) => call("appendMemoryRelation", { relation }),
         createAccountDataSetBinding: (binding: AccountDataSetBinding) => call("createAccountDataSetBinding", { binding }),
         getAccountDataSetBinding: (bindingId: string) => call("getAccountDataSetBinding", { bindingId }),
         softRevokeAccountDataSetBinding: (bindingId: string, revokedAt: string) =>
@@ -106,6 +107,10 @@ export class SqliteOpfsRepository implements LocalRepository {
   async getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]> {
     await this.ensureReady();
     return this.request("getMemoryVersions", { datasetId, memoryId });
+  }
+  async getMemoryRelations(datasetId: string, versionId: string): Promise<MemoryRelation[]> {
+    await this.ensureReady();
+    return this.request("getMemoryRelations", { datasetId, versionId });
   }
   async close(): Promise<void> {
     if (this.closed) return;

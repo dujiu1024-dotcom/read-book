@@ -2,6 +2,7 @@ import type {
   AssistantMessage,
   AssistantMessageStatus,
   MemoryVersion,
+  MemoryRelation,
   Message,
   ReadingPosition,
   ReadingRound,
@@ -142,6 +143,7 @@ export interface RepositorySnapshot {
   notes: NoteRecord[];
   memories: MemoryRecord[];
   memoryVersions: MemoryVersion[];
+  memoryRelations: MemoryRelation[];
 }
 
 /**
@@ -169,6 +171,7 @@ export interface LocalRepositoryTransaction {
   saveCitation(citation: CitationRecord): Promise<void>;
   saveNote(note: NoteRecord): Promise<void>;
   appendMemoryVersion(version: MemoryVersion): Promise<MemoryVersion>;
+  appendMemoryRelation(relation: MemoryRelation): Promise<MemoryRelation>;
 
   createAccountDataSetBinding(binding: AccountDataSetBinding): Promise<AccountDataSetBinding>;
   getAccountDataSetBinding(bindingId: string): Promise<AccountDataSetBinding | null>;
@@ -189,6 +192,7 @@ export interface LocalRepository {
   getDataSet(datasetId: string): Promise<LocalDataSet | null>;
   getMessages(datasetId: string, threadId: string, afterSequence?: number): Promise<PersistedMessage[]>;
   getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]>;
+  getMemoryRelations(datasetId: string, versionId: string): Promise<MemoryRelation[]>;
   close(): Promise<void>;
 }
 
