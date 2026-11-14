@@ -288,7 +288,7 @@ export function verifiedGenerationCitationRecords(
       item.structure_node_id === reference.structureNodeId &&
       item.locator === reference.locator &&
       Boolean(item.excerpt?.trim()) &&
-      sourceText.includes(item.excerpt.replace(/\\s+/g, " ").trim())
+      sourceText.includes(item.excerpt.replace(/\s+/g, " ").trim())
     );
     if (!citation?.excerpt) return [];
     return [{
