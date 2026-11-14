@@ -77,6 +77,17 @@ test("rejects a package with a tampered source file", async () => {
 test("rejects archive paths that escape the package root", async () => {
   await assert.rejects(
     () => parseBookPackage(zipSync({ "../escape.txt": strToU8("not allowed") })),
-    /非法路径/,
+    /路径穿越/,
   );
+});
+
+test("keeps the generated local BookRevision identity stable when reopening a package", async () => {
+  const first = await parseBookPackage(fixture());
+  const reopened = await parseBookPackage(fixture(), {
+    bookId: first.bookId,
+    bookRevisionId: first.bookRevisionId,
+  });
+  assert.equal(reopened.bookId, first.bookId);
+  assert.equal(reopened.bookRevisionId, first.bookRevisionId);
+  assert.equal(reopened.packageMetadata.packageId, first.packageMetadata.packageId);
 });
