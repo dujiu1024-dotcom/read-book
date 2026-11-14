@@ -104,6 +104,8 @@ export class SqliteOpfsRepository implements LocalRepository {
         softRevokeAccountDataSetBinding: (bindingId: string, revokedAt: string) =>
           call("softRevokeAccountDataSetBinding", { bindingId, revokedAt }),
         createConsistentSnapshot: () => call("createConsistentSnapshot"),
+        acknowledgeBackup: (snapshotSequence: number, backupId: string, backedUpAt: string) =>
+          call("acknowledgeBackup", { snapshotSequence, backupId, backedUpAt }),
       } as LocalRepositoryTransaction;
       try {
         const result = await operation(tx);
