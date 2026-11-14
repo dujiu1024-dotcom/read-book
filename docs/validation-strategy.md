@@ -415,3 +415,13 @@
 - Gate F：窄屏布局在窗口缩放、浏览器缩放和键盘操作下完成可用性测试。
 
 以上 Gate 未通过前，不得将技术选型写成已验证，不得声称知行个人数据备份/恢复已经可靠，也不自动放行正式业务开发。
+
+## 6. Agent/RAG 离线评测工具（2026-11-13）
+
+- 工具目录：[eval/agent-rag](../eval/agent-rag/README.md)。
+- 评测输入采用 corpus/questions/predictions 三类 JSONL；检索器和模型通过统一 prediction JSONL 解耦。
+- 当前提供 12 个合成 chunk、30 道覆盖六类问题的测试题，以及指标计算与输入完整性测试。
+- 可计算 Recall@K、Citation Precision、Citation Coverage、人工审阅 Groundedness、Locator Accuracy、无依据题拒答准确率、禁止 Agent 行为事件、延迟和 Token 成本。
+- 评测脚本不自动判定语义蕴含；Groundedness 必须由人工填写审阅结果。Citation 命中 gold chunk 也不等于该引用足以支持答案全部结论。
+- 当前语料只模拟 EPUB/PDF/TXT 的定位结构，是自编合成夹具，不是真实书籍样本；尚未满足三种真实书籍格式、版权/授权记录和真实模型/检索器首轮测量的验收要求。
+- 当前不设置质量通过阈值；合成夹具的 CI 通过只证明评测协议和计算逻辑，不证明真实 Agent/RAG 质量。
