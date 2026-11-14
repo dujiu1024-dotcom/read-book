@@ -1,0 +1,19 @@
+{
+  "contract_version": "1.0.0",
+  "revision_states": ["uploaded", "validating_package", "queued", "processing", "quality_check", "accepted", "pending_rights_review", "publishable", "published", "rejected", "retryable_failed", "failed", "needs_rework"],
+  "attempt_states": ["queued", "running", "succeeded", "retryable_failed", "failed", "cancelled"],
+  "stages": [
+    { "stage": "package_inspection", "depends_on": [], "retry_scope": ["package_inspection"] },
+    { "stage": "source_verification", "depends_on": ["package_inspection"], "retry_scope": ["source_verification"] },
+    { "stage": "metadata_normalization", "depends_on": ["source_verification"], "retry_scope": ["metadata_normalization", "parse", "normalize", "structure", "chunk", "embedding", "index_build", "quality_check"] },
+    { "stage": "parse", "depends_on": ["source_verification"], "retry_scope": ["parse", "normalize", "structure", "chunk", "embedding", "index_build", "quality_check"] },
+    { "stage": "normalize", "depends_on": ["parse"], "retry_scope": ["normalize", "structure", "chunk", "embedding", "index_build", "quality_check"] },
+    { "stage": "structure", "depends_on": ["normalize"], "retry_scope": ["structure", "chunk", "embedding", "index_build", "quality_check"] },
+    { "stage": "chunk", "depends_on": ["structure"], "retry_scope": ["chunk", "embedding", "index_build", "quality_check"] },
+    { "stage": "embedding", "depends_on": ["chunk"], "retry_scope": ["embedding", "index_build", "quality_check"] },
+    { "stage": "index_build", "depends_on": ["embedding"], "retry_scope": ["index_build", "quality_check"] },
+    { "stage": "quality_check", "depends_on": ["index_build"], "retry_scope": ["quality_check"] },
+    { "stage": "rights_review", "depends_on": ["quality_check"], "retry_scope": ["rights_review"] },
+    { "stage": "publish", "depends_on": ["rights_review"], "retry_scope": ["publish"] }
+  ]
+}
