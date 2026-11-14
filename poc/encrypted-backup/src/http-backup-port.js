@@ -3,6 +3,7 @@ import {
   encryptBackup,
   shouldCreateFullCheckpoint,
   restoreBackupChain,
+  restoreBackupChainWithKey,
 } from "./index.js";
 import { createBrowserBackupKeyStore } from "./browser-key-store.js";
 
@@ -235,7 +236,7 @@ export function createHttpEncryptedBackupPort({
     return { manifest, chunks };
   }
 
-  async function restoreSnapshot(recoveryCredential) {
+  async function loadRestoreChain() {
     const records = await listBackups();
     if (!records.length) throw new Error("No committed backups are available for this dataset");
     const byId = new Map(records.map((record) => [record.backup_id, record]));
@@ -251,7 +252,35 @@ export function createHttpEncryptedBackupPort({
       if (chain.length > records.length) throw new Error("Backup parent chain is invalid");
     }
     if (chain[0].manifest.backupType !== "full") throw new Error("Latest backup chain does not reach a full checkpoint");
+    return chain;
+  }
+
+  async function restoreSnapshot(recoveryCredential) {
+    const chain = await loadRestoreChain();
     return restoreBackupChain(chain, recoveryCredential);
+  }
+
+  async function restoreToRepository(repository, recoveryCredential) {
+    const chain = await loadRestoreChain();
+    const restored = await restoreBackupChainWithKey(chain, recoveryCredential);
+    const previousKeyState = await keyStore.get(datasetId);
+    await keyStore.put(datasetId, {
+      dataKey: restored.dataKey,
+      keyEnvelope: restored.keyEnvelope,
+      lastSnapshot: restored.snapshot,
+      lastBackupId: restored.backupId,
+      backupCountSinceFull: restored.backupsSinceFull,
+      keyVersion: restored.keyVersion || keyVersion,
+      pendingUpload: null,
+    });
+    try {
+      await repository.restoreSnapshot(datasetId, restored.snapshot, restored.backupId, new Date().toISOString());
+    } catch (error) {
+      if (previousKeyState) await keyStore.put(datasetId, previousKeyState);
+      else await keyStore.delete(datasetId);
+      throw error;
+    }
+    return { snapshot: restored.snapshot, backupId: restored.backupId };
   }
 
   async function clearDataSet() {
@@ -262,5 +291,5 @@ export function createHttpEncryptedBackupPort({
     });
   }
 
-  return Object.freeze({ uploadSnapshot, listBackups, restoreSnapshot, clearDataSet });
+  return Object.freeze({ uploadSnapshot, listBackups, restoreSnapshot, restoreToRepository, clearDataSet });
 }
