@@ -67,3 +67,10 @@ test("rejects a package with a tampered source file", async () => {
   await assert.rejects(() => parseBookPackage(zipSync(files)), /原始文件 SHA-256/);
   assert.ok(archive.byteLength > 0);
 });
+
+test("rejects archive paths that escape the package root", async () => {
+  await assert.rejects(
+    () => parseBookPackage(zipSync({ "../escape.txt": strToU8("not allowed") })),
+    /非法路径/,
+  );
+});
