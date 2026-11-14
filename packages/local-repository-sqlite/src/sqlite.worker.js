@@ -18,7 +18,7 @@ function parseJson(value, fallback = []) {
 function ensureDataset(datasetId) {
   if (typeof datasetId !== "string" || !datasetId.trim()) throw new Error("datasetId 非法");
   execute(
-    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,5,?,?,0,0,'active')",
+    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,6,?,?,0,0,'active')",
     [datasetId, new Date().toISOString(), new Date().toISOString()],
   );
   const dataset = first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
@@ -103,6 +103,33 @@ async function initialize() {
       current_unit_discussed INTEGER NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS presented_source (
+      id TEXT PRIMARY KEY,
+      dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+      thread_id TEXT NOT NULL REFERENCES thread(id),
+      book_revision_id TEXT NOT NULL,
+      structure_node_id TEXT NOT NULL,
+      chunk_id TEXT,
+      presentation_type TEXT NOT NULL CHECK(presentation_type IN ('mainline','review','temporary','citation')),
+      reading_round_id TEXT REFERENCES reading_round(id),
+      presented_at TEXT NOT NULL,
+      source_locator TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_presented_source_thread ON presented_source(dataset_id,thread_id,presented_at);
+    CREATE INDEX IF NOT EXISTS idx_presented_source_round ON presented_source(dataset_id,reading_round_id,structure_node_id);
+    CREATE TABLE IF NOT EXISTS reading_unit_progress (
+      reading_round_id TEXT NOT NULL REFERENCES reading_round(id),
+      dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+      thread_id TEXT NOT NULL REFERENCES thread(id),
+      structure_node_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('not_presented','presented','awaiting_user','discussion_active','discussed','skipped')),
+      first_presented_source_id TEXT REFERENCES presented_source(id),
+      last_activity_message_id TEXT REFERENCES message(id),
+      completed_at TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(reading_round_id,structure_node_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_reading_unit_progress_thread ON reading_unit_progress(dataset_id,thread_id,reading_round_id,status);
     CREATE TABLE IF NOT EXISTS citation (
       id TEXT PRIMARY KEY,
       dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
@@ -153,7 +180,7 @@ async function initialize() {
   // Existing installations have the v1 schema and no PRAGMA user_version marker.
   // Treat version 0 as the shipped v1 baseline, then migrate atomically to v2.
   const storedVersion = Number(first("PRAGMA user_version")?.user_version ?? 0);
-  if (storedVersion > 5) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
+  if (storedVersion > 6) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
   if (storedVersion < 2) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -227,7 +254,6 @@ async function initialize() {
       throw new Error("数据库 Schema v4 迁移失败，已回滚", { cause: error });
     }
   }
-}
   if (storedVersion < 5) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -238,6 +264,47 @@ async function initialize() {
       throw new Error("数据库 Schema v5 迁移失败，已回滚", { cause: error });
     }
   }
+  if (storedVersion < 6) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      db.exec({ sql: `
+        CREATE TABLE IF NOT EXISTS presented_source (
+          id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          thread_id TEXT NOT NULL REFERENCES thread(id),
+          book_revision_id TEXT NOT NULL,
+          structure_node_id TEXT NOT NULL,
+          chunk_id TEXT,
+          presentation_type TEXT NOT NULL CHECK(presentation_type IN ('mainline','review','temporary','citation')),
+          reading_round_id TEXT REFERENCES reading_round(id),
+          presented_at TEXT NOT NULL,
+          source_locator TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_presented_source_thread ON presented_source(dataset_id,thread_id,presented_at);
+        CREATE INDEX IF NOT EXISTS idx_presented_source_round ON presented_source(dataset_id,reading_round_id,structure_node_id);
+        CREATE TABLE IF NOT EXISTS reading_unit_progress (
+          reading_round_id TEXT NOT NULL REFERENCES reading_round(id),
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          thread_id TEXT NOT NULL REFERENCES thread(id),
+          structure_node_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('not_presented','presented','awaiting_user','discussion_active','discussed','skipped')),
+          first_presented_source_id TEXT REFERENCES presented_source(id),
+          last_activity_message_id TEXT REFERENCES message(id),
+          completed_at TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(reading_round_id,structure_node_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_reading_unit_progress_thread ON reading_unit_progress(dataset_id,thread_id,reading_round_id,status);
+        UPDATE local_dataset SET schema_version=6;
+        PRAGMA user_version=6;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v6 迁移失败，已回滚", { cause: error });
+    }
+  }
+}
 function assertDataset(datasetId) {
   if (!activeDatasetId || datasetId !== activeDatasetId) throw new Error("事务 datasetId 不匹配");
 }
@@ -622,7 +689,7 @@ function handle(message) {
     const datasetId=message.datasetId;
     const snapshot=message.snapshot;
     if (!snapshot || snapshot.datasetId!==datasetId || !Number.isSafeInteger(snapshot.schemaVersion) ||
-        snapshot.schemaVersion<1 || snapshot.schemaVersion>5 || !Number.isSafeInteger(snapshot.dirtySequence) ||
+        snapshot.schemaVersion<1 || snapshot.schemaVersion>6 || !Number.isSafeInteger(snapshot.dirtySequence) ||
         snapshot.dirtySequence<1 || typeof message.backupId!=="string" || !message.backupId.trim() ||
         !Number.isFinite(Date.parse(message.restoredAt))) {
       throw new Error("Backup snapshot metadata is invalid");
