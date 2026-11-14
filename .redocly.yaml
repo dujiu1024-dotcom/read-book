@@ -1,0 +1,7 @@
+extends: []
+rules:
+  no-unresolved-refs: error
+  operation-operationId: error
+  operation-summary: error
+  no-unused-components: warn
+  no-invalid-media-type-examples: warn
