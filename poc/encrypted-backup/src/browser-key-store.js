@@ -66,6 +66,9 @@ export function createBrowserBackupKeyStore({
         keyEnvelope: state.keyEnvelope,
         lastSnapshot: state.lastSnapshot ?? null,
         lastBackupId: state.lastBackupId ?? null,
+        backupCountSinceFull: state.backupCountSinceFull ?? 0,
+        keyVersion: state.keyVersion ?? 1,
+        pendingUpload: state.pendingUpload ?? null,
         updatedAt: new Date().toISOString(),
       });
       await done;
