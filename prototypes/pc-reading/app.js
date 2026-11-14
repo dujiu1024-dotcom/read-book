@@ -130,12 +130,17 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
     const body = document.createElement("p");
     body.textContent = message.text;
     content.append(meta, body);
-    if (message.citation) {
+    const citationReferences = Array.isArray(message.citations)
+      ? message.citations
+      : message.citation ? [{ structureNodeId: message.citation }] : [];
+    for (const reference of citationReferences) {
+      const structureNodeId = typeof reference === "string" ? reference : reference.structureNodeId;
+      if (!structureNodeId) continue;
       const citation = document.createElement("div");
       citation.className = "citation-card";
       const label = document.createElement("div");
       label.className = "citation-label";
-      const citedUnit = units.find(item => item.id === message.citation);
+      const citedUnit = units.find(item => item.id === structureNodeId);
       label.textContent = "引用 · " + (citedUnit?.chapter || "原文来源");
       const quote = document.createElement("p");
       quote.textContent = citedUnit ? "“" + citedUnit.text.slice(0, 55) + "……”" : "引用来源暂不可用。";
@@ -143,7 +148,7 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
       link.type = "button";
       link.className = "text-button citation-link";
       link.textContent = "查看原文位置 ↗";
-      link.addEventListener("click", () => showCitation(message.citation));
+      link.addEventListener("click", () => showCitation(structureNodeId));
       citation.append(label, quote, link);
       content.append(citation);
     }
@@ -553,7 +558,7 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
         time: message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "刚刚",
         saved: message.role === "user",
         failed: message.status === "failed" || message.status === "cancelled",
-        citation: message.sourceReferences?.[0]?.structureNodeId,
+        citations: message.sourceReferences || [],
       });
     }
   }
