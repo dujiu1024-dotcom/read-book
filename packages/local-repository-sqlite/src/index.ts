@@ -11,8 +11,8 @@ import type {
   NewUserMessage,
   NewAssistantMessage,
   AccountDataSetBinding,
-} from "../local-repository-contract/src/index.ts";
-import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion } from "../domain-core/src/index.ts";
+} from "../../local-repository-contract/src/index.ts";
+import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion } from "../../domain-core/src/index.ts";
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
@@ -69,8 +69,8 @@ export class SqliteOpfsRepository implements LocalRepository {
         saveReadingPosition: (position: ReadingPositionRecord) => call("saveReadingPosition", { position }),
         saveCitation: (citation: CitationRecord) => call("saveCitation", { citation }),
         saveNote: (note: NoteRecord) => call("saveNote", { note }),
-        appendMemoryVersion: (version: MemoryVersion, threadId?: string) =>
-          call("appendMemoryVersion", { version, threadId }),
+        appendMemoryVersion: (version: MemoryVersion) =>
+          call("appendMemoryVersion", { version }),
         getAccountDataSetBinding: (bindingId: string) => call("getAccountDataSetBinding", { bindingId }),
         softRevokeAccountDataSetBinding: (bindingId: string, revokedAt: string) =>
           call("softRevokeAccountDataSetBinding", { bindingId, revokedAt }),
