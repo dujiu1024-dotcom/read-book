@@ -10,6 +10,7 @@ import {
   validateGenerationAccepted,
   validateGenerationRequest,
   validateGenerationSnapshot,
+  verifiedGenerationSourceReferences,
   type GenerationRequest,
 } from "../src/index.ts";
 
@@ -200,6 +201,7 @@ test("rejects malformed result payloads and non-object relevant memory", () => {
 function memoryTurnRepository() {
   const messages = new Map<string, { status: string; content: string }>();
   const deliveries = new Map<string, any>();
+  const references = new Map<string, unknown[]>();
   let appendUserCount = 0;
   let appendAssistantCount = 0;
   const repository = {
@@ -211,8 +213,9 @@ function memoryTurnRepository() {
           messages.set(message.id, { status: message.status, content: message.content });
           return { message };
         },
-        async transitionAssistantMessage(id: string, status: string, content = "") {
+        async transitionAssistantMessage(id: string, status: string, content = "", sourceReferences: unknown[] = []) {
           messages.set(id, { status, content });
+          references.set(id, sourceReferences);
           return { id, status, content };
         },
         async saveGenerationDelivery(delivery: any) {
@@ -226,6 +229,7 @@ function memoryTurnRepository() {
     get counts() { return { appendUserCount, appendAssistantCount }; },
     messages,
     deliveries,
+    references,
   };
   return repository;
 }
@@ -351,4 +355,46 @@ test("conversation controller rejects sends outside its bound dataset", async ()
     sourceReferences: [],
   }), GenerationProtocolError);
   assert.deepEqual(repository.counts, { appendUserCount: 0, appendAssistantCount: 0 });
+});
+
+
+test("validates structured citations and rejects malformed citation identity", () => {
+  const snapshot = validateGenerationSnapshot({
+    generation_id: accepted.generation_id,
+    status: "completed",
+    expires_at: accepted.expires_at,
+    result: {
+      content: "带来源的回答",
+      citations: [{
+        book_revision_id: request.book_revision_id,
+        structure_node_id: request.context.current_source.structure_node_id,
+        locator: "epubcfi(/6/4!/4/2)",
+        excerpt: "原文片段",
+      }],
+    },
+  });
+  assert.equal(snapshot.result?.citations?.length, 1);
+  assert.throws(() => validateGenerationSnapshot({
+    generation_id: accepted.generation_id,
+    status: "completed",
+    expires_at: accepted.expires_at,
+    result: { content: "回答", citations: [{ book_revision_id: "invalid", structure_node_id: request.context.current_source.structure_node_id, locator: "x" }] },
+  }), GenerationProtocolError);
+});
+
+test("only citations from the current BookRevision and current source node become persisted references", () => {
+  const result = {
+    content: "回答",
+    citations: [
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-1" },
+      { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "other-node" },
+      { book_revision_id: "66666666-6666-4666-8666-666666666666", structure_node_id: request.context.current_source.structure_node_id, locator: "other-book" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-1" },
+    ],
+  };
+  assert.deepEqual(verifiedGenerationSourceReferences(result, request), [{
+    bookRevisionId: request.book_revision_id,
+    structureNodeId: request.context.current_source.structure_node_id,
+    locator: "locator-1",
+  }]);
 });
