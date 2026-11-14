@@ -3,6 +3,7 @@ const RAW_GITHUB = "https://raw.githubusercontent.com";
 const MAX_FILE_CHARACTERS = 2_000_000;
 const MAX_BOOK_CHARACTERS = 16_000_000;
 const CONCURRENCY = 5;
+const SOURCE_CACHE_NAME = "read-book-github-corpus-v1";
 const VOLUMES = [
   { key: "maoxuan-1", title: "毛泽东选集 第一卷", volume: "第一卷", path: "第一卷" },
   { key: "maoxuan-2", title: "毛泽东选集 第二卷", volume: "第二卷", path: "第二卷" },
@@ -168,14 +169,50 @@ async function sourceFingerprint(units) {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-export function createGithubCorpusProvider({ fetchImpl = globalThis.fetch } = {}) {
+function createCacheAwareFetch(fetchImpl, cacheStorage) {
+  let fallbackCount = 0;
+  return {
+    get fallbackCount() { return fallbackCount; },
+    async fetch(url, options) {
+      const cacheable = typeof url === "string" &&
+        (url.startsWith(GITHUB_API + "/repos/") || url.startsWith(RAW_GITHUB + "/"));
+      let cache = null;
+      if (cacheable && cacheStorage?.open) {
+        try { cache = await cacheStorage.open(SOURCE_CACHE_NAME); } catch { cache = null; }
+      }
+      try {
+        const response = await fetchImpl(url, options);
+        if (response.ok && cache) {
+          void cache.put(url, response.clone()).catch(() => {});
+        } else if (!response.ok && cache) {
+          try {
+            const cached = await cache.match(url);
+            if (cached) { fallbackCount += 1; return cached; }
+          } catch {}
+        }
+        return response;
+      } catch (error) {
+        if (cache) {
+          try {
+            const cached = await cache.match(url);
+            if (cached) { fallbackCount += 1; return cached; }
+          } catch {}
+        }
+        throw error;
+      }
+    }
+  };
+}
+
+export function createGithubCorpusProvider({ fetchImpl = globalThis.fetch, cacheStorage = globalThis.caches } = {}) {
   if (typeof fetchImpl !== "function") throw new TypeError("GitHub 语料 Provider 需要 fetch 实现。");
+  const sourceFetch = createCacheAwareFetch(fetchImpl, cacheStorage);
   return Object.freeze({
     async loadBookRevision(bookRevisionId) {
       const key = requiredText(bookRevisionId, "BookRevision ID").replace(/^github-corpus-/, "");
       const book = GITHUB_CORPUS_BOOKS.find((item) => item.key === key);
       if (!book) throw new Error("不支持的 GitHub 语料书目：" + key);
-      const units = key === "chuanxilu" ? await loadChuanxiLu(fetchImpl) : await loadMaoXuanVolume(fetchImpl, VOLUMES.find((item) => item.key === key));
+      const units = key === "chuanxilu" ? await loadChuanxiLu(sourceFetch.fetch.bind(sourceFetch)) : await loadMaoXuanVolume(sourceFetch.fetch.bind(sourceFetch), VOLUMES.find((item) => item.key === key));
       const sourceSnapshotSha256 = await sourceFingerprint(units);
       return {
         bookRevisionId: "github-corpus-" + key + "-" + sourceSnapshotSha256.slice(0, 20),
@@ -186,7 +223,9 @@ export function createGithubCorpusProvider({ fetchImpl = globalThis.fetch } = {}
           kind: "public-github-source", repository: book.source,
           sourceUrl: key === "chuanxilu" ? "https://github.com/garychowcmu/daizhigev20" : "https://github.com/ruguoaaa/gushi",
           attribution: "正文按需从公开 GitHub 仓库读取。公开可访问不等于已确认再分发许可；本模式不将正文复制进 read-book 仓库。",
-          loadedAt: new Date().toISOString(), unitCount: units.length
+          loadedAt: new Date().toISOString(), unitCount: units.length,
+          cacheFallbackCount: sourceFetch.fallbackCount,
+          cacheEnabled: Boolean(cacheStorage?.open)
         }
       };
     }
