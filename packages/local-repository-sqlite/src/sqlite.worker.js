@@ -18,7 +18,7 @@ function parseJson(value, fallback = []) {
 function ensureDataset(datasetId) {
   if (typeof datasetId !== "string" || !datasetId.trim()) throw new Error("datasetId 非法");
   execute(
-    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,3,?,?,0,0,'active')",
+    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,4,?,?,0,0,'active')",
     [datasetId, new Date().toISOString(), new Date().toISOString()],
   );
   const dataset = first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
@@ -153,7 +153,7 @@ async function initialize() {
   // Existing installations have the v1 schema and no PRAGMA user_version marker.
   // Treat version 0 as the shipped v1 baseline, then migrate atomically to v2.
   const storedVersion = Number(first("PRAGMA user_version")?.user_version ?? 0);
-  if (storedVersion > 3) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
+  if (storedVersion > 4) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
   if (storedVersion < 2) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -207,6 +207,24 @@ async function initialize() {
     } catch (error) {
       db.exec({ sql: "ROLLBACK" });
       throw new Error("数据库 Schema v3 迁移失败，已回滚", { cause: error });
+    }
+  }
+  if (storedVersion < 4) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      db.exec({ sql: `
+        ALTER TABLE memory_version ADD COLUMN title TEXT NOT NULL DEFAULT '';
+        ALTER TABLE memory_version ADD COLUMN viewpoint TEXT NOT NULL DEFAULT 'user' CHECK(viewpoint IN ('user','author','assistant_inference'));
+        ALTER TABLE memory_version ADD COLUMN confidence REAL NOT NULL DEFAULT 1 CHECK(confidence >= 0 AND confidence <= 1);
+        ALTER TABLE memory_version ADD COLUMN ambiguity REAL NOT NULL DEFAULT 0 CHECK(ambiguity >= 0 AND ambiguity <= 1);
+        ALTER TABLE memory_version ADD COLUMN evaluation_score REAL NOT NULL DEFAULT 0 CHECK(evaluation_score >= 0 AND evaluation_score <= 1);
+        UPDATE local_dataset SET schema_version=4;
+        PRAGMA user_version=4;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v4 迁移失败，已回滚", { cause: error });
     }
   }
 }
@@ -366,8 +384,8 @@ function txOperation(datasetId, operation, input) {
         assertSourceReferences(datasetId,memory.thread_id,v.sourceReferences);
         execute("UPDATE memory SET current_version_id=?,updated_at=? WHERE id=?", [v.id,v.createdAt,v.memoryId]);
       }
-      execute("INSERT INTO memory_version(id,dataset_id,memory_id,version,previous_version_id,change_kind,content,source_message_ids,source_references,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-        [v.id,datasetId,v.memoryId,v.version,v.previousVersionId,v.changeKind,v.content,JSON.stringify(v.sourceMessageIds),JSON.stringify(v.sourceReferences),v.createdAt]);
+      execute("INSERT INTO memory_version(id,dataset_id,memory_id,version,previous_version_id,change_kind,content,source_message_ids,source_references,created_at,title,viewpoint,confidence,ambiguity,evaluation_score) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [v.id,datasetId,v.memoryId,v.version,v.previousVersionId,v.changeKind,v.content,JSON.stringify(v.sourceMessageIds),JSON.stringify(v.sourceReferences),v.createdAt,v.title || "",v.viewpoint || "user",v.confidence ?? 1,v.ambiguity ?? 0,v.evaluationScore ?? 0]);
       transactionDirty=true;
       return v;
     }
@@ -494,7 +512,7 @@ function txOperation(datasetId, operation, input) {
         citations:execute("SELECT * FROM citation WHERE dataset_id=?", [datasetId]).map(c=>({id:c.id,threadId:c.thread_id,messageId:c.message_id,bookRevisionId:c.book_revision_id,structureNodeId:c.structure_node_id,locator:c.locator,excerpt:c.excerpt,excerptHash:c.excerpt_hash,createdAt:c.created_at})),
         notes:execute("SELECT * FROM note WHERE dataset_id=?", [datasetId]).map(n=>({id:n.id,datasetId:n.dataset_id,threadId:n.thread_id,readingRoundId:n.reading_round_id,content:n.content,sourceMessageIds:parseJson(n.source_message_ids),sourceReferences:parseJson(n.source_references),createdAt:n.created_at,updatedAt:n.updated_at,revision:n.revision})),
         memories:execute("SELECT * FROM memory WHERE dataset_id=?", [datasetId]).map(m=>({id:m.id,datasetId:m.dataset_id,threadId:m.thread_id,currentVersionId:m.current_version_id,createdAt:m.created_at,updatedAt:m.updated_at})),
-        memoryVersions:execute("SELECT * FROM memory_version WHERE dataset_id=? ORDER BY memory_id,version", [datasetId]).map(v=>({id:v.id,memoryId:v.memory_id,version:v.version,previousVersionId:v.previous_version_id,changeKind:v.change_kind,content:v.content,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references),createdAt:v.created_at})),
+        memoryVersions:execute("SELECT * FROM memory_version WHERE dataset_id=? ORDER BY memory_id,version", [datasetId]).map(v=>({id:v.id,memoryId:v.memory_id,version:v.version,previousVersionId:v.previous_version_id,changeKind:v.change_kind,content:v.content,title:v.title,viewpoint:v.viewpoint,confidence:v.confidence,ambiguity:v.ambiguity,evaluationScore:v.evaluation_score,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references),createdAt:v.created_at})),
         memoryRelations:execute("SELECT * FROM memory_relation WHERE dataset_id=? ORDER BY created_at,id", [datasetId]).map(r=>({id:r.id,fromVersionId:r.from_version_id,toVersionId:r.to_version_id,relationType:r.relation_type,sourceMessageIds:parseJson(r.source_message_ids),sourceReferences:parseJson(r.source_references),createdAt:r.created_at})),
         generationDeliveries:execute("SELECT * FROM generation_delivery WHERE dataset_id=? ORDER BY updated_at,client_generation_id", [datasetId]).map(r=>({clientGenerationId:r.client_generation_id,generationId:r.generation_id,threadId:r.thread_id,userMessageId:r.user_message_id,assistantMessageId:r.assistant_message_id,idempotencyKey:r.idempotency_key,status:r.status,lastSequence:r.last_sequence,lastEventId:r.last_event_id,expiresAt:r.expires_at,updatedAt:r.updated_at})),
       };

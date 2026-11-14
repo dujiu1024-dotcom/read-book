@@ -120,3 +120,31 @@ test("memory extraction allows an empty candidate result for ordinary conversati
   assert.equal(result.needsConfirmation.length, 0);
   assert.equal(result.rejected.length, 0);
 });
+
+
+test("persists accepted candidates only when an explicit immutable version plan is supplied", async () => {
+  const { persistAcceptedMemoryCandidates } = await import("../src/memory-extraction.ts");
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const writes: unknown[] = [];
+  const repository = {
+    async transaction(_datasetId: string, operation: (tx: any) => Promise<unknown>) {
+      return operation({
+        async appendMemoryVersion(version: unknown) { writes.push({ kind: "version", version }); },
+        async appendMemoryRelation(relation: unknown) { writes.push({ kind: "relation", relation }); },
+      });
+    },
+  };
+  const ids = await persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, [{
+    candidateId: "candidate-1", memoryId: "memory-1", version: 1, previousVersionId: null, changeKind: "new",
+  }], () => "2026-11-14T00:00:00.000Z");
+  assert.deepEqual(ids, ["candidate-1"]);
+  assert.equal(writes.length, 1);
+  assert.equal((writes[0] as any).version.viewpoint, "user");
+  assert.equal((writes[0] as any).version.evaluationScore, accepted.accepted[0].evaluation.score);
+  await assert.rejects(
+    persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, []),
+    /Every accepted candidate needs exactly one plan/,
+  );
+});
