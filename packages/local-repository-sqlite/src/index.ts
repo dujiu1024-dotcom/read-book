@@ -12,7 +12,7 @@ import type {
   NewAssistantMessage,
   AccountDataSetBinding,
 } from "../../local-repository-contract/src/index.ts";
-import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion } from "../../domain-core/src/index.ts";
+import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, MemoryRelation } from "../../domain-core/src/index.ts";
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
@@ -108,7 +108,7 @@ export class SqliteOpfsRepository implements LocalRepository {
     await this.ensureReady();
     return this.request("getMemoryVersions", { datasetId, memoryId });
   }
-  async getMemoryRelations(datasetId: string, versionId: string) {
+  async getMemoryRelations(datasetId: string, versionId: string): Promise<MemoryRelation[]> {
     await this.ensureReady();
     return this.request("getMemoryRelations", { datasetId, versionId });
   }
