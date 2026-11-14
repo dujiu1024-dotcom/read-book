@@ -342,7 +342,9 @@ export interface GenerationTurnRepository {
     appendUserMessage(message: { id: string; threadId: string; content: string; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
     appendAssistantMessage(message: { id: string; threadId: string; content: string; status: "generating"; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
     transitionAssistantMessage(messageId: string, status: "completed" | "failed" | "cancelled", content?: string): Promise<unknown>;
+    saveGenerationDelivery(delivery: { clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }): Promise<unknown>;
   }) => Promise<T>): Promise<T>;
+  getGenerationDelivery(clientGenerationId: string): Promise<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string } | null>;
 }
 
 export interface GenerationTurnInput {
@@ -378,23 +380,30 @@ export async function runGenerationTurn(
   await repository.transaction(input.datasetId, async (tx) => {
     await tx.appendUserMessage({ ...input.userMessage, createdAt: now(), sourceReferences: input.sourceReferences, idempotencyKey: input.idempotencyKey });
     await tx.appendAssistantMessage({ id: input.assistantMessageId, threadId: input.userMessage.threadId, content: "", status: "generating", createdAt: now(), sourceReferences: [], idempotencyKey: input.idempotencyKey + ":assistant" });
+    await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: null, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "queued", lastSequence: 0, lastEventId: null, expiresAt: null, updatedAt: now() });
   });
   let accepted: GenerationAccepted;
   try {
     accepted = await client.create(input.request, input.idempotencyKey);
+    await repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "running", lastSequence: 0, lastEventId: null, expiresAt: accepted.expires_at, updatedAt: now() }));
   } catch (error) {
     await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "failed"));
     throw error;
   }
   let cursor: GenerationEventCursor = { generationId: accepted.generation_id, lastSequence: 0, lastEventId: null };
   let streamError: unknown = null;
+  let persistEvents = Promise.resolve();
   try {
     cursor = await client.stream(accepted.generation_id, cursor, input.signal, (event) => {
+      const next = advanceGenerationEventCursor({ generationId: accepted.generation_id, lastSequence: event.sequence - 1, lastEventId: null }, event).cursor;
+      const status = event.type === "started" ? "running" : event.type === "failed" ? "failed" : event.type === "cancelled" ? "cancelled" : "running";
+      persistEvents = persistEvents.then(() => repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status, lastSequence: next.lastSequence, lastEventId: event.event_id, expiresAt: accepted.expires_at, updatedAt: now() })));
       if (event.type === "delta") input.onDelta?.(event.text);
       if (event.type === "started") input.onStatus?.("running");
       if (event.type === "failed") input.onStatus?.("failed");
       if (event.type === "cancelled") input.onStatus?.("cancelled");
     });
+    await persistEvents;
   } catch (error) {
     streamError = error;
   }
@@ -412,11 +421,20 @@ export async function runGenerationTurn(
     throw streamError ?? error;
   }
   if (snapshot.status === "completed" && snapshot.result) {
-    await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "completed", snapshot.result!.content));
+    await repository.transaction(input.datasetId, async (tx) => {
+      await tx.transitionAssistantMessage(input.assistantMessageId, "completed", snapshot.result!.content);
+      await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "completed", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
+    });
   } else if (snapshot.status === "failed" || snapshot.status === "expired") {
-    await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "failed"));
+    await repository.transaction(input.datasetId, async (tx) => {
+      await tx.transitionAssistantMessage(input.assistantMessageId, "failed");
+      await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: snapshot.status, lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
+    });
   } else if (snapshot.status === "cancelled") {
-    await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "cancelled"));
+    await repository.transaction(input.datasetId, async (tx) => {
+      await tx.transitionAssistantMessage(input.assistantMessageId, "cancelled");
+      await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "cancelled", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
+    });
   }
   input.onStatus?.(snapshot.status);
   return { accepted, snapshot, assistantMessageId: input.assistantMessageId, lastCursor: cursor };
