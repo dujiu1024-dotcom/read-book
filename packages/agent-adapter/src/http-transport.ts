@@ -23,6 +23,12 @@ function requiredText(value: unknown, field: string): string {
   return value;
 }
 
+function validateGenerationId(value: string): string {
+  const id = requiredText(value, "generationId");
+  if (id.length < 16 || id.length > 128) throw new TypeError("generationId length must be 16..128.");
+  return id;
+}
+
 function validateIdempotencyKey(value: string): string {
   const key = requiredText(value, "Idempotency-Key");
   if (key.length < 16 || key.length > 128) throw new TypeError("Idempotency-Key length must be 16..128.");
@@ -188,7 +194,7 @@ export function createHttpGenerationTransport({
     },
 
     async getGeneration(generationId: string): Promise<unknown> {
-      const id = encodeURIComponent(requiredText(generationId, "generationId"));
+      const id = encodeURIComponent(validateGenerationId(generationId));
       return jsonRequest(`v1/generations/${id}`, { method: "GET" });
     },
 
