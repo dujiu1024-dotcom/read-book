@@ -465,6 +465,51 @@ import { hasGenerationService } from "./reader-capabilities.js";
       author: "作者观点",
       assistant_inference: "AI 推演",
     }[value] || "观点来源未标注");
+    const relationLabel = (value) => ({
+      supports: "补充支持",
+      contradicts: "观点冲突",
+      extends: "延伸",
+      supersedes: "修正替代",
+      retracts: "撤回",
+      duplicate_of: "重复关联",
+    }[value] || value || "关联");
+    const sourceMessageById = new Map((data.sourceMessages || []).map((item) => [item.id, item]));
+    const versionById = new Map((data.versions || []).map((item) => [item.id, item]));
+    const appendProvenance = (container, item) => {
+      const sourceIds = item.sourceMessageIds || [];
+      const references = item.sourceReferences || [];
+      const sourceBox = document.createElement("div");
+      sourceBox.className = "memory-provenance";
+      const heading = document.createElement("strong");
+      heading.textContent = "来源追溯";
+      sourceBox.append(heading);
+      if (sourceIds.length) {
+        const messages = document.createElement("ul");
+        for (const id of sourceIds) {
+          const source = sourceMessageById.get(id);
+          const line = document.createElement("li");
+          line.textContent = source
+            ? (source.role === "user" ? "用户原话：" : "AI 回复：") + source.content
+            : "原始消息 ID：" + id + "（当前 Thread 中暂不可读取）";
+          messages.append(line);
+        }
+        sourceBox.append(messages);
+      } else {
+        const missing = document.createElement("p");
+        missing.textContent = "未记录来源消息。";
+        sourceBox.append(missing);
+      }
+      if (references.length) {
+        const refs = document.createElement("ul");
+        for (const reference of references) {
+          const line = document.createElement("li");
+          line.textContent = "原文定位：" + reference.locator + " · 节点 " + reference.structureNodeId;
+          refs.append(line);
+        }
+        sourceBox.append(refs);
+      }
+      container.append(sourceBox);
+    };
 
     for (const memory of data.memories || []) {
       const versions = (data.versions || []).filter((item) => item.memoryId === memory.id).sort((a, b) => a.version - b.version);
@@ -480,18 +525,42 @@ import { hasGenerationService } from "./reader-capabilities.js";
       const content = document.createElement("p");
       content.textContent = current.content;
       card.append(heading, meta, content);
+      appendProvenance(card, current);
       if (versions.length > 1) {
         const details = document.createElement("details");
         const summary = document.createElement("summary");
         summary.textContent = "查看认知演变历史（" + versions.length + " 个版本）";
         details.append(summary);
         for (const version of versions) {
+          const versionBox = document.createElement("section");
+          versionBox.className = "memory-history-item";
           const item = document.createElement("p");
-          item.className = "memory-history-item";
           item.textContent = "v" + version.version + " · " + version.changeKind + " · " + version.content;
-          details.append(item);
+          versionBox.append(item);
+          appendProvenance(versionBox, version);
+          details.append(versionBox);
         }
         card.append(details);
+      }
+      const versionIds = new Set(versions.map((item) => item.id));
+      const relations = (data.relations || []).filter((relation) =>
+        versionIds.has(relation.fromVersionId) || versionIds.has(relation.toVersionId));
+      if (relations.length) {
+        const relationBox = document.createElement("div");
+        relationBox.className = "memory-relations";
+        const relationHeading = document.createElement("strong");
+        relationHeading.textContent = "认知关联";
+        relationBox.append(relationHeading);
+        for (const relation of relations) {
+          const from = versionById.get(relation.fromVersionId);
+          const to = versionById.get(relation.toVersionId);
+          const line = document.createElement("p");
+          line.textContent = relationLabel(relation.relationType) + "：" +
+            (from?.title || from?.content || relation.fromVersionId) + " ↔ " +
+            (to?.title || to?.content || relation.toVersionId);
+          relationBox.append(line);
+        }
+        card.append(relationBox);
       }
       list.append(card);
     }
@@ -537,7 +606,9 @@ import { hasGenerationService } from "./reader-capabilities.js";
         }
       });
       actions.append(confirm, reject);
-      card.append(heading, meta, content, actions);
+      card.append(heading, meta, content);
+      appendProvenance(card, record.candidate);
+      card.append(actions);
       pending.append(card);
     }
     if (!(data.memories || []).length && !(data.pendingCandidates || []).length) {
