@@ -244,5 +244,24 @@ export function validateProcessingContract(contract) {
     visited.add(stageName);
   }
   for (const stageName of stages.keys()) visit(stageName);
+  const revisionStates = new Set(contract.revision_states);
+  const attemptStates = new Set(contract.attempt_states);
+  for (const transition of contract.revision_transitions) {
+    if (!revisionStates.has(transition.from) || !revisionStates.has(transition.to)) issues.push(issue("REVISION_TRANSITION_STATE_UNKNOWN", "Revision transition references an unknown state", { evidence: transition }));
+  }
+  for (const transition of contract.attempt_transitions) {
+    if (!attemptStates.has(transition.from) || !attemptStates.has(transition.to)) issues.push(issue("ATTEMPT_TRANSITION_STATE_UNKNOWN", "Attempt transition references an unknown state", { evidence: transition }));
+  }
+  const revisionOutgoing = new Set(contract.revision_transitions.map((item) => item.from));
+  for (const terminal of ["published","rejected","failed"]) if (revisionOutgoing.has(terminal)) issues.push(issue("REVISION_TERMINAL_STATE_HAS_EXIT", "Terminal revision state must not have outgoing transitions: " + terminal));
+  const attemptOutgoing = new Set(contract.attempt_transitions.map((item) => item.from));
+  for (const terminal of ["succeeded","failed","cancelled"]) if (attemptOutgoing.has(terminal)) issues.push(issue("ATTEMPT_TERMINAL_STATE_HAS_EXIT", "Terminal attempt state must not have outgoing transitions: " + terminal));
+  const requiredGates = ["package_schema_valid","source_integrity_verified","chapter_tree_valid","chunk_references_valid","content_hashes_valid","quality_policy_passed","rights_review_approved"];
+  const gateMap = new Map(contract.acceptance_gates.map((gate) => [gate.gate_id, gate]));
+  for (const gateId of requiredGates) if (!gateMap.has(gateId)) issues.push(issue("ACCEPTANCE_GATE_MISSING", "Required acceptance gate is missing: " + gateId));
+  for (const gate of contract.acceptance_gates) {
+    if (requiredGates.includes(gate.gate_id) && !gate.required) issues.push(issue("ACCEPTANCE_GATE_NOT_REQUIRED", "Required gate is marked optional: " + gate.gate_id));
+    if (gate.gate_id === "rights_review_approved" && gate.applies_to.includes("accept")) issues.push(issue("RIGHTS_GATE_SCOPE_INVALID", "Rights approval must gate publication, not package acceptance."));
+  }
   return issues;
 }
