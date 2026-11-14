@@ -124,7 +124,26 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       retry.type = "button";
       retry.className = "text-button";
       retry.textContent = "重试";
-      retry.addEventListener("click", () => productionRuntime ? productionRuntime.retryFailedGeneration(message.id).then(refreshPersistedMessages).catch(error => setGenerationStatus("重试失败：" + error.message)) : retryLast());
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        if (productionRuntime) {
+          setGenerating(true);
+          setGenerationStatus("正在使用原始输入重新发起生成…");
+          try {
+            await productionRuntime.retryFailedGeneration(message.id);
+            await refreshPersistedMessages();
+            setGenerationStatus("重试完成，原始用户消息未重复写入。");
+          } catch (error) {
+            setGenerationStatus("重试失败：" + error.message);
+            retry.disabled = false;
+          } finally {
+            setGenerating(false);
+          }
+        } else {
+          retry.disabled = false;
+          retryLast();
+        }
+      });
       content.append(retry);
     }
     article.append(avatar, content);
@@ -460,7 +479,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
         text: message.content || (message.status === "generating" ? "正在生成…" : "本次生成未返回内容。"),
         time: message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "刚刚",
         saved: message.role === "user",
-        failed: message.status === "failed",
+        failed: message.status === "failed" || message.status === "cancelled",
         citation: message.sourceReferences?.[0]?.structureNodeId,
       });
     }
