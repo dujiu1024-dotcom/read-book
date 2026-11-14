@@ -110,7 +110,7 @@ export interface CitationRecord {
 
 export interface NoteRecord {
   id: string;
-  dataSetId: string;
+  datasetId: string;
   threadId: string;
   readingRoundId: string | null;
   content: string;
@@ -123,7 +123,7 @@ export interface NoteRecord {
 
 export interface MemoryRecord {
   id: string;
-  dataSetId: string;
+  datasetId: string;
   threadId: string;
   currentVersionId: string;
   createdAt: string;
@@ -131,7 +131,7 @@ export interface MemoryRecord {
 }
 
 export interface RepositorySnapshot {
-  dataSetId: string;
+  datasetId: string;
   schemaVersion: number;
   dirtySequence: number;
   threads: Thread[];
@@ -150,7 +150,9 @@ export interface RepositorySnapshot {
  * A transaction callback must never perform network/model calls or wait for UI input.
  */
 export interface LocalRepositoryTransaction {
-  getThreadByRevision(dataSetId: string, bookRevisionId: string): Promise<Thread | null>;
+  /** All operations are scoped to this dataset for the lifetime of the transaction. */
+  readonly datasetId: string;
+  getThreadByRevision(bookRevisionId: string): Promise<Thread | null>;
   createThread(thread: Thread): Promise<Thread>;
 
   appendUserMessage(message: NewUserMessage): Promise<PersistedMessage>;
@@ -172,7 +174,7 @@ export interface LocalRepositoryTransaction {
   /** Soft revoke only the selected binding and its derived authorization/index data. */
   softRevokeAccountDataSetBinding(bindingId: string, revokedAt: string): Promise<boolean>;
 
-  createConsistentSnapshot(dataSetId: string): Promise<RepositorySnapshot>;
+  createConsistentSnapshot(): Promise<RepositorySnapshot>;
 }
 
 /**
@@ -182,10 +184,10 @@ export interface LocalRepositoryTransaction {
 export interface LocalRepository {
   readonly adapterName: string;
   readonly schemaVersion: number;
-  transaction<T>(operation: (tx: LocalRepositoryTransaction) => Promise<T>): Promise<T>;
-  getDataSet(dataSetId: string): Promise<LocalDataSet | null>;
-  getMessages(threadId: string, afterSequence?: number): Promise<PersistedMessage[]>;
-  getMemoryVersions(memoryId: string): Promise<MemoryVersion[]>;
+  transaction<T>(datasetId: string, operation: (tx: LocalRepositoryTransaction) => Promise<T>): Promise<T>;
+  getDataSet(datasetId: string): Promise<LocalDataSet | null>;
+  getMessages(datasetId: string, threadId: string, afterSequence?: number): Promise<PersistedMessage[]>;
+  getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]>;
   close(): Promise<void>;
 }
 
@@ -196,12 +198,13 @@ export interface AgentUserMessageRepository {
 
 export function createAgentUserMessageRepository(
   repository: Pick<LocalRepository, "transaction">,
+  datasetId: string,
   createMessage: (input: { id: string; threadId: string; content: string }) => NewUserMessage,
 ): AgentUserMessageRepository {
   return {
     async saveUserMessage(message) {
       const input = createMessage(message);
-      await repository.transaction(async (tx) => {
+      await repository.transaction(datasetId, async (tx) => {
         await tx.appendUserMessage(input);
       });
     },
