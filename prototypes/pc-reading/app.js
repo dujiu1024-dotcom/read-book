@@ -1,15 +1,19 @@
 import { createDemoBookContentProvider } from "./book-content-provider.js";
 import { createPublicBookApiProvider } from "./public-book-content-provider.js";
 import { createProductionReaderRuntime } from "./reader-runtime.js";
+import { createLocalBookPackageProvider, importBookPackageFile } from "./local-book-package-provider.js";
 
 (() => {
   let units = [];
   let bookRevision = null;
   const readerConfig = window.READ_BOOK_CONFIG || {};
-  const isDemoProvider = !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId;
+  const activeLocalBookPackageId = readerConfig.localBookPackageId || (() => {
+    try { return window.localStorage.getItem("read-book:active-local-book") || ""; } catch { return ""; }
+  })();
+  const isDemoProvider = !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId && !activeLocalBookPackageId;
   let bookContentProvider = null;
   let productionRuntime = null;
-  const requestedBookRevisionId = readerConfig.bookRevisionId || (isDemoProvider ? "demo-book-revision-1" : "");
+  const requestedBookRevisionId = readerConfig.bookRevisionId || activeLocalBookPackageId || (isDemoProvider ? "demo-book-revision-1" : "");
 
   const state = {
     mainlineIndex: 1,
@@ -44,6 +48,8 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     if (!unit || !bookRevision) return;
     $("bookTitle").textContent = bookRevision.title;
     $("bookAuthor").textContent = bookRevision.author;
+    const topbarTitle = document.querySelector(".topbar-book strong");
+    if (topbarTitle) topbarTitle.textContent = bookRevision.title;
     $("sourceHeading").textContent = unit.title;
     $("sourceText").textContent = unit.text;
     $("sourceLocator").textContent = unit.locator;
@@ -150,6 +156,24 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     messageList.append(article);
     updateCount();
     scrollIfFollowing();
+  }
+
+  function renderTemporaryOptions() {
+    const container = document.querySelector(".chapter-options");
+    if (!container) return;
+    container.replaceChildren();
+    for (const unit of units) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chapter-option";
+      button.dataset.unit = unit.id;
+      const chapter = document.createElement("strong");
+      chapter.textContent = unit.chapter;
+      const title = document.createElement("span");
+      title.textContent = unit.title;
+      button.append(chapter, title);
+      container.append(button);
+    }
   }
 
   function showCitation(unitId) {
@@ -278,15 +302,15 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
   });
 
   $("temporaryButton").addEventListener("click", () => $("temporaryDialog").showModal());
-  document.querySelectorAll("[data-unit]").forEach(button => {
-    button.addEventListener("click", () => {
-      const unit = units.find(item => item.id === button.dataset.unit);
-      if (!unit) return;
-      state.displayedUnit = unit;
-      state.viewMode = "temporary";
-      $("temporaryDialog").close();
-      renderSource();
-    });
+  document.querySelector(".chapter-options").addEventListener("click", event => {
+    const button = event.target.closest("[data-unit]");
+    if (!button) return;
+    const unit = units.find(item => item.id === button.dataset.unit);
+    if (!unit) return;
+    state.displayedUnit = unit;
+    state.viewMode = "temporary";
+    $("temporaryDialog").close();
+    renderSource();
   });
 
   $("returnMainline").addEventListener("click", returnToMainline);
@@ -345,6 +369,24 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
   $("menuButton").addEventListener("click", () => {
     state.discussed = !state.discussed;
     toast(state.discussed ? "演示状态：当前单元标记为已讨论。" : "演示状态：当前单元标记为未讨论，可测试继续前确认。");
+  });
+
+  $("importBookButton").addEventListener("click", () => $("bookPackageFile").click());
+  $("bookPackageFile").addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const button = $("importBookButton");
+    button.disabled = true;
+    setGenerationStatus("正在校验并导入标准书籍包…");
+    try {
+      const imported = await importBookPackageFile(file);
+      setGenerationStatus("已导入《" + imported.title + "》，共 " + imported.unitCount + " 个原文单元。正在打开…");
+      window.location.reload();
+    } catch (error) {
+      setGenerationStatus("书籍导入失败：" + error.message);
+      button.disabled = false;
+      event.target.value = "";
+    }
   });
 
   messageList.addEventListener("scroll", () => {
@@ -491,6 +533,10 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     try {
       if (isDemoProvider) {
         bookContentProvider = createDemoBookContentProvider();
+      } else if (activeLocalBookPackageId) {
+        state.messages = [];
+        messageList.replaceChildren();
+        bookContentProvider = createLocalBookPackageProvider();
       } else {
         state.messages = [];
         messageList.replaceChildren();
@@ -509,6 +555,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       if (!requestedBookRevisionId) throw new Error("真实书籍模式必须提供 READ_BOOK_CONFIG.bookRevisionId。");
       bookRevision = await bookContentProvider.loadBookRevision(requestedBookRevisionId);
       units = bookRevision.units;
+      renderTemporaryOptions();
       state.mainlineIndex = units.findIndex(unit => unit.id === bookRevision.initialMainlineUnitId);
       if (state.mainlineIndex < 0) throw new Error("书籍主线起始单元不存在。");
       state.displayedUnit = units[state.mainlineIndex];
@@ -517,6 +564,17 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
         updateCount();
         messageList.scrollTop = messageList.scrollHeight;
         setGenerationStatus("演示内容已通过 BookContentProvider 加载；尚未连接真实书籍服务。");
+        return;
+      }
+
+      if (activeLocalBookPackageId && !readerConfig.apiBaseUrl) {
+        renderSource();
+        updateCount();
+        $("messageInput").disabled = true;
+        $("sendButton").disabled = true;
+        $("simulateFailure").hidden = true;
+        $("menuButton").hidden = true;
+        setGenerationStatus("本地书籍包已加载。当前为只读阅读模式；配置真实 Agent 服务后可开启讨论，不会生成演示回复。");
         return;
       }
 
