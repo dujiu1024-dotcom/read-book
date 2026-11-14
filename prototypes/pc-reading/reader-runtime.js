@@ -148,8 +148,24 @@ export async function createProductionReaderRuntime(config, bookRevision) {
 
   async function loadMemoryState() {
     const snapshot = await repository.createConsistentSnapshot(datasetId);
+    const memoryState = selectThreadMemoryState(snapshot, thread.id);
+    const sourceMessageIds = new Set([
+      ...memoryState.versions.flatMap((version) => version.sourceMessageIds || []),
+      ...memoryState.pendingCandidates.flatMap((record) => record.candidate?.sourceMessageIds || []),
+    ]);
+    const sourceMessages = sourceMessageIds.size
+      ? (await loadMessages())
+          .filter(({ message }) => sourceMessageIds.has(message.id))
+          .map(({ message }) => ({
+            id: message.id,
+            role: message.role,
+            content: message.content,
+            createdAt: message.createdAt,
+          }))
+      : [];
     return {
-      ...selectThreadMemoryState(snapshot, thread.id),
+      ...memoryState,
+      sourceMessages,
       providerConfigured: Boolean(config.memoryExtractionProvider && config.memoryCandidatePolicy),
       plannerConfigured: typeof config.planMemoryEvolution === "function",
     };
