@@ -3,9 +3,21 @@ import { setTimeout as delay } from "node:timers/promises";
 import { chromium, devices } from "playwright";
 
 // 静态文件服务器无法解析 TypeScript 包导入与 vite 别名，这里用项目自带的 Vite dev server。
+// stdout/stderr 必须落盘：否则 npm ci / 平台二进制缺失时启动失败原因会被吞掉。
+const serverLog = { text: "" };
+const appendServerLog = (chunk) => {
+  serverLog.text = (serverLog.text + chunk.toString()).slice(-40000);
+};
 const server = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--port", "4173", "--strictPort"], {
   cwd: "prototypes/pc-reading",
-  stdio: "ignore"
+  stdio: ["ignore", "pipe", "pipe"]
+});
+server.stdout.on("data", appendServerLog);
+server.stderr.on("data", appendServerLog);
+let serverExited = false;
+server.on("exit", (code, signal) => {
+  serverExited = true;
+  serverLog.text += `\n[vite exited early code=${code} signal=${signal}]\n`;
 });
 let browser;
 
@@ -26,7 +38,9 @@ try {
     } catch {}
     await delay(250);
   }
-  if (!ready) throw new Error("prototype static server did not start");
+  if (!ready) {
+    throw new Error("prototype static server did not start" + (serverExited ? "（vite 进程已退出）" : ""));
+  }
 
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
@@ -34,7 +48,7 @@ try {
   page.on("pageerror", error => errors.push(error.message));
 
   // 演示书籍：验证阅读区、章节导航、引用回跳与讨论交互。
-  await page.goto("http://127.0.0.1:4173/?book=demo", { waitUntil: "networkidle" });
+  await page.goto("http://127.0.0.1:4173/?book=demo", { waitUntil: "domcontentloaded" });
   await waitHeading(page, "协同效率与沟通");
 
   const sourceTop = await page.locator("#sourceCard").evaluate(el => el.getBoundingClientRect().top);
@@ -82,7 +96,7 @@ try {
   await page.getByRole("button", { name: "发送" }).click();
   if (!(await page.locator(".saved-label").last().isVisible())) throw new Error("user message was not marked locally saved");
   await page.getByRole("button", { name: "停止生成" }).waitFor({ state: "visible" });
-  await delay(800);
+  await delay(700);
   await page.getByRole("button", { name: "停止生成" }).click();
   await page.waitForFunction(() => (document.querySelector("#generationStatus")?.textContent || "").includes("已停止"));
   const scrollAfterStop = await page.locator(".panel-stack").evaluate(el => el.scrollTop);
@@ -133,7 +147,7 @@ try {
   const bundled = await browser.newPage({ viewport: { width: 390, height: 844 } });
   const bundledErrors = [];
   bundled.on("pageerror", error => bundledErrors.push(error.message));
-  await bundled.goto("http://127.0.0.1:4173/?book=bundled", { waitUntil: "networkidle" });
+  await bundled.goto("http://127.0.0.1:4173/?book=bundled", { waitUntil: "domcontentloaded" });
   await waitHeading(bundled, "先生于大学格物诸说");
   const bundledFacts = await bundled.evaluate(() => ({
     title: document.querySelector("#bookTitle")?.textContent || "",
@@ -160,7 +174,7 @@ try {
     const mobilePage = await context.newPage();
     const mobileErrors = [];
     mobilePage.on("pageerror", error => mobileErrors.push(error.message));
-    await mobilePage.goto("http://127.0.0.1:4173/?book=demo", { waitUntil: "networkidle" });
+    await mobilePage.goto("http://127.0.0.1:4173/?book=demo", { waitUntil: "domcontentloaded" });
     await waitHeading(mobilePage, "协同效率与沟通");
 
     const deviceFacts = await mobilePage.evaluate(() => ({
@@ -194,7 +208,7 @@ try {
     await mobilePage.locator("#messageInput").fill("移动设备触控发送测试。");
     await mobilePage.getByRole("button", { name: "发送" }).tap();
     await mobilePage.getByRole("button", { name: "停止生成" }).waitFor({ state: "visible" });
-    await delay(800);
+    await delay(700);
     await mobilePage.getByRole("button", { name: "停止生成" }).tap();
     await mobilePage.waitForFunction(() => (document.querySelector("#generationStatus")?.textContent || "").includes("已停止"));
     if (mobileErrors.length) throw new Error(`${profileName}: browser runtime errors: ${mobileErrors.join("; ")}`);
@@ -204,6 +218,11 @@ try {
 
   if (errors.length) throw new Error("browser runtime errors: " + errors.join("; "));
   console.log("PC reading prototype browser smoke tests passed: demo reading, temporary view, review, bundled offline book, local-save state, stop, failure/retry, mainline confirmation, no forced scroll, responsive widths, simulated zoom and mobile touch profiles.");
+} catch (error) {
+  console.error("smoke test failed: " + (error?.stack || error));
+  console.error("--- vite log (tail) ---");
+  console.error(serverLog.text.slice(-8000) || "(vite produced no output)");
+  process.exitCode = 1;
 } finally {
   if (browser) await browser.close();
   server.kill("SIGTERM");
