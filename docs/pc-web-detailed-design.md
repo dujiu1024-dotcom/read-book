@@ -112,13 +112,13 @@
 - LocalDataSet / LocalDataSetMeta
 - AccountDataSetBinding
 - ShelfEntry / EntitlementProof
-- Thread / Message / GenerationReceipt
-- PresentedSource / ReadingRound / ReadingPosition + ReadingUnitProgress
+- Thread / Message / GenerationDelivery
+- PresentedSource / ReadingRound / ReadingPosition / ReadingUnitProgress（SQLite v6）
 - Citation
 - Note / NoteSource
 - Memory / MemoryRelation / MemorySource
-- BackupState / BackupJournal / BackupManifestCache
-- AppSetting / MigrationLog
+- LocalDataSet backup sequence metadata（dirty_sequence / last_acked_sequence）
+- 密钥与备份游标由独立客户端 KeyStore 保存；SQLite v6 不创建 BackupJournal 或 MigrationLog 表
 
 写入规则：
 1. 每次用户动作对应明确的领域事务。
@@ -311,3 +311,10 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 - MDN Using IndexedDB — https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB
 - SQLite WASM OPFS — https://sqlite.org/wasm/doc/tip/persistence.md
 - SQLite WASM VFS trade-offs — https://www.sqlite.org/wasm/doc/trunk/persistence.md
+
+
+### 3.4.1 SQLite v6 当前持久化清单
+
+已实现：LocalDataSet、AccountDataSetBinding、Thread、Message、GenerationDelivery、ReadingRound、ReadingPosition、PresentedSource、ReadingUnitProgress、Citation、Note、MemoryVersion、MemoryRelation、MemoryCandidate。增量备份边界由 LocalDataSet 的 dirty_sequence / last_acked_sequence 表达。
+
+尚未作为 SQLite 持久化表实现：ShelfEntry、EntitlementProof、BackupJournal、BackupManifestCache、MigrationLog、Thread archived 状态。不得将目标模型列表等同于当前已交付表结构。
