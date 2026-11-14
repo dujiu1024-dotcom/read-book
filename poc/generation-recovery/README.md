@@ -30,7 +30,7 @@ Playwright 配置会自动启动 Mock Server 与 Vite；本地手工运行时需
 - SSE 事件带 event_id、sequence、generation_id；支持按 after 序号重放事件。
 - GET generation 返回状态与最终结果；客户端刷新后根据本地 job 重新查询/订阅。
 - 流式 delta 只用于临时展示；只有 GET 最终状态为 completed 且包含 final_result 时，才写入本地 Assistant Message。
-- 取消请求形成 cancelled 终态；取消后不创建 Assistant Message。
+- 取消请求形成 cancelled 终态；取消后不创建 Assistant Message。\n- SSE 使用 no-cache/no-transform 与 X-Accel-Buffering: no，支持可配置心跳并在 Response close 时清理订阅。\n- 任务及最终结果具有可配置 TTL；过期后停止生成、清除最终结果并进入 expired 终态。\n- 服务端结构化审计只记录 generation_id、事件类型、序号和请求摘要，不记录消息正文、访问令牌或幂等键。
 - 服务端任务状态、幂等键映射、事件序列和最终结果写入原子替换的本地 JSON 状态文件；进程重启后恢复任务并从已持久化的增量位置继续模拟生成。
 - 状态文件默认位于当前工作目录的 `.poc-generation-state.json`，可通过 `GENERATION_STATE_FILE` 指定路径；文件权限设置为仅当前用户可读写。服务端只持久化请求正文 SHA-256，不保存用户消息明文；消息正文只在客户端 IndexedDB 保存。
 - 监听端口可通过 `PORT` 配置。默认 4177。
@@ -45,11 +45,11 @@ Playwright 会为每个子进程测试分配独立临时端口与状态文件，
 5. 验证任务继续执行至唯一最终结果；
 6. 从指定序号重放事件，检查序号连续。
 
-## 已知限制
+可通过环境变量配置 `GENERATION_HEARTBEAT_MS`（默认 15000）、`GENERATION_TASK_TTL_MS`（默认 24 小时）和 `GENERATION_TOKEN_DELAY_MS`（模拟生成延迟）。\n\n## 已知限制
 
 - 本地 JSON 状态文件只用于单进程 PoC，不是生产级持久化队列；没有多实例并发协调、文件锁、WAL、数据库事务和备份恢复。
 - 进程强制终止时，最后一个尚未完成原子替换的事件可能尚未持久化；验收只承诺已确认写入状态文件的事件。
 - 生成过程由固定 token 模拟，不调用真实模型。
 - 已增加幂等键与请求正文绑定、事件 ID 唯一性/序号连续性/断点回放、接近自然完成时取消竞态测试。仍未覆盖服务端主动重复/乱序注入、代理缓冲、心跳超时、任务 TTL、服务端日志自动审计和高并发压力测试。
-- 用户消息已持久化，但任务创建请求失败后的 UI 重试入口还需补充。
+- 用户消息已持久化；任务创建请求失败后的 UI 重试入口已实现，刷新后复用原幂等键。
 - 该 PoC 不等于正式 Generation API，也不代表所有故障场景通过。
