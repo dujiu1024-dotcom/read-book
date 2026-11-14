@@ -160,6 +160,7 @@ export interface RepositorySnapshot {
   memories: MemoryRecord[];
   memoryVersions: MemoryVersion[];
   memoryRelations: MemoryRelation[];
+  generationDeliveries: GenerationDeliveryRecord[];
 }
 
 /**
