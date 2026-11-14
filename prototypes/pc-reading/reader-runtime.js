@@ -7,6 +7,7 @@ import {
 import { createHttpGenerationTransport } from "../../packages/agent-adapter/src/http-transport.ts";
 import { createHttpEncryptedBackupPort } from "../../poc/encrypted-backup/src/http-backup-port.js";
 import { runMemoryExtraction, persistAcceptedMemoryCandidates } from "../../packages/agent-adapter/src/memory-extraction.ts";
+import { createBookSourceSearch } from "./source-retrieval.js";
 
 function uuid() {
   return crypto.randomUUID();
@@ -39,6 +40,14 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   if (!localOnly && (typeof generationApiBaseUrl !== "string" || !generationApiBaseUrl.trim())) {
     throw new Error("缺少生成服务地址，请配置 READ_BOOK_CONFIG.generationApiBaseUrl（或复用 apiBaseUrl）。");
   }
+
+  const searchBookSources = createBookSourceSearch(bookRevision.units || []);
+  const buildAdditionalSources = (query, currentUnit) => searchBookSources(query, currentUnit.id, 7)
+    .map((unit) => ({
+      structure_node_id: unit.id,
+      locator: unit.locator,
+      excerpt: unit.text.slice(0, 30_000),
+    }));
 
   const repository = new SqliteOpfsRepository();
   await repository.initialize();
@@ -291,7 +300,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       book_revision_id: bookRevision.bookRevisionId,
       user_message: { local_message_id: userMessageId, content },
       context: {
-        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
+        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text.slice(0, 30_000) },
+        additional_sources: buildAdditionalSources(content, unit),
         recent_messages: recentMessages,
         response_preferences: { language: "zh-CN" },
       },
@@ -338,7 +348,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       book_revision_id: bookRevision.bookRevisionId,
       user_message: { local_message_id: userMessageId, content: user.content },
       context: {
-        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
+        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text.slice(0, 30_000) },
+        additional_sources: buildAdditionalSources(user.content, unit),
         recent_messages: priorMessages,
         response_preferences: { language: "zh-CN" },
       },
@@ -376,7 +387,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         book_revision_id: bookRevision.bookRevisionId,
         user_message: { local_message_id: user.id, content: user.content },
         context: {
-          current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
+          current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text.slice(0, 30_000) },
+          additional_sources: buildAdditionalSources(user.content, unit),
           recent_messages: messages.slice(-12).map(({ message }) => ({ role: message.role, content: message.content })),
           response_preferences: { language: "zh-CN" },
         },
