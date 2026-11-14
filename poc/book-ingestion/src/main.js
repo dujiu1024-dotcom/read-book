@@ -135,6 +135,6 @@ $('jump').addEventListener('click', () => {
     '',
     '所在原文单元：',
     source.text
-  ].join('\\n');
+  ].join('\n');
 });
 await renderSaved();
