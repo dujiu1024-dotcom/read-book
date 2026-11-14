@@ -22,13 +22,16 @@ export type RepositoryErrorCode =
   | "ACCOUNT_BINDING_NOT_FOUND";
 
 export class RepositoryError extends Error {
+  readonly code: RepositoryErrorCode;
+
   constructor(
-    readonly code: RepositoryErrorCode,
+    code: RepositoryErrorCode,
     message: string,
     options?: ErrorOptions,
   ) {
     super(message, options);
     this.name = "RepositoryError";
+    this.code = code;
   }
 }
 
