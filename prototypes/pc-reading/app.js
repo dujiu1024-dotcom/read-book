@@ -12,16 +12,17 @@ import { createSourceRetriever } from "./source-retriever.js";
   let sourceRetriever = null;
   const readerConfig = window.READ_BOOK_CONFIG || {};
   const queryParams = new URLSearchParams(window.location.search);
-  const queryBookId = queryParams.get("book");
+  const explicitBookId = queryParams.get("book");
   const queryLocalBookId = queryParams.get("localBookRevision");
-  const isGithubCorpusMode = Boolean(queryBookId && queryBookId !== "demo");
   const activeLocalBookPackageId = readerConfig.localBookPackageId || queryLocalBookId || (() => {
     try { return window.localStorage.getItem("read-book:active-local-book") || ""; } catch { return ""; }
   })();
   const preferLocalBookPackage = Boolean(readerConfig.localBookPackageId || queryLocalBookId) || (() => {
     try { return window.localStorage.getItem("read-book:prefer-local-book") === "true"; } catch { return false; }
   })();
-  const useLocalBookPackage = Boolean(activeLocalBookPackageId && !queryBookId && (preferLocalBookPackage || !readerConfig.bookRevisionId));
+  const useLocalBookPackage = Boolean(activeLocalBookPackageId && !explicitBookId && (preferLocalBookPackage || !readerConfig.bookRevisionId));
+  const queryBookId = explicitBookId || (!useLocalBookPackage && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId ? "chuanxilu" : null);
+  const isGithubCorpusMode = Boolean(queryBookId && queryBookId !== "demo");
   const isDemoProvider = queryBookId === "demo" || (!isGithubCorpusMode && !useLocalBookPackage && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId);
   let bookContentProvider = null;
   let productionRuntime = null;
