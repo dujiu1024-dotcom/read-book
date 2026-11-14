@@ -21,7 +21,10 @@
 - #4 生成任务 PoC 使用 Mock Server，已验证消息先落本地、幂等、流式事件和断线恢复；不代表生产队列或真实模型服务完成。
 - #5 书籍包 Schema/校验器与 #9 质量门禁已有 CI 证据，仍需最终审查。
 - #6 当前为合成语料和 Mock 检索评测，不构成真实中文书籍或生产 Agent 质量基线。
-- #7 身份、数据集与状态机契约仍需完成一致性验收。\n- PR #32 已合并：LocalRepository 事务契约、数据集边界和 Agent 消息持久化端口已建立。PR #33 正在推进 SQLite OPFS Repository 首版适配器，完整迁移/备份/损坏恢复尚未完成。\n- #28 已合并 PR #29：完成可配置的认知候选价值评估、观点来源区分、置信度/歧义度与 Citation 来源门禁；抽取、版本演变和持久化仍在开发。\n- #27 已合并 PR #31：完成 GenerationTransport 协议、事件序号校验和本地先保存后请求的编排边界；真实 HTTP/SSE 服务仍未接入。
+- #7 身份、数据集与状态机契约仍需完成一致性验收。
+- PR #32 已合并：LocalRepository 事务契约、数据集边界和 Agent 消息持久化端口已建立。PR #33 正在推进 SQLite OPFS Repository 首版适配器，完整迁移/备份/损坏恢复尚未完成。
+- #28 已合并 PR #29：完成可配置的认知候选价值评估、观点来源区分、置信度/歧义度与 Citation 来源门禁；抽取、版本演变和持久化仍在开发。
+- #27 已合并 PR #31：完成 GenerationTransport 协议、事件序号校验和本地先保存后请求的编排边界；真实 HTTP/SSE 服务仍未接入。
 
 PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不等于生产安全或完整产品验收通过。项目不安排实体手机/平板真机测试，以自动化浏览器测试、响应式视口矩阵和标准桌面浏览器兼容性检查作为验收方式。
 
@@ -78,7 +81,8 @@ PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不�
 - [PC Web 详细技术设计](docs/pc-web-detailed-design.md)
 - [PC Web 技术 PoC 验证计划](docs/pc-web-poc-plan.md)
 - [PC Web 窄屏阅读交互规范](docs/pc-web-interaction-spec.md)
-- [文档验收报告](docs/document-acceptance-report.md)\n- [ADR-0001：PC Web 私人数据主存储路线](docs/adr/0001-local-storage-engine.md)
+- [文档验收报告](docs/document-acceptance-report.md)
+- [ADR-0001：PC Web 私人数据主存储路线](docs/adr/0001-local-storage-engine.md)
 
 ## 核心产品形态
 
