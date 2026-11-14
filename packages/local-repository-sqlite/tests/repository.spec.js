@@ -283,3 +283,19 @@ test("MemoryRelation persists only when both versions and source provenance belo
   expect(result.snapshot.memoryRelations).toHaveLength(1);
   expect(result.invalidRejected).toBe(true);
 });
+
+
+test("SQLite Worker maps quota, integrity and migration failures to typed RepositoryError codes", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const { mapWorkerError } = await import("/src/index.ts");
+    return ["QUOTA_EXCEEDED", "INTEGRITY_FAILED", "MIGRATION_FAILED", "UNKNOWN"].map((code) => {
+      const error = mapWorkerError({ code, message: "simulated storage failure" });
+      return { name: error.name, code: error.code ?? null, message: error.message };
+    });
+  });
+  expect(result[0]).toMatchObject({ name: "RepositoryError", code: "QUOTA_EXCEEDED" });
+  expect(result[1]).toMatchObject({ name: "RepositoryError", code: "INTEGRITY_FAILED" });
+  expect(result[2]).toMatchObject({ name: "RepositoryError", code: "MIGRATION_FAILED" });
+  expect(result[3]).toMatchObject({ name: "Error", code: null });
+});
