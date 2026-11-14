@@ -62,6 +62,29 @@ async function request(fetchImpl, url, label) {
   if (!response.ok) throw new Error(label + "读取失败（HTTP " + response.status + "）。");
   return response;
 }
+
+async function gitBlobSha(bytes) {
+  const header = new TextEncoder().encode("blob " + bytes.byteLength + "\0");
+  const payload = new Uint8Array(header.byteLength + bytes.byteLength);
+  payload.set(header, 0);
+  payload.set(bytes, header.byteLength);
+  const digest = await crypto.subtle.digest("SHA-1", payload);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function fetchVerifiedText(fetchImpl, url, label, expectedSha) {
+  const response = await request(fetchImpl, url, label);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const actualSha = await gitBlobSha(bytes);
+  if (actualSha.toLowerCase() !== expectedSha.toLowerCase()) {
+    throw new Error(label + " Git Blob SHA 校验失败；拒绝混用不同来源版本的缓存内容。");
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error(label + " 不是有效 UTF-8 文本，拒绝导入。");
+  }
+}
 async function mapConcurrent(items, limit, mapper) {
   const results = new Array(items.length);
   let cursor = 0;
@@ -98,7 +121,7 @@ async function loadChuanxiLu(fetchImpl) {
     throw new Error("《传习录》来源元数据不完整或下载地址不可信。");
   }
   const url = metadata.download_url;
-  const raw = await (await request(fetchImpl, url, "《传习录》正文")).text();
+  const raw = await fetchVerifiedText(fetchImpl, url, "《传习录》正文", metadata.sha);
   if (!raw.trim()) throw new Error("《传习录》来源文件为空。");
   if (raw.length > MAX_BOOK_CHARACTERS) throw new Error("《传习录》超过单书读取上限。");
   const lines = raw.replace(/\r\n/g, "\n").split("\n");
@@ -139,7 +162,7 @@ async function loadMaoXuanVolume(fetchImpl, book) {
         !file.path.startsWith(directory + "/")) {
       throw new Error("GitHub 返回了非预期的正文来源信息：" + file.name);
     }
-    const raw = await (await request(fetchImpl, url, file.name)).text();
+    const raw = await fetchVerifiedText(fetchImpl, url, file.name, file.sha);
     if (!raw.trim()) throw new Error(file.name + " 正文为空。");
     if (raw.length > MAX_FILE_CHARACTERS) throw new Error(file.name + " 超过单篇读取上限。");
     totalCharacters += raw.length;
@@ -163,10 +186,22 @@ async function loadMaoXuanVolume(fetchImpl, book) {
   if (!units.length) throw new Error(book.title + "未提取到正文段落。");
   return units;
 }
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function uuidFromHash(hash) {
+  const chars = hash.slice(0, 32).split("");
+  chars[12] = "5";
+  chars[16] = ((Number.parseInt(chars[16], 16) & 0x3) | 0x8).toString(16);
+  const hex = chars.join("");
+  return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20, 32);
+}
+
 async function sourceFingerprint(units) {
   const sourceIdentity = units.map((unit) => unit.source.repository + "/" + unit.source.path + ":" + unit.source.revision).join("\n");
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sourceIdentity));
-  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  return sha256Hex(sourceIdentity);
 }
 
 function createCacheAwareFetch(fetchImpl, cacheStorage) {
@@ -214,8 +249,16 @@ export function createGithubCorpusProvider({ fetchImpl = globalThis.fetch, cache
       if (!book) throw new Error("不支持的 GitHub 语料书目：" + key);
       const units = key === "chuanxilu" ? await loadChuanxiLu(sourceFetch.fetch.bind(sourceFetch)) : await loadMaoXuanVolume(sourceFetch.fetch.bind(sourceFetch), VOLUMES.find((item) => item.key === key));
       const sourceSnapshotSha256 = await sourceFingerprint(units);
+      const bookRevisionId = uuidFromHash(sourceSnapshotSha256);
+      await Promise.all(units.map(async (unit) => {
+        const unitIdentity = [
+          bookRevisionId, unit.source.repository, unit.source.path,
+          unit.source.revision, unit.locator, String(unit.order),
+        ].join("\n");
+        unit.id = uuidFromHash(await sha256Hex(unitIdentity));
+      }));
       return {
-        bookRevisionId: "github-corpus-" + key + "-" + sourceSnapshotSha256.slice(0, 20),
+        bookRevisionId,
         title: book.title, author: book.author,
         initialMainlineUnitId: units[0].id, units,
         sourceMetadata: {
