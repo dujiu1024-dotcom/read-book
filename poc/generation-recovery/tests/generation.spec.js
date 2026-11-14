@@ -291,3 +291,71 @@ test('服务端持久化状态不包含用户消息明文', async () => {
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+
+test('SSE 长连接发送心跳并关闭时清理订阅', async () => {
+  const port = await freePort();
+  const stateDir = await mkdtemp(join(tmpdir(), 'read-book-sse-heartbeat-'));
+  const child = launchServer(port, join(stateDir, 'state.json'), {
+    GENERATION_TOKEN_DELAY_MS: '5000',
+    GENERATION_HEARTBEAT_MS: '1000'
+  });
+  const controller = new AbortController();
+  let reader;
+  try {
+    await waitForHealth(port, child);
+    const base = `http://127.0.0.1:${port}`;
+    const created = await fetch(base + '/api/generations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'heartbeat-key' },
+      body: JSON.stringify({ message: 'heartbeat fixture' })
+    });
+    const receipt = await created.json();
+    const response = await fetch(base + '/api/generations/' + receipt.generation_id + '/events', { signal: controller.signal });
+    expect(response.headers.get('x-accel-buffering')).toBe('no');
+    reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    await reader.read();
+    const heartbeat = await reader.read();
+    expect(decoder.decode(heartbeat.value)).toContain(': heartbeat');
+  } finally {
+    controller.abort();
+    await reader?.cancel().catch(() => undefined);
+    await stopServer(child);
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('超过任务 TTL 后转为 expired 且停止继续生成', async () => {
+  const port = await freePort();
+  const stateDir = await mkdtemp(join(tmpdir(), 'read-book-generation-ttl-'));
+  const child = launchServer(port, join(stateDir, 'state.json'), {
+    GENERATION_TOKEN_DELAY_MS: '3000',
+    GENERATION_TASK_TTL_MS: '1000'
+  });
+  try {
+    await waitForHealth(port, child);
+    const base = `http://127.0.0.1:${port}`;
+    const created = await fetch(base + '/api/generations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'ttl-key' },
+      body: JSON.stringify({ message: 'ttl fixture' })
+    });
+    const receipt = await created.json();
+    let state;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      state = await (await fetch(base + '/api/generations/' + receipt.generation_id)).json();
+      if (state.status === 'expired') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(state.status).toBe('expired');
+    expect(state.final_result).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    state = await (await fetch(base + '/api/generations/' + receipt.generation_id)).json();
+    expect(state.status).toBe('expired');
+    expect(state.final_result).toBeNull();
+  } finally {
+    await stopServer(child);
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
