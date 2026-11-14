@@ -214,7 +214,16 @@ export async function validatePackage(inputPath, options = {}) {
   }
   if (manifest.artifacts.local_report && files.has(manifest.artifacts.local_report)) {
     const report = parseJson(files, manifest.artifacts.local_report, issues);
-    if (report) checkSchema(validators.localReport, report, manifest.artifacts.local_report, issues, "LOCAL_REPORT_SCHEMA_INVALID");
+    if (report && checkSchema(validators.localReport, report, manifest.artifacts.local_report, issues, "LOCAL_REPORT_SCHEMA_INVALID")) {
+      const reportErrors = report.issues.filter((item) => item.severity === "error").length;
+      const reportWarnings = report.issues.filter((item) => item.severity === "warning").length;
+      if (report.summary.error_count !== reportErrors || report.summary.warning_count !== reportWarnings) {
+        issues.push(issue("LOCAL_REPORT_SUMMARY_MISMATCH", "Local report summary counts do not match its issue list", { artifact: manifest.artifacts.local_report }));
+      }
+      if (report.overall_status === "valid" && reportErrors > 0) {
+        issues.push(issue("LOCAL_REPORT_STATUS_MISMATCH", "Local report cannot be valid while error issues exist", { artifact: manifest.artifacts.local_report }));
+      }
+    }
   }
   const errorCount = issues.filter((item) => item.severity === "error").length;
   return { status: errorCount ? "invalid" : "valid", summary: { error_count: errorCount, warning_count: issues.filter((item) => item.severity === "warning").length },
