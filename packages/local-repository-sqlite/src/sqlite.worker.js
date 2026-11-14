@@ -406,7 +406,7 @@ function txOperation(datasetId, operation, input) {
       const viewpoints=["user","author","assistant_inference"];
       if (!record || typeof record.id!=="string" || !record.id.trim() || record.id!==candidate?.id ||
           record.datasetId!==datasetId || typeof record.threadId!=="string" || !record.threadId.trim() ||
-          record.status!=="needs_confirmation" || !Number.isFinite(record.evaluationScore) || record.evaluationScore<0 || record.evaluationScore>1 ||
+          !["needs_confirmation","accepted","rejected"].includes(record.status) || !Number.isFinite(record.evaluationScore) || record.evaluationScore<0 || record.evaluationScore>1 ||
           !Number.isFinite(Date.parse(record.createdAt)) || !Number.isFinite(Date.parse(record.updatedAt)) ||
           typeof candidate.title!=="string" || !candidate.title.trim() || typeof candidate.content!=="string" || !candidate.content.trim() ||
           !viewpoints.includes(candidate.viewpoint) || !Number.isFinite(candidate.confidence) || candidate.confidence<0 || candidate.confidence>1 ||
@@ -616,6 +616,65 @@ function handle(message) {
     activeDatasetId=null;
     transactionDirty=false;
     return true;
+  }
+  if (type === "restoreSnapshot") {
+    if (activeDatasetId) throw new Error("SQLite Worker 已有活动事务");
+    const datasetId=message.datasetId;
+    const snapshot=message.snapshot;
+    if (!snapshot || snapshot.datasetId!==datasetId || !Number.isSafeInteger(snapshot.schemaVersion) ||
+        snapshot.schemaVersion<1 || snapshot.schemaVersion>5 || !Number.isSafeInteger(snapshot.dirtySequence) ||
+        snapshot.dirtySequence<1 || typeof message.backupId!=="string" || !message.backupId.trim() ||
+        !Number.isFinite(Date.parse(message.restoredAt))) {
+      throw new Error("Backup snapshot metadata is invalid");
+    }
+    db.exec({sql:"BEGIN IMMEDIATE"});
+    activeDatasetId=datasetId;
+    transactionDirty=false;
+    try {
+      ensureDataset(datasetId);
+      const dataset=first("SELECT dirty_sequence FROM local_dataset WHERE id=?",[datasetId]);
+      const existingThreads=first("SELECT COUNT(*) AS count FROM thread WHERE dataset_id=?",[datasetId]).count;
+      if (existingThreads!==0 || dataset.dirty_sequence!==0) {
+        throw new Error("Backup restore is allowed only into an empty local dataset");
+      }
+      for (const thread of snapshot.threads || []) {
+        if (thread.datasetId!==datasetId) throw new Error("Restored Thread belongs to a different dataset");
+        txOperation(datasetId,"createThread",{thread});
+      }
+      const messages=[...(snapshot.messages || [])].sort((a,b)=>a.sequence-b.sequence);
+      for (const persisted of messages) {
+        const m=persisted.message;
+        const input={message:{
+          id:m.id,threadId:m.threadId,content:m.content,createdAt:m.createdAt,
+          sourceReferences:m.sourceReferences || [],idempotencyKey:persisted.idempotencyKey ?? null,
+          ...(m.role==="assistant" ? {status:m.status} : {}),
+        }};
+        if (m.role==="user") txOperation(datasetId,"appendUserMessage",input);
+        else if (m.role==="assistant") txOperation(datasetId,"appendAssistantMessage",input);
+        else throw new Error("Restored Message role is invalid");
+      }
+      for (const round of snapshot.readingRounds || []) txOperation(datasetId,"createReadingRound",{round});
+      for (const position of snapshot.readingPositions || []) txOperation(datasetId,"saveReadingPosition",{position});
+      for (const citation of snapshot.citations || []) txOperation(datasetId,"saveCitation",{citation});
+      for (const note of snapshot.notes || []) txOperation(datasetId,"saveNote",{note});
+      const versions=[...(snapshot.memoryVersions || [])].sort((a,b)=>a.memoryId.localeCompare(b.memoryId) || a.version-b.version);
+      for (const version of versions) txOperation(datasetId,"appendMemoryVersion",{version});
+      for (const relation of snapshot.memoryRelations || []) txOperation(datasetId,"appendMemoryRelation",{relation});
+      for (const candidate of snapshot.memoryCandidates || []) txOperation(datasetId,"saveMemoryCandidate",{candidate});
+      for (const delivery of snapshot.generationDeliveries || []) txOperation(datasetId,"saveGenerationDelivery",{delivery});
+      transactionDirty=false;
+      execute("UPDATE local_dataset SET schema_version=5,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
+        [snapshot.dirtySequence,snapshot.dirtySequence,message.backupId,message.restoredAt,message.restoredAt,datasetId]);
+      db.exec({sql:"COMMIT"});
+      activeDatasetId=null;
+      transactionDirty=false;
+      return true;
+    } catch (error) {
+      db.exec({sql:"ROLLBACK"});
+      activeDatasetId=null;
+      transactionDirty=false;
+      throw error;
+    }
   }
   if (type === "getDataSet") {
     const r=first("SELECT * FROM local_dataset WHERE id=?", [message.datasetId]);
