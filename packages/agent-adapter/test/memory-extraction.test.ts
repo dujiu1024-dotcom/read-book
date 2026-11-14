@@ -3,6 +3,10 @@ import test from "node:test";
 import {
   MemoryExtractionError,
   runMemoryExtraction,
+  planAcceptedMemoryCandidates,
+  planAndPersistAcceptedMemoryCandidates,
+  persistAcceptedMemoryCandidates,
+  type MemoryEvolutionPlanner,
   type MemoryExtractionProviderInput,
 } from "../src/memory-extraction.ts";
 
@@ -190,4 +194,150 @@ test("memory candidate IDs remain stable when a provider changes its temporary I
     async extractStructured() { return { candidates: [{ ...candidate, id: "provider-id-b" }] }; },
   }, { context, messages, policy, modelVersion: "mock-v1" });
   assert.equal(first.accepted[0].candidate.id, second.accepted[0].candidate.id);
+});
+
+
+test("cross-batch planner links exact duplicate candidates without creating an unlinked duplicate", async () => {
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const previous = {
+    id: "version-existing", memoryId: "memory-existing", version: 1, previousVersionId: null,
+    changeKind: "new" as const, title: candidate.title, content: candidate.content,
+    viewpoint: "user" as const, sourceMessageIds: ["older-user"], sourceReferences: [],
+    createdAt: "2026-11-13T00:00:00.000Z",
+  };
+  let plannerCalled = false;
+  let id = 0;
+  const planned = await planAcceptedMemoryCandidates({
+    async createConsistentSnapshot() { return { memoryVersions: [previous] }; },
+  }, "dataset-1", accepted, {
+    async propose() { plannerCalled = true; return []; },
+  }, () => "2026-11-14T00:00:00.000Z", () => "generated-" + (++id));
+  assert.equal(plannerCalled, false);
+  assert.equal(planned.plans.length, 1);
+  assert.equal(planned.plans[0].changeKind, "new");
+  assert.equal(planned.plans[0].relation?.relationType, "duplicate_of");
+  assert.equal(planned.plans[0].relationTargetVersion?.id, "version-existing");
+});
+
+test("cross-batch planner derives immutable version numbers and typed correction links", async () => {
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const previous = {
+    id: "version-1", memoryId: "memory-1", version: 3, previousVersionId: "version-2",
+    changeKind: "supplement" as const, title: "旧标题", content: "旧认知",
+    viewpoint: "user" as const, sourceMessageIds: ["older-user"], sourceReferences: [],
+    createdAt: "2026-11-13T00:00:00.000Z",
+  };
+  const planner: MemoryEvolutionPlanner = {
+    async propose({ candidates, existingLatestVersions }) {
+      assert.equal(candidates.length, 1);
+      assert.equal(existingLatestVersions[0].id, "version-1");
+      return [{ candidateId: candidate.id, changeKind: "correction", targetMemoryId: "memory-1", rationale: "用户明确修正旧观点" }];
+    },
+  };
+  const planned = await planAcceptedMemoryCandidates({
+    async createConsistentSnapshot() { return { memoryVersions: [previous] }; },
+  }, "dataset-1", accepted, planner, () => "2026-11-14T00:00:00.000Z", () => "relation-1");
+  assert.equal(planned.plans[0].version, 4);
+  assert.equal(planned.plans[0].previousVersionId, "version-1");
+  assert.equal(planned.plans[0].relation?.relationType, "supersedes");
+});
+
+test("cross-batch planner rejects unknown targets and incomplete proposals", async () => {
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const existing = {
+    id: "version-existing", memoryId: "memory-existing", version: 1, previousVersionId: null,
+    changeKind: "new" as const, title: "另一条认知", content: "不同内容",
+    viewpoint: "author" as const, sourceMessageIds: ["older-user"], sourceReferences: [],
+    createdAt: "2026-11-13T00:00:00.000Z",
+  };
+  const planner: MemoryEvolutionPlanner = {
+    async propose() {
+      return [{ candidateId: candidate.id, changeKind: "conflict", targetMemoryId: "missing-memory", rationale: "冲突" }];
+    },
+  };
+  await assert.rejects(planAcceptedMemoryCandidates({
+    async createConsistentSnapshot() { return { memoryVersions: [existing] }; },
+  }, "dataset-1", accepted, planner), /unknown memory/);
+  await assert.rejects(planAcceptedMemoryCandidates({
+    async createConsistentSnapshot() { return { memoryVersions: [existing] }; },
+  }, "dataset-1", accepted), /planner is required/);
+});
+
+test("plan-and-persist is idempotent for candidate IDs already stored as versions", async () => {
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const previous = {
+    id: candidate.id, memoryId: "memory-existing", version: 1, previousVersionId: null,
+    changeKind: "new" as const, title: candidate.title, content: candidate.content,
+    viewpoint: "user" as const, sourceMessageIds: ["user-1"], sourceReferences: [],
+    createdAt: "2026-11-14T00:00:00.000Z",
+  };
+  let writes = 0;
+  const result = await planAndPersistAcceptedMemoryCandidates({
+    async createConsistentSnapshot() { return { memoryVersions: [previous] }; },
+    async transaction(_datasetId, operation) {
+      return operation({
+        async appendMemoryVersion() { writes += 1; },
+        async appendMemoryRelation() { writes += 1; },
+        async resolveMemoryCandidate() { return true; },
+      });
+    },
+  }, "dataset-1", accepted);
+  assert.deepEqual(result.persistedIds, []);
+  assert.deepEqual(result.alreadyPersistedCandidateIds, [candidate.id]);
+  assert.equal(writes, 0);
+});
+
+
+test("persists exact duplicate as an explicit duplicate_of relation to the existing version", async () => {
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const target = {
+    id: "version-existing", memoryId: "memory-existing", version: 1, previousVersionId: null,
+    changeKind: "new" as const, title: candidate.title, content: candidate.content,
+    viewpoint: "user" as const, sourceMessageIds: ["older-user"], sourceReferences: [],
+    createdAt: "2026-11-13T00:00:00.000Z",
+  };
+  const writes: any[] = [];
+  const repository = {
+    async transaction(_datasetId: string, operation: (tx: any) => Promise<unknown>) {
+      return operation({
+        async appendMemoryVersion(version: unknown) { writes.push({ kind: "version", version }); },
+        async appendMemoryRelation(relation: unknown) { writes.push({ kind: "relation", relation }); },
+        async resolveMemoryCandidate() { return true; },
+      });
+    },
+  };
+  const plan = {
+    candidateId: candidate.id, memoryId: "memory-duplicate", version: 1,
+    previousVersionId: null, changeKind: "new" as const, relationTargetVersion: target,
+    relation: { id: "relation-duplicate", toVersionId: target.id, relationType: "duplicate_of" as const, createdAt: "2026-11-14T00:00:00.000Z" },
+  };
+  await persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, [plan], () => "2026-11-14T00:00:00.000Z");
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].relation.relationType, "duplicate_of");
+  assert.equal(writes[1].relation.toVersionId, target.id);
+});
+
+
+test("empty memory history creates first versions without requiring a semantic planner", async () => {
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const planned = await planAcceptedMemoryCandidates({
+    async createConsistentSnapshot() { return { memoryVersions: [] }; },
+  }, "dataset-1", accepted, undefined, () => "2026-11-14T00:00:00.000Z", () => "new-memory-1");
+  assert.equal(planned.plans.length, 1);
+  assert.equal(planned.plans[0].changeKind, "new");
+  assert.equal(planned.plans[0].version, 1);
+  assert.equal(planned.plans[0].previousVersionId, null);
+  assert.equal(planned.plans[0].relation, undefined);
 });

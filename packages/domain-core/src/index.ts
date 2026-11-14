@@ -495,6 +495,7 @@ export function validateMemoryEvolution(
     extension: "extends",
   };
   const optionalRelation: Partial<Record<MemoryChangeKind, MemoryRelationType>> = {
+    new: "duplicate_of",
     supplement: "supports",
     correction: "supersedes",
   };
