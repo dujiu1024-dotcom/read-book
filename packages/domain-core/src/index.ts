@@ -61,6 +61,38 @@ export interface AssistantMessage {
 
 export type Message = UserMessage | AssistantMessage;
 
+export type ReadingUnitProgressStatus =
+  | "not_presented"
+  | "presented"
+  | "awaiting_user"
+  | "discussion_active"
+  | "discussed"
+  | "skipped";
+
+export type PresentationType = "mainline" | "review" | "temporary" | "citation";
+
+export interface PresentedSource {
+  id: string;
+  threadId: ThreadId;
+  bookRevisionId: BookRevisionId;
+  structureNodeId: StructureNodeId;
+  chunkId: string | null;
+  presentationType: PresentationType;
+  readingRoundId: ReadingRoundId | null;
+  presentedAt: string;
+  sourceLocator: Record<string, unknown>;
+}
+
+export interface ReadingUnitProgress {
+  readingRoundId: ReadingRoundId;
+  structureNodeId: StructureNodeId;
+  status: ReadingUnitProgressStatus;
+  firstPresentedSourceId: string | null;
+  lastActivityMessageId: MessageId | null;
+  completedAt: string | null;
+  updatedAt: string;
+}
+
 export interface ReadingPosition {
   /** The only position that defines progress through the author's mainline. */
   mainlineNodeId: StructureNodeId;
