@@ -39,7 +39,7 @@ export function mapWorkerError(payload: { message: string; code?: string }): Err
 
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
-  readonly schemaVersion = 3;
+  readonly schemaVersion = 4;
   private worker: Worker;
   private nextId = 0;
   private pending = new Map<number, Pending>();
