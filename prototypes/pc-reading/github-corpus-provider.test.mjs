@@ -8,7 +8,13 @@ test("exposes six separately selectable corpus revisions", () => {
 
 test("loads Chuanxi Lu into ordered units with volume labels and source locators", async () => {
   const source = ["传习录", "卷上", "徐爱引言", "先生于大学格物诸说。", "", "卷中", "答顾东桥书。", "卷下", "门人陆澄录。"].join("\n");
-  const provider = createGithubCorpusProvider({ fetchImpl: async () => new Response(source, { status: 200 }) });
+  const provider = createGithubCorpusProvider({ fetchImpl: async (url) => {
+    if (String(url).includes("/contents/")) return new Response(JSON.stringify({
+      type: "file", sha: "0123456789abcdef0123456789abcdef01234567",
+      download_url: "https://raw.githubusercontent.com/garychowcmu/daizhigev20/master/source.txt"
+    }), { status: 200 });
+    return new Response(source, { status: 200 });
+  }});
   const revision = await provider.loadBookRevision("github-corpus-chuanxilu");
   assert.equal(revision.title, "传习录");
   assert.ok(revision.units.length >= 4);
@@ -21,9 +27,9 @@ test("loads Chuanxi Lu into ordered units with volume labels and source locators
 
 test("loads a Mao Xuan volume independently and preserves article order", async () => {
   const files = [
-    { type: "file", name: "02、第二篇.md", path: "docs/第二卷/02、第二篇.md", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/02.md" },
-    { type: "file", name: "01、第一篇.md", path: "docs/第二卷/01、第一篇.md", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/01.md" },
-    { type: "file", name: "README.md", path: "docs/第二卷/README.md", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/README.md" }
+    { type: "file", name: "02、第二篇.md", path: "docs/第二卷/02、第二篇.md", sha: "2222222222222222222222222222222222222222", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/02.md" },
+    { type: "file", name: "01、第一篇.md", path: "docs/第二卷/01、第一篇.md", sha: "1111111111111111111111111111111111111111", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/01.md" },
+    { type: "file", name: "README.md", path: "docs/第二卷/README.md", sha: "3333333333333333333333333333333333333333", download_url: "https://raw.githubusercontent.com/ruguoaaa/gushi/main/README.md" }
   ];
   const provider = createGithubCorpusProvider({ fetchImpl: async (url) => {
     if (String(url).includes("/contents/")) return new Response(JSON.stringify(files), { status: 200 });
