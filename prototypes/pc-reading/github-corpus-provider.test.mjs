@@ -39,5 +39,5 @@ test("loads a Mao Xuan volume independently and preserves article order", async 
 test("rejects unknown corpus identifiers and empty source files", async () => {
   const provider = createGithubCorpusProvider({ fetchImpl: async () => new Response("", { status: 200 }) });
   await assert.rejects(() => provider.loadBookRevision("github-corpus-unknown"), /不支持/);
-  await assert.rejects(() => provider.loadBookRevision("github-corpus-chuanxilu"), /未提取到正文段落/);
+  await assert.rejects(() => provider.loadBookRevision("github-corpus-chuanxilu"), /来源文件为空/);
 });
