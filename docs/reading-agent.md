@@ -43,7 +43,7 @@
 
 - 用户可随时要求重新展示已读原文，属于复习。
 - 用户可因讨论关联要求展示其他章节或后续内容，属于临时查看。
-- 复习和临时查看都记录来源与展示行为，但不修改当前主线位置、不创建新 Thread 或新阅读轮次。
+- 复习和临时查看都写入 PresentedSource，但不修改 ReadingPosition.mainline_node_id、ReadingUnitProgress 或阅读轮次。
 - 临时查看结束后，用户可继续当前主线；Agent 不擅自跳转主线。
 
 ## 7. 阅读轮次完成
@@ -53,11 +53,11 @@
 - 用户对主线内容均有机会进行讨论；用户可以简短回应或主动略读，不要求达到某种理解评分。
 - 最后一个主线单元已由用户主动推进并完成讨论。
 
-完成后，Agent 可以说明本轮主线已完成，并询问用户是否开启下一轮。不开启则保持 Thread 历史，不自动重置。
+完成后，页面明确显示本轮完成，并提供“开启新一轮阅读”操作；用户主动点击后才创建下一轮。不开启则保持 Thread 历史，不自动重置。
 
 ## 8. 数据记录
 
-原文展示记录至少包含 BookRevision、StructureNode、Chunk、展示类型（主线/复习/临时查看）、阅读轮次和时间。临时查看不得覆盖 ReadingRoundState。
+原文展示记录由 PresentedSource 保存 BookRevision、StructureNode、Chunk、展示类型（主线/复习/临时查看/引用）、阅读轮次和时间。主线位置由 ReadingPosition 保存；每轮单元状态由 ReadingUnitProgress 保存。临时查看不得覆盖主线位置或单元进度。
 
 ## 9. 不做的事情
 
@@ -68,3 +68,11 @@
 - 不自动跳过主线。
 - 不因临时查看而更改主线位置。
 - 第一版不引入多角色 Agent。
+
+
+## 10. SQLite v6 当前实现边界
+
+- 主线单元状态已持久化为 not_presented / presented / awaiting_user / discussion_active / discussed / skipped。
+- V1 的 discussion_active 表示关联当前主线的用户消息已持久化；discussed 表示用户在讨论后主动点击继续，不代表系统判定用户理解正确。
+- 略读必须由用户明确确认；临时查看、复习和引用只写呈现历史，不推进主线。
+- 当前不做理解打分，不由 Agent 主动发起新问题，也不自动开启下一轮。
