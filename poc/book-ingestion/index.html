@@ -2,9 +2,9 @@
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>知行 · 书籍导入 PoC</title></head>
 <body><main>
 <header><p>READ-BOOK / TECHNICAL POC C</p><h1>书籍导入与原文定位</h1><p>EPUB / PDF / TXT 解析、语义单元与引用定位验证。</p></header>
-<section><h2>固定测试样本</h2><div class="actions"><select id="fixture"><option value="epub-1">EPUB · 章节、脚注样本</option><option value="epub-2">EPUB · 多章节样本</option><option value="epub-3">EPUB · 图片引用样本</option><option value="pdf-1">PDF · 单栏文本样本</option><option value="pdf-2">PDF · 双栏文本样本</option><option value="pdf-3">PDF · 页眉页脚/多页样本</option><option value="txt-1">TXT · UTF-8 样本</option><option value="txt-2">TXT · 长段落样本</option><option value="txt-3">TXT · 编码回退样本</option></select><button id="import-fixture">导入固定样本</button></div>
+<section><h2>固定测试样本</h2><div class="actions"><select id="fixture"><option value="epub-1">EPUB · 章节、脚注样本</option><option value="epub-2">EPUB · 多章节样本</option><option value="epub-3">EPUB · 图片引用样本</option><option value="pdf-1">PDF · 单栏文本样本</option><option value="pdf-2">PDF · 双栏文本样本</option><option value="pdf-3">PDF · 页眉页脚/多页样本</option><option value="txt-1">TXT · UTF-8 样本</option><option value="txt-2">TXT · 长段落样本</option><option value="txt-3">TXT · 编码回退样本</option></select><button id="import-fixture">导入固定样本</button><button id="import-wikisource">从维基文库导入《传习录》原文</button></div>
 <label class="upload">或选择本地文件 <input id="file" type="file" accept=".epub,.pdf,.txt" multiple></label>
-<p id="status" role="status">可一次选择《传习录》及《毛泽东选集》五卷共 6 个文件；系统逐本解析并保留独立原文定位。</p><p id="batch-status" role="status"></p><pre id="output"></pre></section>
+<p id="status" role="status">可一次选择《传习录》及《毛泽东选集》五卷共 6 个文件；也可从维基文库导入《传习录》上、中、下原文。</p><p id="batch-status" role="status"></p><pre id="output"></pre></section>
 <section><h2>已导入文件（本地恢复）</h2><ul id="saved-books"></ul></section>
 <section><h2>标准书籍包导出</h2>
 <label>书名 <input id="book-title" required></label>
