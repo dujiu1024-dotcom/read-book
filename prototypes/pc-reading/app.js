@@ -642,14 +642,12 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
         return;
       }
 
-      const hasAgentConfiguration = Boolean(
-        (readerConfig.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken) &&
-        (readerConfig.generationApiBaseUrl || readerConfig.apiBaseUrl) &&
-        readerConfig.localDataSetId
-      );
       productionRuntime = await createProductionReaderRuntime({
         ...readerConfig,
-        localOnly: useLocalBookPackage && !hasAgentConfiguration,
+        // A locally generated BookRevision ID is not registered with the remote
+        // Generation service. Keep imported packages local until a server-side
+        // ingestion/registration handshake exists.
+        localOnly: useLocalBookPackage,
       }, bookRevision);
       const position = productionRuntime.readingPosition;
       if (position) {
