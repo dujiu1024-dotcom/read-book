@@ -448,3 +448,61 @@ test("restores a verified snapshot only into an empty dataset and preserves the 
   expect(result.overwriteRejected).toBe(true);
   expect(result.afterRejectedRestore.messages).toHaveLength(1);
 });
+
+
+test("ReadingRound persists mainline presentation and unit progress through completion", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    const round = { id: ids.roundId, threadId: ids.threadId, roundNumber: 1, status: "active", startedAt: "2026-11-14T00:00:00.000Z", completedAt: null };
+    const source = { id: ids.sourceId, threadId: ids.threadId, bookRevisionId: ids.revision, structureNodeId: "unit-1", chunkId: null, presentationType: "mainline", readingRoundId: ids.roundId, presentedAt: "2026-11-14T00:00:01.000Z", sourceLocator: { locator: "epubcfi(/6/2)" } };
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({ id: ids.threadId, datasetId: ids.datasetA, bookRevisionId: ids.revision, createdAt: "2026-11-14T00:00:00.000Z" });
+      await tx.createReadingRound(round);
+      await tx.saveReadingUnitProgress({ readingRoundId: ids.roundId, structureNodeId: "unit-1", status: "not_presented", firstPresentedSourceId: null, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:00.000Z" });
+      await tx.createPresentedSource(source);
+      await tx.saveReadingUnitProgress({ readingRoundId: ids.roundId, structureNodeId: "unit-1", status: "presented", firstPresentedSourceId: ids.sourceId, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:01.000Z" });
+      await tx.saveReadingUnitProgress({ readingRoundId: ids.roundId, structureNodeId: "unit-1", status: "awaiting_user", firstPresentedSourceId: ids.sourceId, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:02.000Z" });
+      await tx.appendUserMessage({ id: ids.messageId, threadId: ids.threadId, content: "围绕原文提出问题", createdAt: "2026-11-14T00:00:03.000Z", sourceReferences: [{ bookRevisionId: ids.revision, structureNodeId: "unit-1", locator: "epubcfi(/6/2)", presentationType: "mainline" }], idempotencyKey: "reading-unit-message" });
+      await tx.saveReadingUnitProgress({ readingRoundId: ids.roundId, structureNodeId: "unit-1", status: "discussion_active", firstPresentedSourceId: ids.sourceId, lastActivityMessageId: ids.messageId, completedAt: null, updatedAt: "2026-11-14T00:00:04.000Z" });
+      await tx.saveReadingUnitProgress({ readingRoundId: ids.roundId, structureNodeId: "unit-1", status: "discussed", firstPresentedSourceId: ids.sourceId, lastActivityMessageId: ids.messageId, completedAt: "2026-11-14T00:00:05.000Z", updatedAt: "2026-11-14T00:00:05.000Z" });
+      await tx.updateReadingRound(ids.roundId, "completed", "2026-11-14T00:00:06.000Z");
+      const snapshot = await tx.createConsistentSnapshot();
+      return { presentedSources: snapshot.presentedSources, progress: snapshot.readingUnitProgress, round: snapshot.readingRounds.find((item) => item.id === ids.roundId) };
+    });
+    const progress = await repository.getReadingUnitProgress(ids.datasetA, ids.roundId);
+    await repository.close();
+    return { ...result, progress };
+  }, { datasetA, revision, threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", roundId: "77777777-7777-4777-8777-777777777777", sourceId: "66666666-6666-4666-8666-666666666666", messageId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" });
+  expect(result.presentedSources).toHaveLength(1);
+  expect(result.progress[0].status).toBe("discussed");
+  expect(result.progress[0].lastActivityMessageId).toBe("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
+  expect(result.round.status).toBe("completed");
+  expect(result.progress).toHaveLength(1);
+});
+
+test("ReadingUnitProgress rejects backward transitions and temporary presentation does not change mainline progress", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    let backwardRejected = false;
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({ id: ids.threadId, datasetId: ids.datasetA, bookRevisionId: ids.revision, createdAt: "2026-11-14T00:00:00.000Z" });
+      await tx.createReadingRound({ id: ids.roundId, threadId: ids.threadId, roundNumber: 1, status: "active", startedAt: "2026-11-14T00:00:00.000Z", completedAt: null });
+      await tx.saveReadingUnitProgress({ readingRoundId: ids.roundId, structureNodeId: "unit-1", status: "not_presented", firstPresentedSourceId: null, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:00.000Z" });
+      await tx.createPresentedSource({ id: ids.sourceId, threadId: ids.threadId, bookRevisionId: ids.revision, structureNodeId: "unit-1", chunkId: null, presentationType: "temporary", readingRoundId: null, presentedAt: "2026-11-14T00:00:01.000Z", sourceLocator: { locator: "epubcfi(/6/2)" } });
+      const before = await tx.createConsistentSnapshot();
+      try {
+        await tx.saveReadingUnitProgress({ readingRoundId: ids.roundId, structureNodeId: "unit-1", status: "awaiting_user", firstPresentedSourceId: null, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:02.000Z" });
+      } catch { backwardRejected = true; }
+      return { before: before.readingUnitProgress, after: (await tx.createConsistentSnapshot()).readingUnitProgress };
+    });
+    await repository.close();
+    return { backwardRejected, before: result.before, after: result.after };
+  }, { datasetA, revision, threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", roundId: "77777777-7777-4777-8777-777777777777", sourceId: "66666666-6666-4666-8666-666666666666" });
+  expect(result.backwardRejected).toBe(true);
+  expect(result.before[0].status).toBe("not_presented");
+  expect(result.after[0].status).toBe("not_presented");
+});
