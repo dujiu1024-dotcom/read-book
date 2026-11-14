@@ -412,9 +412,10 @@ export async function runGenerationTurn(
   let persistEvents = Promise.resolve();
   try {
     cursor = await client.stream(accepted.generation_id, cursor, input.signal, (event) => {
-      const next = advanceGenerationEventCursor({ generationId: accepted.generation_id, lastSequence: event.sequence - 1, lastEventId: null }, event).cursor;
+      cursor = advanceGenerationEventCursor(cursor, event).cursor;
+      const eventCursor = { ...cursor };
       const status = event.type === "started" ? "running" : event.type === "failed" ? "failed" : event.type === "cancelled" ? "cancelled" : "running";
-      persistEvents = persistEvents.then(() => repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status, lastSequence: next.lastSequence, lastEventId: event.event_id, expiresAt: accepted.expires_at, updatedAt: now() })));
+      persistEvents = persistEvents.then(() => repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status, lastSequence: eventCursor.lastSequence, lastEventId: eventCursor.lastEventId, expiresAt: accepted.expires_at, updatedAt: now() })));
       if (event.type === "delta") input.onDelta?.(event.text);
       if (event.type === "started") input.onStatus?.("running");
       if (event.type === "failed") input.onStatus?.("failed");
