@@ -598,7 +598,11 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
         }
         renderSource();
         updateCount();
-        setGenerationStatus("已从 GitHub 读取 " + units.length + " 个阅读单元。" + localPositionMessage + " 备份未配置，真实 Agent 尚未接入。");
+        const cachedCount = bookRevision.sourceMetadata?.cacheFallbackCount || 0;
+        const cacheMessage = cachedCount
+          ? "本次有 " + cachedCount + " 个来源资源由离线缓存提供。"
+          : "已启用在线优先的本机来源缓存。";
+        setGenerationStatus("已从 GitHub 读取 " + units.length + " 个阅读单元。" + localPositionMessage + " " + cacheMessage + " 备份未配置，真实 Agent 尚未接入。");
         return;
       }
       if (isDemoProvider) {
