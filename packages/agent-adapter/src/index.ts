@@ -157,6 +157,9 @@ export function validateGenerationRequest(value: GenerationRequest): void {
     ]);
     let sourceCharacters = value.context.current_source.excerpt.length;
     for (const [index, source] of value.context.additional_sources.entries()) {
+      if (!source || typeof source !== "object" || Array.isArray(source)) {
+        throw new GenerationProtocolError("Every additional_sources item must be an object.");
+      }
       requiredUuid(source.structure_node_id, `context.additional_sources[${index}].structure_node_id`);
       boundedString(source.locator, `context.additional_sources[${index}].locator`, 1, 512);
       if (typeof source.excerpt !== "string" || source.excerpt.length > 30_000) {
