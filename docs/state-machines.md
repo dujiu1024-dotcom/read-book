@@ -1,8 +1,8 @@
 # 知行核心状态机
 
-> 版本：0.2.0-draft  
+> 版本：0.2.1-draft  
 > 状态：设计草案；产品语义边界已按已确认原则约束，讨论完成判定、消息持久化边界及恢复流程仍有待确认。  
-> 权威范围：定义阅读主线、阅读轮次、生成任务、消息、备份和数据集的状态及转换。字段定义见 [核心数据字典](data-dictionary.md)，API 定义见 [OpenAPI 契约](api-contract.yaml)。
+> 权威范围：定义阅读主线、阅读轮次、生成任务、消息、备份和数据集的状态及转换。字段定义见 [核心数据字典](data-dictionary.md)，API 定义见 [OpenAPI 契约](api-contract.yaml)。交叉审查记录见 [状态机与 API 契约一致性审查](state-machine-contract-audit.md)。
 
 ## 1. 状态机总原则
 
@@ -149,13 +149,17 @@ Thread 状态仅表达会话生命周期，不表达阅读进度。
 ### 6.2 GenerationJob / GenerationReceipt
 
 服务端 GenerationJob：
-queued → running → completed / failed / cancelled / expired
+queued → running → cancel_requested → cancelled / completed / failed
+queued → cancel_requested → cancelled / completed / failed
+queued / running → completed / failed / expired（终态竞态由服务端原子提交决定）
 
 本地 GenerationReceipt：
 submitted → streaming → completed / failed / cancelled / expired
 
 规则：
-- 服务端终态只允许一次；取消与自然完成竞态由服务端原子提交先后决定。
+- cancel_requested 是非终态，表示已收到取消请求但任务尚未提交最终结果；API 的 GenerationAccepted / GenerationStatus 均可返回该状态。
+- cancel_requested → cancelled 表示取消成功；若任务在取消生效前自然完成或失败，则允许转为 completed / failed。所有终态只能原子提交一次；取消与自然完成竞态以服务端先提交的终态为准。
+- 客户端取消接口返回 202 只代表取消请求已接受，不代表最终状态已经 cancelled。
 - 网络断开不等于任务失败；客户端恢复连接后通过 generation_id 查询。
 - 事件流 sequence 只用于增量显示和断点恢复，不是最终结果权威来源。
 - 服务端 completed 后必须可查询完整结果，直到 expires_at。
@@ -308,8 +312,34 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 | 服务端 BackupUploadSession | open / completing / completed / expired / rejected | 上传会话生命周期；completed 不得绕过 Manifest 最终提交检查 |
 | 服务端 BackupManifest | uploading / committed / rejected / inaccessible | 备份清单生命周期；只有 committed 且父链完整的备份可进入可恢复清单 |
 
+### 11.1 BackupUploadSession 状态转换
+
+| 当前状态 | 事件/条件 | 下一状态 | 处理规则 |
+|---|---|---|---|
+| 不存在 | 幂等初始化请求通过校验 | open | 创建上传会话，返回已收到分块列表 |
+| open | 分块上传通过哈希与 part_no 校验 | open | 相同 part_no + 相同哈希为幂等成功；相同 part_no + 不同哈希拒绝 |
+| open | 客户端提交 complete | completing | 原子锁定会话，检查分块数量和清除墓碑 |
+| open | 超过 expires_at | expired | 不再接受分块或完成请求 |
+| completing | 密文哈希、分块、版本、父链和墓碑校验全部通过，Manifest 提交成功 | completed | 仅在 Manifest.committed 后进入 completed |
+| completing | 校验失败或墓碑命中 | rejected | 记录错误；不得生成可恢复清单 |
+| completed / expired / rejected | 重放请求 | 不变 | 返回既有结果或明确拒绝，不重新提交、不复活 |
+
+### 11.2 BackupManifest 状态转换
+
+| 当前状态 | 事件/条件 | 下一状态 | 处理规则 |
+|---|---|---|---|
+| 不存在 | 初始化备份并创建清单 | uploading | 仅为待提交记录，不可恢复 |
+| uploading | 上传会话完成且密文/父链/墓碑校验通过 | committed | 进入可恢复备份清单 |
+| uploading | 校验失败、会话过期或清除墓碑命中 | rejected | 不可恢复；密文对象按存储保留策略处理 |
+| committed | 数据集被清除或访问资格被不可逆撤销 | inaccessible | 只失效化清单可用性，不物理删除原始密文和密钥材料 |
+| rejected / inaccessible | 重试或普通授权 | 不变 | 不允许原位复活；新备份必须使用新 backup_id 和 backup_sequence |
+
+inaccessible 是访问状态，不代表密文已删除或已损坏；DataSetLifecycle.cleared 墓碑仍是所有读写接口的最终判定权威。
+
 补充约束：
-- 网络中断、页面关闭或客户端超时不等于服务端上传失败；恢复后先查询会话和备份清单，再决定续传或重建。
+- 网络中断、页面关闭或客户端超时不等于服务端上传失败；恢复后先查询上传会话状态和备份清单，再决定续传或重建。
+- API 必须提供按 backup_id 查询上传会话状态及已收到分块的只读接口；客户端不能通过猜测最后一次 HTTP 响应推断会话状态。
+
 - 客户端不得仅凭 HTTP 成功响应推进 `last_acked_sequence`，必须确认服务端 `BackupManifest.committed`。
 - `retryable_failed`、`permanent_failed` 是客户端任务状态，不是 BackupManifest 的新枚举值。
 - 同一幂等键重试必须返回同一上传会话；已提交备份不可被重试覆盖。
@@ -373,6 +403,12 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 | SM-022 | LocalDataSet 处于 restore_pending | 解密、迁移或关系校验任一步失败 | 不提交半成品；保留原数据/快照并记录失败原因 |
 | SM-023 | ExternalIdentity 已 revoked | 使用原 provider_subject 登录 | 拒绝旧映射；重新绑定必须创建新记录并通过唯一性校验 |
 | SM-024 | AccountDataSetBinding 为 inactive | 用户明确重新选择该账号下的数据集 | 重新校验权限与 DataSetLifecycle 后才可转为 active |
+| SM-025 | GenerationJob 为 running，取消请求先于任务终态提交 | 客户端请求取消 | 任务进入 cancel_requested；接口返回 202；随后只能原子提交 cancelled / completed / failed 之一 |
+| SM-026 | BackupUploadSession 为 open，客户端因断网不确定分块是否成功 | 客户端按 backup_id 查询会话 | 返回当前状态与已收到分块；相同 part_no/哈希重传幂等，不同哈希拒绝 |
+| SM-027 | BackupManifest 为 committed | 数据集清除墓碑成功提交 | Manifest 转为 inaccessible；原始密文不物理删除，所有下载/恢复仍由墓碑拒绝 |
+| SM-028 | BackupUploadSession 为 completing，清除请求并发提交 | 服务端完成最终校验 | 清除墓碑优先；会话 rejected，Manifest 不得 committed |
+| SM-029 | 同一 LocalDataSet 已存在 active AccountDataSetBinding | 另一账号尝试建立 active 绑定 | 唯一约束拒绝；不得出现同数据集双账号同时可访问 |
+| SM-030 | RecoveryChallenge 为 consumed 或已过期 | 客户端重放 challenge_id | 拒绝重放；不签发第二份 BackupAuthorization，必须创建新挑战 |
 
 ## 15. 尚待确认与验证
 
@@ -383,6 +419,7 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 4. Message.pending 的持久化语义，以及本地 Message 状态与 GenerationReceipt 状态的映射。
 5. 浏览器安装上下文是否需要独立 Device 标识；第一版不因此引入多设备同步或数据集自动合并。
 6. RecoveryChallenge 的失败次数、速率限制、挑战有效期和重放保护参数，由安全设计确定。
+7. AccountDataSetBinding.account_id 在数据字典中为 TEXT，而服务端 Account.id 为 UUID；需确认它存储 Account UUID 字符串还是平台 opaque subject，确认前不得假定二者可直接关联。
 
 ### 需要 PoC 验证
 - 本地事务并发下主线状态与 Message sequence 一致性。
