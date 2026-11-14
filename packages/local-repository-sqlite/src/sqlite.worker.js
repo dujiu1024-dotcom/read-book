@@ -419,6 +419,14 @@ function txOperation(datasetId, operation, input) {
     default: throw new Error("未知 Repository 事务操作：" + operation);
   }
 }
+function classifyRepositoryError(error) {
+  const message = error?.message || String(error);
+  if (/SQLITE_FULL|database or disk is full|quota exceeded|storage quota/i.test(message)) return "QUOTA_EXCEEDED";
+  if (/SQLITE_CORRUPT|SQLITE_NOTADB|database disk image is malformed|file is not a database/i.test(message)) return "INTEGRITY_FAILED";
+  if (/Schema v\\d+ 迁移失败|数据库版本高于当前客户端/i.test(message)) return "MIGRATION_FAILED";
+  return null;
+}
+
 function handle(message) {
   const { type, id } = message;
   if (type === "init") return initialize();
@@ -480,6 +488,8 @@ self.onmessage = async ({data}) => {
     const result=await handle(data);
     self.postMessage({id:data.id,result});
   } catch(error) {
-    self.postMessage({id:data.id,error:{message:error?.message||String(error)}});
+    const message = error?.message || String(error);
+    const code = classifyRepositoryError(error);
+    self.postMessage({id:data.id,error:{message,...(code ? {code} : {})}});
   }
 };
