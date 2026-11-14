@@ -549,6 +549,7 @@ export interface GenerationTurnController {
 export function createGenerationTurnController(
   repository: GenerationTurnRepository,
   client: ReturnType<typeof createGenerationClient>,
+  datasetId: string,
   options: GenerationTurnControllerOptions = {},
 ): GenerationTurnController {
   let activeController: AbortController | null = null;
@@ -568,6 +569,7 @@ export function createGenerationTurnController(
 
   return Object.freeze({
     send(input: Omit<GenerationTurnInput, "signal">) {
+      if (input.datasetId !== datasetId) return Promise.reject(new GenerationProtocolError("Conversation controller is bound to a different local dataset."));
       return execute((signal) => runGenerationTurn(repository, client, {
         ...input,
         signal,
@@ -576,6 +578,7 @@ export function createGenerationTurnController(
       }));
     },
     resume(input: { datasetId: string; clientGenerationId: string; request: GenerationRequest; now?: () => string }) {
+      if (input.datasetId !== datasetId) return Promise.reject(new GenerationProtocolError("Conversation controller is bound to a different local dataset."));
       return execute((signal) => recoverGenerationTurn(repository, client, {
         ...input,
         signal,
@@ -594,7 +597,7 @@ export function createGenerationTurnController(
             throw new GenerationProtocolError("Recovery request does not match its pending delivery.");
           }
           results.push(await recoverGenerationTurn(repository, client, {
-            datasetId: delivery.threadId ? (await repository.getGenerationDelivery(delivery.clientGenerationId)) && (resumeOptions as { datasetId?: string }).datasetId || "" : "",
+            datasetId,
             clientGenerationId: delivery.clientGenerationId,
             request,
             signal,
