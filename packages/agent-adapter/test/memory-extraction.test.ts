@@ -133,6 +133,7 @@ test("persists accepted candidates only when an explicit immutable version plan 
       return operation({
         async appendMemoryVersion(version: unknown) { writes.push({ kind: "version", version }); },
         async appendMemoryRelation(relation: unknown) { writes.push({ kind: "relation", relation }); },
+        async resolveMemoryCandidate(candidateId: string, status: "accepted" | "rejected") { writes.push({ kind: "resolve", candidateId, status }); return true; },
       });
     },
   };
@@ -161,6 +162,7 @@ test("memory persistence revalidates the evolution relation before writing", asy
       return operation({
         async appendMemoryVersion() { writes += 1; },
         async appendMemoryRelation() { writes += 1; },
+        async resolveMemoryCandidate() { writes += 1; return true; },
       });
     },
   };
