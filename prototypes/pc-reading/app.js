@@ -5,10 +5,8 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
   let units = [];
   let bookRevision = null;
   const readerConfig = window.READ_BOOK_CONFIG || {};
-  const isDemoProvider = !readerConfig.apiBaseUrl;
-  const bookContentProvider = isDemoProvider
-    ? createDemoBookContentProvider()
-    : createPublicBookApiProvider({ baseUrl: readerConfig.apiBaseUrl, getAccessToken: readerConfig.getAccessToken });
+  const isDemoProvider = !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId;
+  let bookContentProvider = null;
   const requestedBookRevisionId = readerConfig.bookRevisionId || (isDemoProvider ? "demo-book-revision-1" : "");
 
   const state = {
@@ -291,6 +289,19 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
 
   async function initializeReader() {
     try {
+      if (isDemoProvider) {
+        bookContentProvider = createDemoBookContentProvider();
+      } else {
+        if (!readerConfig.apiBaseUrl || !readerConfig.bookRevisionId) {
+          throw new Error("真实书籍模式必须同时提供 READ_BOOK_CONFIG.apiBaseUrl 和 bookRevisionId。");
+        }
+        bookContentProvider = createPublicBookApiProvider({
+          baseUrl: readerConfig.apiBaseUrl,
+          getAccessToken: readerConfig.getAccessToken,
+        });
+        state.messages = [];
+        messageList.replaceChildren();
+      }
       if (!requestedBookRevisionId) throw new Error("真实书籍模式必须提供 READ_BOOK_CONFIG.bookRevisionId。");
       bookRevision = await bookContentProvider.loadBookRevision(requestedBookRevisionId);
       units = bookRevision.units;
