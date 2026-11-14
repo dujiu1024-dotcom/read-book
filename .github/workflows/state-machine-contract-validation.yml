@@ -1,0 +1,27 @@
+name: State machine contract validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: state-machine-contract-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned OpenAPI validator
+        run: python -m pip install openapi-spec-validator==0.7.2 PyYAML==6.0.2
+      - name: Validate OpenAPI and cross-document state contract
+        run: python tools/contract_validation/validate_state_machine_contract.py
