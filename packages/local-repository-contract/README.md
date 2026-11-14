@@ -9,14 +9,14 @@ Issue #26 的 Repository 边界与事务契约。当前不绑定 IndexedDB 或 S
 - Message 采用追加写；同一 Thread 的 sequence 由 Repository 在事务内原子分配，并由唯一约束保证。
 - 用户消息写入接口只在数据库事务成功提交后 resolve；失败必须 reject，不得返回“已保存”。
 - Agent 请求只能在本地消息保存 Promise resolve 后启动；事务回调不得发起网络或模型调用。
-- ReadingRound、Citation、Note、MemoryVersion 与来源关系在同一事务边界内维护。
+- ReadingRound、ReadingPosition、PresentedSource、ReadingUnitProgress、Citation、Note、MemoryVersion/Relation/Candidate 与来源关系在同一事务边界内维护。
 - 认知版本追加，不覆盖旧版本。
 - 账号关联撤销采用软删除：只撤销指定绑定及其派生索引/授权信息，不删除数据集和其他私人数据。
 - schema 迁移失败、写锁不可用、配额不足或完整性检查失败时，不得静默切换第二个可写主库。
 
 ## 当前实现状态
 
-已交付 Repository 接口、按 datasetId 绑定的事务边界、错误码、数据集备份序号不变量和 Agent UserMessageRepository 结构适配器。尚未交付真实持久化适配器、迁移、并发锁、数据集隔离的数据库级约束和浏览器端恢复。
+已交付 Repository 接口、按 datasetId 绑定的事务边界、错误码、数据集备份序号不变量、Agent UserMessageRepository 适配器，以及 SQLite OPFS 持久化实现。SQLite Schema v6 已持久化阅读轮次、呈现历史和单元进度；HTTP 加密备份客户端已接入快照确认与空数据集恢复。正式服务端和统一最终验证仍未完成。
 
 ## 运行测试
 
