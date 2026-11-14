@@ -678,7 +678,7 @@ export interface GenerationTurnController {
   /** Resume all durable pending deliveries in creation order. */
   resumePending(
     requestForDelivery: (delivery: NonNullable<Awaited<ReturnType<GenerationTurnRepository["getGenerationDelivery"]>>>) => Promise<GenerationRequest>,
-    options?: { now?: () => string },
+    options?: { now?: () => string; threadId?: string; onDelta?: (clientGenerationId: string, text: string) => void; onStatus?: (clientGenerationId: string, status: GenerationStatus) => void },
   ): Promise<GenerationTurnResult[]>;
   stop(): void;
   isBusy(): boolean;
@@ -731,7 +731,7 @@ export function createGenerationTurnController(
     },
     resumePending(requestForDelivery, resumeOptions = {}) {
       return execute(async (signal) => {
-        const pending = await repository.listPendingGenerationDeliveries();
+        const pending = (await repository.listPendingGenerationDeliveries()).filter((delivery) => !resumeOptions.threadId || delivery.threadId === resumeOptions.threadId);
         const results: GenerationTurnResult[] = [];
         for (const delivery of pending) {
           if (signal.aborted) break;
@@ -745,8 +745,8 @@ export function createGenerationTurnController(
             request,
             signal,
             now: resumeOptions.now,
-            onDelta: (text) => options.onDelta?.(delivery.clientGenerationId, text),
-            onStatus: (status) => options.onStatus?.(delivery.clientGenerationId, status),
+            onDelta: (text) => { resumeOptions.onDelta?.(delivery.clientGenerationId, text); options.onDelta?.(delivery.clientGenerationId, text); },
+            onStatus: (status) => { resumeOptions.onStatus?.(delivery.clientGenerationId, status); options.onStatus?.(delivery.clientGenerationId, status); },
           }));
         }
         return results;
