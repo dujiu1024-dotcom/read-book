@@ -360,7 +360,7 @@ export interface GenerationTurnInput {
   onDelta?: (text: string) => void;
   onStatus?: (status: GenerationStatus) => void;
   /** Called only after the local transaction containing both messages and delivery receipt commits. */
-  onPersisted?: () => void;
+  onPersisted?: () => void | Promise<void>;
 }
 
 export interface GenerationTurnResult {
@@ -386,6 +386,7 @@ export async function runGenerationTurn(
     if (existing.idempotencyKey !== input.idempotencyKey || existing.userMessageId !== input.userMessage.id || existing.assistantMessageId !== input.assistantMessageId || existing.threadId !== input.userMessage.threadId) {
       throw new GenerationProtocolError("A generation delivery already exists with different message or idempotency identity.");
     }
+    await input.onPersisted?.();
     if (existing.status === "queued" || existing.status === "running") {
       return recoverGenerationTurn(repository, client, { datasetId: input.datasetId, clientGenerationId: input.request.client_generation_id, request: input.request, signal: input.signal, now: input.now, onDelta: input.onDelta, onStatus: input.onStatus });
     }
@@ -399,7 +400,7 @@ export async function runGenerationTurn(
     await tx.appendAssistantMessage({ id: input.assistantMessageId, threadId: input.userMessage.threadId, content: "", status: "generating", createdAt: now(), sourceReferences: [], idempotencyKey: input.idempotencyKey + ":assistant" });
     await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: null, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "queued", lastSequence: 0, lastEventId: null, expiresAt: null, updatedAt: now() });
   });
-  input.onPersisted?.();
+  await input.onPersisted?.();
   let accepted: GenerationAccepted;
   try {
     accepted = await client.create(input.request, input.idempotencyKey);
