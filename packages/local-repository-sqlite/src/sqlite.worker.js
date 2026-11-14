@@ -216,7 +216,7 @@ function txOperation(datasetId, operation, input) {
     }
     case "createReadingRound": {
       const r=input.round;
-      if (r.threadId !== datasetId && !first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [r.threadId,datasetId])) throw new Error("ReadingRound Thread 不属于当前数据集");
+      if (!first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [r.threadId,datasetId])) throw new Error("ReadingRound Thread 不属于当前数据集");
       execute("INSERT INTO reading_round(id,dataset_id,thread_id,round_number,status,started_at,completed_at) VALUES(?,?,?,?,?,?,?)",
         [r.id,datasetId,r.threadId,r.roundNumber,r.status,r.startedAt,r.completedAt||null]);
       transactionDirty=true;
@@ -253,9 +253,13 @@ function txOperation(datasetId, operation, input) {
       const memory=first("SELECT * FROM memory WHERE id=? AND dataset_id=?", [v.memoryId,datasetId]);
       if (!memory) {
         if (v.version!==1 || v.previousVersionId!==null || v.changeKind!=="new") throw new Error("首个 MemoryVersion 必须是 version 1 / new");
-        if (!first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [input.threadId,datasetId])) throw new Error("Memory Thread 不属于当前数据集");
+        const firstSourceMessageId = v.sourceMessageIds?.[0];
+        const sourceMessage = firstSourceMessageId
+          ? first("SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [firstSourceMessageId,datasetId])
+          : null;
+        if (!sourceMessage) throw new Error("首个 MemoryVersion 必须关联当前数据集中的来源消息");
         execute("INSERT INTO memory(id,dataset_id,thread_id,current_version_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-          [v.memoryId,datasetId,input.threadId,v.id,v.createdAt,v.createdAt]);
+          [v.memoryId,datasetId,sourceMessage.thread_id,v.id,v.createdAt,v.createdAt]);
       } else {
         const current=first("SELECT * FROM memory_version WHERE id=? AND dataset_id=?", [memory.current_version_id,datasetId]);
         if (!current || v.version!==current.version+1 || v.previousVersionId!==current.id || v.changeKind==="new") throw new Error("MemoryVersion 必须追加到当前版本");
@@ -271,23 +275,24 @@ function txOperation(datasetId, operation, input) {
       return row ? { id:row.id,accountId:row.account_id,localDataSetId:row.dataset_id,status:row.status,boundAt:row.bound_at,lastSelectedAt:row.last_selected_at,revokedAt:row.revoked_at } : null;
     }
     case "softRevokeAccountDataSetBinding": {
-      const result=execute("UPDATE account_dataset_binding SET account_id=NULL,status='revoked',revoked_at=? WHERE id=? AND dataset_id=? AND status!='revoked'", [input.revokedAt,input.bindingId,datasetId]);
+      execute("UPDATE account_dataset_binding SET account_id=NULL,status='revoked',revoked_at=? WHERE id=? AND dataset_id=? AND status!='revoked'", [input.revokedAt,input.bindingId,datasetId]);
+      const changed = db.changes() > 0;
       execute("DELETE FROM binding_authorization WHERE binding_id=? AND EXISTS(SELECT 1 FROM account_dataset_binding b WHERE b.id=? AND b.dataset_id=?)", [input.bindingId,input.bindingId,datasetId]);
-      if (db.changes()) transactionDirty=true;
-      return db.changes()>0;
+      if (changed) transactionDirty=true;
+      return changed;
     }
     case "createConsistentSnapshot": {
       const ds=first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
       return {
-        dataSetId:datasetId,schemaVersion:ds.schema_version,dirtySequence:ds.dirty_sequence,
+        datasetId:datasetId,schemaVersion:ds.schema_version,dirtySequence:ds.dirty_sequence,
         threads:execute("SELECT id,dataset_id AS datasetId,book_revision_id AS bookRevisionId,created_at AS createdAt FROM thread WHERE dataset_id=?", [datasetId]),
         messages:execute("SELECT * FROM message WHERE dataset_id=? ORDER BY thread_id,sequence", [datasetId]).map(rowToMessage),
         readingRounds:execute("SELECT id,thread_id AS threadId,started_at AS startedAt,completed_at AS completedAt,round_number AS roundNumber,status FROM reading_round WHERE dataset_id=?", [datasetId]),
         readingPositions:execute("SELECT thread_id AS threadId,mainline_node_id AS mainlineNodeId,displayed_node_id AS displayedNodeId,view_mode AS viewMode,current_unit_discussed AS currentUnitDiscussed,updated_at AS updatedAt FROM reading_position WHERE dataset_id=?", [datasetId]),
-        citations:execute("SELECT * FROM citation WHERE dataset_id=?", [datasetId]),
-        notes:execute("SELECT * FROM note WHERE dataset_id=?", [datasetId]).map(n=>({...n,sourceMessageIds:parseJson(n.source_message_ids),sourceReferences:parseJson(n.source_references)})),
-        memories:execute("SELECT * FROM memory WHERE dataset_id=?", [datasetId]),
-        memoryVersions:execute("SELECT * FROM memory_version WHERE dataset_id=? ORDER BY memory_id,version", [datasetId]).map(v=>({...v,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references)})),
+        citations:execute("SELECT * FROM citation WHERE dataset_id=?", [datasetId]).map(c=>({id:c.id,threadId:c.thread_id,messageId:c.message_id,bookRevisionId:c.book_revision_id,structureNodeId:c.structure_node_id,locator:c.locator,excerpt:c.excerpt,excerptHash:c.excerpt_hash,createdAt:c.created_at})),
+        notes:execute("SELECT * FROM note WHERE dataset_id=?", [datasetId]).map(n=>({id:n.id,datasetId:n.dataset_id,threadId:n.thread_id,readingRoundId:n.reading_round_id,content:n.content,sourceMessageIds:parseJson(n.source_message_ids),sourceReferences:parseJson(n.source_references),createdAt:n.created_at,updatedAt:n.updated_at,revision:n.revision})),
+        memories:execute("SELECT * FROM memory WHERE dataset_id=?", [datasetId]).map(m=>({id:m.id,datasetId:m.dataset_id,threadId:m.thread_id,currentVersionId:m.current_version_id,createdAt:m.created_at,updatedAt:m.updated_at})),
+        memoryVersions:execute("SELECT * FROM memory_version WHERE dataset_id=? ORDER BY memory_id,version", [datasetId]).map(v=>({id:v.id,memoryId:v.memory_id,version:v.version,previousVersionId:v.previous_version_id,changeKind:v.change_kind,content:v.content,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references),createdAt:v.created_at})),
       };
     }
     default: throw new Error("未知 Repository 事务操作：" + operation);
@@ -298,11 +303,17 @@ function handle(message) {
   if (type === "init") return initialize();
   if (type === "begin") {
     if (activeDatasetId) throw new Error("SQLite Worker 已有活动事务");
-    ensureDataset(message.datasetId);
     db.exec({sql:"BEGIN IMMEDIATE"});
     activeDatasetId=message.datasetId;
     transactionDirty=false;
-    return true;
+    try {
+      ensureDataset(message.datasetId);
+      return true;
+    } catch (error) {
+      db.exec({sql:"ROLLBACK"});
+      activeDatasetId=null;
+      throw error;
+    }
   }
   if (type === "tx") return txOperation(message.datasetId,message.operation,message.input||{});
   if (type === "commit") {
