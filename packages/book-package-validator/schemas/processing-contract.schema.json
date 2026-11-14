@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://read-book.local/schemas/processing-contract.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "revision_states", "attempt_states", "stages"],
+  "properties": {
+    "contract_version": { "type": "string", "const": "1.0.0" },
+    "revision_states": { "type": "array", "uniqueItems": true, "items": { "enum": ["uploaded", "validating_package", "queued", "processing", "quality_check", "accepted", "pending_rights_review", "publishable", "published", "rejected", "retryable_failed", "failed", "needs_rework"] } },
+    "attempt_states": { "type": "array", "uniqueItems": true, "items": { "enum": ["queued", "running", "succeeded", "retryable_failed", "failed", "cancelled"] } },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["stage", "depends_on", "retry_scope"],
+        "properties": {
+          "stage": { "enum": ["package_inspection", "source_verification", "metadata_normalization", "parse", "normalize", "structure", "chunk", "embedding", "index_build", "quality_check", "rights_review", "publish"] },
+          "depends_on": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+          "retry_scope": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}
