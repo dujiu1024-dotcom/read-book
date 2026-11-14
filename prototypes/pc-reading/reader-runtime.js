@@ -444,7 +444,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       if (!user) throw new Error("待恢复任务关联的用户消息不存在，已保留本地记录。");
       const sourceBundle = createSourceBundleFromReferences(user.sourceReferences);
       if (!sourceBundle.current_source ||
-          sourceBundle.units.some((unit) => unit.bookRevisionId !== bookRevision.bookRevisionId)) {
+          user.sourceReferences?.[0]?.bookRevisionId !== bookRevision.bookRevisionId) {
         throw new Error("待恢复任务的原文证据不属于当前书籍版本，已阻止错误恢复。");
       }
       const priorMessages = messages
