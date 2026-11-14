@@ -28,11 +28,10 @@ export async function createLocalCorpusRuntime(bookRevision, {
   }
   const localDatasetId = required(datasetId, "localDataSetId");
   const repository = repositoryFactory();
-  await repository.initialize();
-
   let thread;
   let readingPosition = null;
   try {
+    await repository.initialize();
     await repository.transaction(localDatasetId, async (tx) => {
       thread = await tx.getThreadByRevision(bookRevision.bookRevisionId);
       if (!thread) {
