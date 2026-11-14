@@ -274,7 +274,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     const selected = [canonicalCurrent];
     const seen = new Set([canonicalCurrent.id]);
     for (const candidate of Array.isArray(additionalUnits) ? additionalUnits : []) {
-      if (selected.length > 8) break;
+      if (selected.length >= 8) break;
       const unit = bookRevision.units.find((item) => item.id === candidate?.id);
       if (!unit || seen.has(unit.id) || !unit.locator || typeof unit.text !== "string") continue;
       seen.add(unit.id);
