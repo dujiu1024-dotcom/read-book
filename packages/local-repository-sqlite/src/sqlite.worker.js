@@ -413,7 +413,8 @@ function txOperation(datasetId, operation, input) {
       const thread=first("SELECT book_revision_id FROM thread WHERE id=? AND dataset_id=?",[s.threadId,datasetId]);
       if (!thread || thread.book_revision_id!==s.bookRevisionId) throw new Error("PresentedSource 必须绑定当前 Thread 的 BookRevision");
       if (!["mainline","review","temporary","citation"].includes(s.presentationType)) throw new Error("PresentedSource presentationType 非法");
-      if (!s.sourceLocator || typeof s.sourceLocator!=="object" || Array.isArray(s.sourceLocator)) throw new Error("PresentedSource 必须保存原文定位");
+      if (!s.sourceLocator || typeof s.sourceLocator!=="object" || Array.isArray(s.sourceLocator) || typeof s.sourceLocator.locator!=="string" || !s.sourceLocator.locator.trim()) throw new Error("PresentedSource 必须保存有效原文定位");
+      if (!Number.isFinite(Date.parse(s.presentedAt))) throw new Error("PresentedSource presentedAt 非法");
       if (s.presentationType==="mainline" && !s.readingRoundId) throw new Error("主线呈现必须绑定 ReadingRound");
       if (s.readingRoundId && !first("SELECT id FROM reading_round WHERE id=? AND thread_id=? AND dataset_id=?",[s.readingRoundId,s.threadId,datasetId])) throw new Error("PresentedSource ReadingRound 不属于当前 Thread");
       execute("INSERT INTO presented_source(id,dataset_id,thread_id,book_revision_id,structure_node_id,chunk_id,presentation_type,reading_round_id,presented_at,source_locator) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -428,6 +429,9 @@ function txOperation(datasetId, operation, input) {
       if (!round) throw new Error("ReadingUnitProgress ReadingRound 不属于当前数据集");
       const allowedStatuses=["not_presented","presented","awaiting_user","discussion_active","discussed","skipped"];
       if (!allowedStatuses.includes(p.status)) throw new Error("ReadingUnitProgress status 非法");
+      if (p.status!=="not_presented" && !p.firstPresentedSourceId) throw new Error("已呈现单元必须关联 firstPresentedSourceId");
+      if (["discussion_active","discussed"].includes(p.status) && !p.lastActivityMessageId) throw new Error("讨论状态必须关联 lastActivityMessageId");
+      if (p.status==="not_presented" && p.firstPresentedSourceId) throw new Error("not_presented 单元不能已有呈现来源");
       if (p.firstPresentedSourceId) {
         const source=first("SELECT reading_round_id,thread_id,structure_node_id FROM presented_source WHERE id=? AND dataset_id=?",[p.firstPresentedSourceId,datasetId]);
         if (!source || source.reading_round_id!==p.readingRoundId || source.thread_id!==round.thread_id || source.structure_node_id!==p.structureNodeId) throw new Error("ReadingUnitProgress firstPresentedSourceId 不匹配");
