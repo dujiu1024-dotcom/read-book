@@ -6,5 +6,16 @@
 <label class="upload">或选择本地文件 <input id="file" type="file" accept=".epub,.pdf,.txt"></label>
 <p id="status" role="status">等待导入。</p><pre id="output"></pre></section>
 <section><h2>已导入文件（本地恢复）</h2><ul id="saved-books"></ul></section>
+<section><h2>标准书籍包导出</h2>
+<label>书名 <input id="book-title" required></label>
+<label>作者 <input id="book-author" required placeholder="请填写真实作者，不会自动编造"></label>
+<label>语言 <input id="book-language" value="zh-CN" required></label>
+<label>ISBN（可选） <input id="book-isbn"></label>
+<label>版次（可选） <input id="book-edition"></label>
+<label>译者（可选） <input id="book-translator"></label>
+<label>出版社（可选） <input id="book-publisher"></label>
+<button id="export-package" disabled>导出标准书籍包 ZIP</button>
+<p>导出内容包括原始文件、书目元数据、章节定位和带 SHA-256 的正文切片；不生成虚构作者或向量。</p>
+</section>
 <section><h2>原文引用回跳</h2><label>选择定位记录 <select id="citation"></select></label><button id="jump">定位到原文</button><pre id="source"></pre></section>
 </main><script type="module" src="/src/main.js"></script></body></html>
