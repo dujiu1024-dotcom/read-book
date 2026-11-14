@@ -21,6 +21,10 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   let datasetId = required(config.localDataSetId, "READ_BOOK_CONFIG.localDataSetId");
   const getAccessToken = config.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken;
   if (typeof getAccessToken !== "function") throw new Error("缺少登录令牌提供器。");
+  const generationApiBaseUrl = config.generationApiBaseUrl || config.apiBaseUrl;
+  if (typeof generationApiBaseUrl !== "string" || !generationApiBaseUrl.trim()) {
+    throw new Error("缺少生成服务地址，请配置 READ_BOOK_CONFIG.generationApiBaseUrl（或复用 apiBaseUrl）。");
+  }
 
   const repository = new SqliteOpfsRepository();
   await repository.initialize();
@@ -107,7 +111,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   });
 
   const transport = createHttpGenerationTransport({
-    baseUrl: apiBaseUrl,
+    baseUrl: generationApiBaseUrl,
     getAccessToken,
   });
   const client = createGenerationClient(transport);
