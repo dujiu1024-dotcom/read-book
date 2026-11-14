@@ -675,15 +675,39 @@ import { createSourceRetriever } from "./source-retriever.js";
           setGenerationStatus("已从 GitHub 读取 " + units.length + " 个阅读单元。" + cacheMessage + " " + agentMessage + " " + productionRuntime.backupStatus.detail);
         } catch (runtimeError) {
           productionRuntime = null;
-          $("conversationSection").hidden = true;
-          $("composerSection").hidden = true;
-          $("memoryPanel").hidden = true;
-          $("backupButton").disabled = true;
-          $("backupButton").textContent = "备份未配置";
-          $("readerModeLabel").textContent = "GitHub 原文 · 在线只读";
-          renderSource();
-          updateCount();
-          setGenerationStatus("本地 Repository 初始化失败，当前仅显示在线原文：" + runtimeError.message);
+          try {
+            productionRuntime = await createLocalCorpusRuntime(bookRevision, {
+              datasetId: readerConfig.localDataSetId || undefined,
+            });
+            const position = productionRuntime.readingPosition;
+            if (position) {
+              const index = units.findIndex((unit) => unit.id === position.mainlineNodeId);
+              if (index >= 0) state.mainlineIndex = index;
+              state.viewMode = position.viewMode || "mainline";
+              state.displayedUnit = units.find((unit) => unit.id === position.displayedNodeId) || units[state.mainlineIndex];
+              state.discussed = Boolean(position.currentUnitDiscussed);
+            }
+            $("conversationSection").hidden = true;
+            $("composerSection").hidden = true;
+            $("memoryPanel").hidden = true;
+            $("backupButton").disabled = true;
+            $("backupButton").textContent = "备份未配置";
+            $("readerModeLabel").textContent = "GitHub 原文 · 本地只读";
+            renderSource();
+            updateCount();
+            setGenerationStatus("正式阅读运行时初始化失败，已降级为本地只读阅读。阅读位置可本地保存；Agent/云端备份未启用。原因：" + runtimeError.message);
+          } catch (localError) {
+            productionRuntime = null;
+            $("conversationSection").hidden = true;
+            $("composerSection").hidden = true;
+            $("memoryPanel").hidden = true;
+            $("backupButton").disabled = true;
+            $("backupButton").textContent = "备份未配置";
+            $("readerModeLabel").textContent = "GitHub 原文 · 在线只读";
+            renderSource();
+            updateCount();
+            setGenerationStatus("本地 Repository 不可用，当前仅显示在线原文。运行时错误：" + runtimeError.message + "；本地存储错误：" + localError.message);
+          }
         }
         return;
       }
