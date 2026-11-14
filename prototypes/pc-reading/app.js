@@ -64,6 +64,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       };
       $("viewNoticeText").textContent = descriptions[state.viewMode];
     }
+    if (productionRuntime) productionRuntime.savePosition(state, units).catch((error) => setGenerationStatus("阅读位置保存失败：" + error.message));
   }
 
   function updateCount() {
@@ -123,7 +124,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       retry.type = "button";
       retry.className = "text-button";
       retry.textContent = "重试";
-      retry.addEventListener("click", retryLast);
+      retry.addEventListener("click", () => productionRuntime ? productionRuntime.resumePending().then(refreshPersistedMessages).catch(error => setGenerationStatus(error.message)) : retryLast());
       content.append(retry);
     }
     article.append(avatar, content);
