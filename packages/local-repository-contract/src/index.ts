@@ -242,6 +242,32 @@ export function createAgentUserMessageRepository(
   };
 }
 
+/** Narrow backup port: upload the returned immutable snapshot, then acknowledge that exact sequence only after remote success. */
+export interface RepositoryBackupPort {
+  createSnapshot(): Promise<RepositorySnapshot>;
+  acknowledgeUploadedSnapshot(snapshot: RepositorySnapshot, backupId: string, backedUpAt: string): Promise<void>;
+}
+
+export function createRepositoryBackupPort(
+  repository: Pick<LocalRepository, "createConsistentSnapshot" | "acknowledgeBackup">,
+  datasetId: string,
+): RepositoryBackupPort {
+  return {
+    createSnapshot() {
+      return repository.createConsistentSnapshot(datasetId);
+    },
+    acknowledgeUploadedSnapshot(snapshot, backupId, backedUpAt) {
+      if (snapshot.datasetId !== datasetId) {
+        throw new RepositoryError("DATASET_NOT_FOUND", "Backup snapshot does not belong to the bound local dataset.");
+      }
+      if (!Number.isSafeInteger(snapshot.dirtySequence) || snapshot.dirtySequence < 0) {
+        throw new RepositoryError("INTEGRITY_FAILED", "Backup snapshot sequence is invalid.");
+      }
+      return repository.acknowledgeBackup(datasetId, snapshot.dirtySequence, backupId, backedUpAt);
+    },
+  };
+}
+
 /** Validate persisted dataset sequence metadata before exposing a dataset as writable. */
 export function assertDataSetSequenceInvariant(dataSet: LocalDataSet): void {
   if (!Number.isSafeInteger(dataSet.schemaVersion) || dataSet.schemaVersion < 1) {
