@@ -239,6 +239,69 @@ export function validateGenerationSnapshot(value: unknown): GenerationSnapshot {
   };
 }
 
+export function verifiedGenerationSourceReferences(
+  result: GenerationResult,
+  request: GenerationRequest,
+): Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> {
+  const expectedRevision = request.book_revision_id;
+  const expectedNode = request.context.current_source.structure_node_id;
+  const sourceText = request.context.current_source.excerpt.replace(/\s+/g, " ").trim();
+  const references = new Map<string, { bookRevisionId: string; structureNodeId: string; locator: string }>();
+  for (const citation of result.citations || []) {
+    if (citation.book_revision_id !== expectedRevision || citation.structure_node_id !== expectedNode) continue;
+    if (!citation.excerpt?.trim()) continue;
+    const excerpt = citation.excerpt.replace(/\s+/g, " ").trim();
+    if (!sourceText.includes(excerpt)) continue;
+    const key = citation.book_revision_id + ":" + citation.structure_node_id + ":" + citation.locator;
+    references.set(key, {
+      bookRevisionId: citation.book_revision_id,
+      structureNodeId: citation.structure_node_id,
+      locator: citation.locator,
+    });
+  }
+  return [...references.values()];
+}
+
+export function verifiedGenerationCitationRecords(
+  result: GenerationResult,
+  request: GenerationRequest,
+  messageId: string,
+  threadId: string,
+  createdAt: string,
+): Array<{
+  id: string;
+  threadId: string;
+  messageId: string;
+  bookRevisionId: string;
+  structureNodeId: string;
+  locator: string;
+  excerpt: string;
+  excerptHash: string | null;
+  createdAt: string;
+}> {
+  const references = verifiedGenerationSourceReferences(result, request);
+  return references.flatMap((reference) => {
+    const citation = (result.citations || []).find((item) =>
+      item.book_revision_id === reference.bookRevisionId &&
+      item.structure_node_id === reference.structureNodeId &&
+      item.locator === reference.locator &&
+      Boolean(item.excerpt?.trim())
+    );
+    if (!citation?.excerpt) return [];
+    return [{
+      id: crypto.randomUUID(),
+      threadId,
+      messageId,
+      bookRevisionId: reference.bookRevisionId,
+      structureNodeId: reference.structureNodeId,
+      locator: reference.locator,
+      excerpt: citation.excerpt,
+      excerptHash: null,
+      createdAt,
+    }];
+  });
+}
+
 /** SSE deltas are provisional; only a completed GET snapshot is authoritative. */
 export function authoritativeFinalResult(snapshot: GenerationSnapshot): GenerationResult | null {
   return snapshot.status === "completed" ? snapshot.result : null;
@@ -370,6 +433,7 @@ export interface GenerationTurnRepository {
     appendUserMessage(message: { id: string; threadId: string; content: string; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
     appendAssistantMessage(message: { id: string; threadId: string; content: string; status: "generating"; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
     transitionAssistantMessage(messageId: string, status: "completed" | "failed" | "cancelled", content?: string, sourceReferences?: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }>): Promise<unknown>;
+    saveCitation(citation: { id: string; threadId: string; messageId: string; bookRevisionId: string; structureNodeId: string; locator: string; excerpt: string; excerptHash: string | null; createdAt: string }): Promise<unknown>;
     saveGenerationDelivery(delivery: { clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }): Promise<unknown>;
   }) => Promise<T>): Promise<T>;
   getGenerationDelivery(clientGenerationId: string): Promise<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string } | null>;
@@ -484,6 +548,7 @@ export async function runGenerationTurn(
   if (snapshot.status === "completed" && snapshot.result) {
     await repository.transaction(input.datasetId, async (tx) => {
       await tx.transitionAssistantMessage(input.assistantMessageId, "completed", snapshot.result!.content, verifiedGenerationSourceReferences(snapshot.result!, input.request));
+      for (const citation of verifiedGenerationCitationRecords(snapshot.result!, input.request, input.assistantMessageId, input.userMessage.threadId, now())) await tx.saveCitation(citation);
       await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "completed", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
     });
   } else if (snapshot.status === "failed" || snapshot.status === "expired") {
@@ -538,6 +603,7 @@ export async function recoverGenerationTurn(
   if (snapshot.status === "completed" && snapshot.result) {
     await repository.transaction(input.datasetId, async (tx) => {
       await tx.transitionAssistantMessage(delivery.assistantMessageId, "completed", snapshot.result!.content, verifiedGenerationSourceReferences(snapshot.result!, input.request));
+      for (const citation of verifiedGenerationCitationRecords(snapshot.result!, input.request, delivery.assistantMessageId, delivery.threadId, now())) await tx.saveCitation(citation);
       await tx.saveGenerationDelivery({ ...delivery, generationId: accepted.generation_id, status: "completed", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
     });
   } else if (snapshot.status === "failed" || snapshot.status === "expired" || snapshot.status === "cancelled") {
