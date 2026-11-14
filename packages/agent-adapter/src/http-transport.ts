@@ -211,11 +211,17 @@ export function createHttpGenerationTransport({
       if (signal.aborted) return;
       const url = new URL(`v1/generations/${id}/events`, root);
       url.searchParams.set("after", String(afterSequence));
-      const response = await fetchImpl(url, {
-        method: "GET",
-        headers: await headers({ Accept: "text/event-stream", "Cache-Control": "no-cache" }),
-        signal,
-      });
+      let response: Response;
+      try {
+        response = await fetchImpl(url, {
+          method: "GET",
+          headers: await headers({ Accept: "text/event-stream", "Cache-Control": "no-cache" }),
+          signal,
+        });
+      } catch (error) {
+        if (signal.aborted) return;
+        throw error;
+      }
       if (!response.ok) throw await parseApiError(response);
       await consumeSse(response, signal, onEvent, maxSseFrameCharacters);
     },
