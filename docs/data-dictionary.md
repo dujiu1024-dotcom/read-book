@@ -136,39 +136,39 @@ item_type：key_point / concept / author_claim / argument / evidence / case / cr
 
 ### 3.4 Thread
 
-字段：id UUID PK；local_dataset_id UUID NOT NULL FK；book_revision_id UUID NOT NULL；status TEXT NOT NULL（active / archived）；created_at TIMESTAMP NOT NULL；updated_at TIMESTAMP NOT NULL；version INTEGER NOT NULL。
+字段：id UUID PK；dataset_id UUID NOT NULL FK → LocalDataSet；book_revision_id UUID NOT NULL；created_at TIMESTAMP NOT NULL。
 
-约束：(local_dataset_id, book_revision_id) UNIQUE；一个数据集对一个具体书籍版本只有一个长期 Thread。不同阅读轮次在同一 Thread 内累积，不创建第二条主线 Thread。
+约束：(dataset_id, book_revision_id) UNIQUE；同一数据集对同一 BookRevision 只有一个长期 Thread。阅读轮次在同一 Thread 内累积。当前 SQLite v6 尚未持久化 Thread archived 状态，不得在文档中假设已支持归档。
 
 ### 3.5 Message
 
-字段：id UUID PK；thread_id UUID NOT NULL FK；sequence INTEGER NOT NULL；role TEXT NOT NULL（user / assistant / system）；content TEXT NOT NULL；content_format_version INTEGER NOT NULL；status TEXT NOT NULL（pending / complete / failed / cancelled）；model TEXT NULL；token_usage JSON NULL；created_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL；idempotency_key TEXT NULL；supersedes_message_id UUID NULL FK → Message.id。
+字段：id UUID PK；dataset_id UUID NOT NULL FK；thread_id UUID NOT NULL FK；sequence INTEGER NOT NULL；role TEXT NOT NULL（user / assistant）；content TEXT NOT NULL；status TEXT NOT NULL；created_at TIMESTAMP NOT NULL；source_references JSON NOT NULL；idempotency_key TEXT NULL。
 
-约束：(thread_id, sequence) UNIQUE；(thread_id, idempotency_key) UNIQUE（idempotency_key 非 NULL 时）；role 只能是 user/assistant/system；用户消息先本地持久化再发起生成。重新生成创建新的 Assistant Message，并通过 supersedes_message_id 关联旧结果，不覆盖历史消息。失败的用户消息仍保留。
+状态按角色约束：user 只使用 saved；assistant 使用 generating / completed / failed / cancelled。system 消息不写入本地 Message 表。约束：(thread_id, sequence) UNIQUE；(thread_id, idempotency_key) UNIQUE（非 NULL 时）。用户原始消息必须先本地持久化，再请求生成；失败不删除用户消息。重新生成创建新 Assistant Message，不覆盖历史结果。
 
 ### 3.6 PresentedSource
 
-字段：id UUID PK；thread_id UUID NOT NULL FK；book_revision_id UUID NOT NULL；structure_node_id UUID NOT NULL；chunk_id UUID NULL；presentation_type TEXT NOT NULL（mainline / review / temporary）；reading_round_id UUID NULL FK → ReadingRound.id；presented_at TIMESTAMP NOT NULL；source_locator JSON NOT NULL。
+字段：id UUID PK；dataset_id UUID NOT NULL FK；thread_id UUID NOT NULL FK；book_revision_id UUID NOT NULL；structure_node_id UUID NOT NULL；chunk_id UUID NULL；presentation_type TEXT NOT NULL（mainline / review / temporary / citation）；reading_round_id UUID NULL FK → ReadingRound.id；presented_at TIMESTAMP NOT NULL；source_locator JSON NOT NULL。
 
-约束：必须绑定同一版本的结构节点；mainline 必须绑定 reading_round_id；review / temporary 不推进主线状态。每次重新展示可创建新的 PresentedSource，以保留展示历史。
+约束：必须绑定同一 Thread 的 BookRevision；mainline 必须绑定 ReadingRound；review / temporary / citation 只记录呈现历史，不推进主线进度。每次重新展示创建新记录。
 
 ### 3.7 ReadingRound
 
-字段：id UUID PK；thread_id UUID NOT NULL FK；round_number INTEGER NOT NULL；status TEXT NOT NULL（active / completed / abandoned）；started_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL；start_reason TEXT NOT NULL（first_read / reread）。
+字段：id UUID PK；dataset_id UUID NOT NULL FK；thread_id UUID NOT NULL FK；round_number INTEGER NOT NULL；status TEXT NOT NULL（active / completed / abandoned）；started_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL。
 
-约束：(thread_id, round_number) UNIQUE；同一 Thread 最多一个 active 轮次。completed 时 completed_at 必填；abandoned 仅用于明确终止，不等同于完成。
+约束：(thread_id, round_number) UNIQUE；同一 Thread 最多一个 active 轮次。completed 时 completed_at 必填；completed 只能在本轮所有 ReadingUnitProgress 都进入 discussed / skipped 后提交。
 
-### 3.8 ReadingRoundState
+### 3.8 ReadingPosition（SQLite v6）
 
-字段：reading_round_id UUID PK FK → ReadingRound.id；current_structure_node_id UUID NULL FK → BookStructureNode.id；current_order_index INTEGER NOT NULL；last_presented_source_id UUID NULL FK → PresentedSource.id；updated_at TIMESTAMP NOT NULL。
+字段：thread_id UUID PK FK；dataset_id UUID NOT NULL FK；mainline_node_id UUID NOT NULL；displayed_node_id UUID NOT NULL；view_mode TEXT NOT NULL（mainline / temporary / review / citation）；current_unit_discussed BOOLEAN NOT NULL；updated_at TIMESTAMP NOT NULL。
 
-约束：状态只指向主线位置；临时查看和复习不得修改此表。当前主线单元的详细状态由后续 state-machines.md 进一步定义。
+这是 Thread 级别的阅读位置，不是 ReadingRoundState。它保存当前主线位置与当前展示位置；每轮每个单元的完成状态由 ReadingUnitProgress 保存。临时查看、复习和引用展示不得改变 mainline_node_id。
 
-### 3.9 ReadingUnitProgress
+### 3.9 ReadingUnitProgress（SQLite v6）
 
-字段：reading_round_id UUID NOT NULL FK → ReadingRound.id；structure_node_id UUID NOT NULL FK → BookStructureNode.id；status TEXT NOT NULL（not_presented / presented / awaiting_user / discussion_active / discussed / skipped）；first_presented_source_id UUID NULL FK → PresentedSource.id；last_activity_message_id UUID NULL FK → Message.id；completed_at TIMESTAMP NULL；updated_at TIMESTAMP NOT NULL。
+字段：reading_round_id UUID NOT NULL FK；dataset_id UUID NOT NULL FK；thread_id UUID NOT NULL FK；structure_node_id UUID NOT NULL；status TEXT NOT NULL（not_presented / presented / awaiting_user / discussion_active / discussed / skipped）；first_presented_source_id UUID NULL FK → PresentedSource.id；last_activity_message_id UUID NULL FK → Message.id；completed_at TIMESTAMP NULL；updated_at TIMESTAMP NOT NULL。
 
-主键：(reading_round_id, structure_node_id)。所有属于本轮主线的论述单元在轮次创建时初始化为 not_presented。status 的转换规则以 [核心状态机](state-machines.md) 为准。review / temporary 展示不得修改此表。discussed / skipped 为单元终态；轮次是否 completed 由所有主线单元是否进入终态共同决定。
+主键：(reading_round_id, structure_node_id)。每轮创建时，所有主线单元初始化为 not_presented。状态转换以 state-machines.md 为准；review / temporary / citation 不得修改本表。discussed / skipped 为单元终态；全部单元进入终态后，ReadingRound 才能 completed。
 
 ### 3.9 Citation
 
@@ -206,23 +206,19 @@ source_role：author / user / assistant。每条 NoteSource 至少绑定一个�
 
 约束：(from_memory_id, to_memory_id, relation_type) UNIQUE；from 与 to 不得相同；关系方向表示新认知指向被关联的既有认知，具体展示顺序由应用层解释。
 
-### 3.15 GenerationReceipt
+### 3.15 GenerationDelivery（SQLite v3）
 
-字段：id UUID PK；generation_id TEXT NOT NULL；thread_id UUID NOT NULL FK；local_user_message_id UUID NOT NULL FK → Message.id；status TEXT NOT NULL（submitted / streaming / completed / failed / cancelled / expired）；created_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL；result_message_id UUID NULL FK → Message.id；last_event_sequence INTEGER NOT NULL DEFAULT 0；error_code TEXT NULL。
+字段：client_generation_id UUID PK；dataset_id UUID NOT NULL FK；thread_id UUID NOT NULL FK；user_message_id UUID NOT NULL FK；assistant_message_id UUID NOT NULL FK；idempotency_key TEXT NOT NULL；generation_id TEXT NULL；status TEXT NOT NULL（queued / running / completed / failed / cancelled / expired）；last_sequence INTEGER NOT NULL；last_event_id TEXT NULL；expires_at TIMESTAMP NULL；created_at TIMESTAMP NOT NULL；updated_at TIMESTAMP NOT NULL。
 
-约束：generation_id UNIQUE；一个用户消息可关联多次生成尝试，但每次尝试独立 receipt；最终结果落成本地 Assistant Message 后才算本地持久化完成。
+约束：客户端生成身份与幂等键稳定；重复提交复用同一 delivery；事件游标不回退；终态不可回退；最终 Assistant Message 以服务端权威快照落库。此表是本地可恢复任务交付记录，不是服务端 GenerationJob 的替代品。
 
-### 3.16 BackupJournal
+### 3.16 BackupJournal（未实现为独立表）
 
-字段：id UUID PK；local_dataset_id UUID NOT NULL FK；dirty_sequence INTEGER NOT NULL；entity_type TEXT NOT NULL；entity_id UUID NOT NULL；operation TEXT NOT NULL（insert / update / soft_delete）；changed_at TIMESTAMP NOT NULL。
+SQLite v6 不创建逐行 BackupJournal。增量边界由 LocalDataSet.dirty_sequence 与 last_acked_sequence 表达；Repository 事务提交时推进 dirty_sequence，远端 committed 后只确认本次一致性快照对应的序号。不得将其描述为跨设备同步日志或逐实体变更历史。
 
-约束：(local_dataset_id, dirty_sequence) UNIQUE；sequence 严格递增。Journal 是本地增量备份依据，不代表跨设备同步日志。
+### 3.17 MigrationLog（未实现为独立表）
 
-### 3.17 MigrationLog
-
-字段：id UUID PK；local_dataset_id UUID NOT NULL FK；from_schema_version INTEGER NOT NULL；to_schema_version INTEGER NOT NULL；started_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL；status TEXT NOT NULL（started / completed / failed / rolled_back）；snapshot_ref TEXT NULL；error_code TEXT NULL。
-
-约束：to_schema_version 必须高于 from_schema_version；迁移前必须建立可恢复快照；失败不得标记目标版本已完成。
+SQLite v6 不创建 MigrationLog 表。当前迁移由 PRAGMA user_version 与 LocalDataSet.schema_version 表达，并在单个 SQLite 事务中执行；迁移失败回滚，不推进目标版本。迁移审计表属于后续可选增强，不是当前已实现能力。
 
 ## 4. 服务端账号与备份域
 
@@ -340,3 +336,8 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 - 候选 ID 由 Thread、BookRevision、候选语义和来源消息确定性生成，避免模型每次返回不同临时 ID 导致重复记录。
 - `needs_confirmation` 不进入正式 MemoryVersion；只有通过价值评估且获得明确演变计划的 accepted 候选才追加正式版本。
 - 候选不覆盖已有认知，正式版本仍按追加式演变记录。
+
+
+## 10. SQLite v6 实现对齐（2026-11-14）
+
+本字典中标注“SQLite v6”的表已在本地 Repository 持久化，并纳入一致性快照、加密备份和空数据集恢复。标注“未实现为独立表”的概念不得被应用层当作已持久化实体。服务端 Account、ExternalIdentity、BackupUploadSession、BackupAuthorization、DataSetLifecycle 和 GenerationJob 仍以 API 契约为准，尚不代表已存在正式服务端实现。
