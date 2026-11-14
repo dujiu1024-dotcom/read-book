@@ -18,7 +18,7 @@ function snapshot(sequence, text) {
     messages: [{ message: { id: "message-1", threadId: "thread-1", role: "user", content: text, status: "saved", createdAt: "2026-11-14T00:00:00.000Z", sourceReferences: [] }, sequence: sequence, idempotencyKey: null }],
     readingRounds: [],
     readingPositions: [{ threadId: "thread-1", mainlineNodeId: "node-1", displayedNodeId: "node-1", viewMode: "mainline", currentUnitDiscussed: true, updatedAt: "2026-11-14T00:00:00.000Z" }],
-    citations: [], notes: [], memories: [], memoryVersions: [], memoryRelations: [], generationDeliveries: [],
+    citations: [], notes: [], memories: [], memoryVersions: [], memoryRelations: [], memoryCandidates: [], generationDeliveries: [],
   };
 }
 

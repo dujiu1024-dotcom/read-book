@@ -82,6 +82,8 @@ window.READ_BOOK_CONFIG = {
    - `localDataSetId`：本地数据集 ID
    - `getAccessToken`：返回当前登录令牌的异步函数；也可由 `window.READ_BOOK_AUTH.getAccessToken` 提供
    - `encryptedBackupPort.uploadSnapshot(snapshot)`：可选的加密备份端口；只有该端口返回 backupId 后才确认备份序号
+   - `memoryExtractionProvider`、`memoryCandidatePolicy`：可选的结构化认知抽取 Provider 与价值评估策略
+   - `planMemoryEvolution(input)`：可选的跨批次认知演变规划器；必须为每条 accepted 候选返回明确的版本计划，含前序版本和必要关系；未配置时不自动写入认知
 
 示例（必须由宿主登录系统注入令牌，不要把令牌写入静态文件）：
 

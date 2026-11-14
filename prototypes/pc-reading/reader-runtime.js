@@ -5,6 +5,7 @@ import {
   createGenerationTurnController,
 } from "../../packages/agent-adapter/src/index.ts";
 import { createHttpGenerationTransport } from "../../packages/agent-adapter/src/http-transport.ts";
+import { runMemoryExtraction, persistAcceptedMemoryCandidates } from "../../packages/agent-adapter/src/memory-extraction.ts";
 
 function uuid() {
   return crypto.randomUUID();
@@ -63,6 +64,122 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     return repository.getMessages(datasetId, thread.id);
   }
 
+  async function loadMemoryState() {
+    const snapshot = await repository.createConsistentSnapshot(datasetId);
+    return {
+      memories: snapshot.memories.filter((item) => item.threadId === thread.id),
+      versions: snapshot.memoryVersions,
+      relations: snapshot.memoryRelations,
+      pendingCandidates: snapshot.memoryCandidates.filter((item) => item.threadId === thread.id),
+      providerConfigured: Boolean(config.memoryExtractionProvider && config.memoryCandidatePolicy),
+      plannerConfigured: typeof config.planMemoryEvolution === "function",
+    };
+  }
+
+  async function extractMemories() {
+    if (!config.memoryExtractionProvider || !config.memoryCandidatePolicy) {
+      return { ...(await loadMemoryState()), extractionStatus: "provider_not_configured", persistedIds: [], acceptedNotPersisted: [] };
+    }
+    const persisted = await loadMessages();
+    const eligible = persisted
+      .map((item) => item.message)
+      .filter((message) => message.content?.trim() && (message.role === "user" || message.status === "completed"))
+      .slice(-40);
+    const userMessages = eligible.filter((message) => message.role === "user");
+    if (!userMessages.length) return { ...(await loadMemoryState()), extractionStatus: "no_user_messages", persistedIds: [], acceptedNotPersisted: [] };
+    const context = {
+      threadId: thread.id,
+      bookRevisionId: bookRevision.bookRevisionId,
+      availableMessageIds: eligible.map((message) => message.id),
+      availableUserMessageIds: userMessages.map((message) => message.id),
+      availableStructureNodeIds: bookRevision.units.map((unit) => unit.id),
+    };
+    const result = await runMemoryExtraction(config.memoryExtractionProvider, {
+      context,
+      messages: eligible.map((message) => ({ id: message.id, role: message.role, content: message.content })),
+      policy: config.memoryCandidatePolicy,
+      modelVersion: config.memoryModelVersion || "configured-provider",
+    });
+    const now = new Date().toISOString();
+    if (result.needsConfirmation.length) {
+      await repository.transaction(datasetId, async (tx) => {
+        for (const item of result.needsConfirmation) {
+          await tx.saveMemoryCandidate({
+            id: item.candidate.id,
+            datasetId,
+            threadId: thread.id,
+            candidate: item.candidate,
+            evaluationScore: item.evaluation.score,
+            status: "needs_confirmation",
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      });
+    }
+    let persistedIds = [];
+    if (result.accepted.length && typeof config.planMemoryEvolution === "function") {
+      const existing = await repository.createConsistentSnapshot(datasetId);
+      const plans = await config.planMemoryEvolution({
+        accepted: result.accepted,
+        existingMemories: existing.memories.filter((item) => item.threadId === thread.id),
+        existingVersions: existing.memoryVersions,
+        existingRelations: existing.memoryRelations,
+        threadId: thread.id,
+        bookRevisionId: bookRevision.bookRevisionId,
+      });
+      persistedIds = await persistAcceptedMemoryCandidates(repository, datasetId, result, plans);
+    }
+    const state = await loadMemoryState();
+    return {
+      ...state,
+      extractionStatus: "completed",
+      persistedIds,
+      acceptedNotPersisted: result.accepted.filter((item) => !persistedIds.includes(item.candidate.id)),
+      needsConfirmation: result.needsConfirmation,
+      rejectedCount: result.rejected.length,
+    };
+  }
+
+  async function resolveMemoryCandidate(candidateId, resolution) {
+    const pending = await repository.getMemoryCandidates(datasetId, thread.id);
+    const record = pending.find((item) => item.id === candidateId);
+    if (!record) throw new Error("这条待确认认知已不存在或已经处理。");
+    if (resolution === "rejected") {
+      await repository.transaction(datasetId, (tx) => tx.resolveMemoryCandidate(candidateId, "rejected", new Date().toISOString()));
+      return loadMemoryState();
+    }
+    if (resolution !== "accepted") throw new Error("未知的认知确认操作。");
+    if (typeof config.planMemoryEvolution !== "function") throw new Error("尚未配置认知演变规划器，不能安全确认并写入。");
+    const existing = await repository.createConsistentSnapshot(datasetId);
+    const acceptedItem = {
+      candidate: record.candidate,
+      evaluation: { decision: "accept", score: record.evaluationScore, reasons: ["user_confirmed"] },
+    };
+    const extractionResult = {
+      modelVersion: "user-confirmed",
+      accepted: [acceptedItem],
+      needsConfirmation: [],
+      rejected: [],
+    };
+    const plans = await config.planMemoryEvolution({
+      accepted: [acceptedItem],
+      existingMemories: existing.memories.filter((item) => item.threadId === thread.id),
+      existingVersions: existing.memoryVersions,
+      existingRelations: existing.memoryRelations,
+      threadId: thread.id,
+      bookRevisionId: bookRevision.bookRevisionId,
+      userConfirmedCandidateId: candidateId,
+    });
+    if (!Array.isArray(plans) || plans.length !== 1) throw new Error("演变规划器必须为已确认候选返回且仅返回一个版本计划。");
+    await persistAcceptedMemoryCandidates(repository, datasetId, extractionResult, [{
+      ...plans[0],
+      candidateId: record.candidate.id,
+      resolveCandidateId: record.id,
+    }]);
+    return loadMemoryState();
+  }
+
   async function savePosition(state, units) {
     const current = units[state.mainlineIndex];
     const displayed = state.displayedUnit;
@@ -104,7 +221,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         response_preferences: { language: "zh-CN" },
       },
     };
-    return controller.send({
+    const result = await controller.send({
       datasetId,
       userMessage: { id: userMessageId, threadId: thread.id, content },
       assistantMessageId,
@@ -114,10 +231,14 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       onPersisted: callbacks.onPersisted,
       onDelta: callbacks.onDelta,
     });
+    if (config.memoryExtractionProvider && config.memoryCandidatePolicy) {
+      void extractMemories().then((memoryState) => callbacks.onMemoryUpdate?.(memoryState)).catch((error) => callbacks.onMemoryError?.(error));
+    }
+    return result;
   }
 
   async function resumePending(callbacks = {}) {
-    return controller.resumePending(async (delivery) => {
+    const results = await controller.resumePending(async (delivery) => {
       const messages = await repository.getMessages(datasetId, delivery.threadId);
       const user = messages.find((item) => item.message.id === delivery.userMessageId)?.message;
       if (!user) throw new Error("待恢复任务关联的用户消息不存在，已保留本地记录。");
@@ -140,6 +261,10 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       onDelta: callbacks.onDelta,
       onStatus: callbacks.onStatus,
     });
+    if (results.length && config.memoryExtractionProvider && config.memoryCandidatePolicy) {
+      void extractMemories().then((memoryState) => callbacks.onMemoryUpdate?.(memoryState)).catch((error) => callbacks.onMemoryError?.(error));
+    }
+    return results;
   }
 
   let backupStatus = {
@@ -167,6 +292,9 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     readingPosition,
     backupStatus,
     loadMessages,
+    loadMemoryState,
+    extractMemories,
+    resolveMemoryCandidate,
     savePosition,
     send,
     stop: () => controller.stop(),

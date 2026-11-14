@@ -133,13 +133,14 @@ test("persists accepted candidates only when an explicit immutable version plan 
       return operation({
         async appendMemoryVersion(version: unknown) { writes.push({ kind: "version", version }); },
         async appendMemoryRelation(relation: unknown) { writes.push({ kind: "relation", relation }); },
+        async resolveMemoryCandidate(candidateId: string, status: "accepted" | "rejected") { writes.push({ kind: "resolve", candidateId, status }); return true; },
       });
     },
   };
   const ids = await persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, [{
-    candidateId: "candidate-1", memoryId: "memory-1", version: 1, previousVersionId: null, changeKind: "new",
+    candidateId: accepted.accepted[0].candidate.id, memoryId: "memory-1", version: 1, previousVersionId: null, changeKind: "new",
   }], () => "2026-11-14T00:00:00.000Z");
-  assert.deepEqual(ids, ["candidate-1"]);
+  assert.deepEqual(ids, [accepted.accepted[0].candidate.id]);
   assert.equal(writes.length, 1);
   assert.equal((writes[0] as any).version.viewpoint, "user");
   assert.equal((writes[0] as any).version.evaluationScore, accepted.accepted[0].evaluation.score);
@@ -147,4 +148,46 @@ test("persists accepted candidates only when an explicit immutable version plan 
     persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, []),
     /Every accepted candidate needs exactly one plan/,
   );
+});
+
+
+test("memory persistence revalidates the evolution relation before writing", async () => {
+  const { persistAcceptedMemoryCandidates, MemoryExtractionError } = await import("../src/memory-extraction.ts");
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  let writes = 0;
+  const repository = {
+    async transaction(_datasetId: string, operation: (tx: any) => Promise<unknown>) {
+      return operation({
+        async appendMemoryVersion() { writes += 1; },
+        async appendMemoryRelation() { writes += 1; },
+        async resolveMemoryCandidate() { writes += 1; return true; },
+      });
+    },
+  };
+  const previousVersion = {
+    id: "version-1", memoryId: "memory-1", version: 1, previousVersionId: null,
+    changeKind: "new" as const, content: "旧认知", sourceMessageIds: ["user-1"],
+    sourceReferences: [], createdAt: "2026-11-13T00:00:00.000Z",
+  };
+  await assert.rejects(
+    persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, [{
+      candidateId: accepted.accepted[0].candidate.id, memoryId: "memory-1", version: 2,
+      previousVersionId: "version-1", previousVersion, changeKind: "conflict",
+    }]),
+    /requires a "contradicts" relation/,
+  );
+  assert.equal(writes, 0);
+});
+
+
+test("memory candidate IDs remain stable when a provider changes its temporary IDs", async () => {
+  const first = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [{ ...candidate, id: "provider-id-a" }] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const second = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [{ ...candidate, id: "provider-id-b" }] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  assert.equal(first.accepted[0].candidate.id, second.accepted[0].candidate.id);
 });

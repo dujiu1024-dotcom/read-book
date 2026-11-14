@@ -331,3 +331,12 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 - 备份导出/恢复往返后实体关系、来源关系和唯一约束一致。
 - API 字段与本字典一致；契约测试不得出现重复定义或旧路径。
 - 状态转换测试以 `docs/state-machines.md` 为准。
+
+
+## MemoryCandidate（SQLite Schema v5）
+
+- `memory_candidate` 只保存需要用户确认的低置信度/高歧义候选，不等同于正式 Memory。
+- 候选保留原始结构化内容、观点来源、置信度、歧义度、来源消息 ID 和原文 Citation；关联当前数据集与 Thread。
+- 候选 ID 由 Thread、BookRevision、候选语义和来源消息确定性生成，避免模型每次返回不同临时 ID 导致重复记录。
+- `needs_confirmation` 不进入正式 MemoryVersion；只有通过价值评估且获得明确演变计划的 accepted 候选才追加正式版本。
+- 候选不覆盖已有认知，正式版本仍按追加式演变记录。

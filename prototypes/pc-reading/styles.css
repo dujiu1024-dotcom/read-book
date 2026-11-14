@@ -106,3 +106,57 @@ button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px sol
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+
+.memory-panel {
+  margin: 24px 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+}
+.memory-status, .memory-meta, .memory-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+.memory-list, .pending-memory-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.memory-card {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--soft);
+}
+.memory-card h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 650;
+}
+.memory-card p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+.memory-card details {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.memory-card summary { cursor: pointer; }
+.memory-history-item {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.pending-memory {
+  border-style: dashed;
+}
+
+.memory-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.memory-actions button { min-height: 36px; }

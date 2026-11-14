@@ -83,6 +83,18 @@
         </div>
       </section>
 
+      <section class="memory-panel" id="memoryPanel" aria-labelledby="memoryHeading" hidden>
+        <div class="conversation-heading">
+          <div>
+            <div class="eyebrow">自动认知沉淀</div>
+            <h2 id="memoryHeading">正在形成的认知</h2>
+          </div>
+        </div>
+        <p class="memory-status" id="memoryStatus" role="status">认知状态加载中…</p>
+        <div class="memory-list" id="memoryList"></div>
+        <div class="pending-memory-list" id="pendingMemoryList" hidden></div>
+      </section>
+
       <section class="composer" aria-label="发送讨论">
         <label class="sr-only" for="messageInput">输入你的想法</label>
         <textarea id="messageInput" rows="3" placeholder="写下你的理解、疑问或反驳……"></textarea>

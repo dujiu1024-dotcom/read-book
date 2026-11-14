@@ -56,6 +56,7 @@ function recordKey(collection, record) {
     memories: "id",
     memoryVersions: "id",
     memoryRelations: "id",
+    memoryCandidates: "id",
     generationDeliveries: "clientGenerationId",
   };
   const path = keys[collection];
@@ -64,7 +65,7 @@ function recordKey(collection, record) {
 }
 const COLLECTIONS = [
   "threads", "messages", "readingRounds", "readingPositions", "citations",
-  "notes", "memories", "memoryVersions", "memoryRelations", "generationDeliveries",
+  "notes", "memories", "memoryVersions", "memoryRelations", "memoryCandidates", "generationDeliveries",
 ];
 
 export async function createRecoveryBundle(datasetId, recoveryCredential = toBase64(randomBytes(32)), options = {}) {

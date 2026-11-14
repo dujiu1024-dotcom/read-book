@@ -1,6 +1,8 @@
 import {
   evaluateMemoryCandidate,
   validateMemoryExtractionResult,
+  validateMemoryEvolution,
+  type MemoryVersion,
   type MemoryCandidate,
   type MemoryCandidateEvaluation,
   type MemoryCandidatePolicy,
@@ -69,6 +71,29 @@ const EXTRACTION_INSTRUCTION = [
  * Runs a provider-backed extraction pass and applies deterministic provenance/value gates.
  * This function deliberately has no Repository dependency: extraction failure cannot affect saved messages.
  */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort().map((key) => [
+      key,
+      canonicalize((value as Record<string, unknown>)[key]),
+    ]));
+  }
+  return value;
+}
+
+async function stableCandidateId(context: MemoryExtractionContext, candidate: MemoryCandidate): Promise<string> {
+  const { id: _providerId, ...identity } = candidate;
+  const material = JSON.stringify(canonicalize({
+    threadId: context.threadId,
+    bookRevisionId: context.bookRevisionId,
+    candidate: { ...identity, sourceMessageIds: [...candidate.sourceMessageIds].sort() },
+  }));
+  if (!globalThis.crypto?.subtle) throw new MemoryExtractionError("Web Crypto is required to assign stable memory candidate IDs.");
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(material)));
+  return "candidate-" + [...digest.slice(0, 16)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export async function runMemoryExtraction(
   provider: MemoryExtractionProvider,
   request: MemoryExtractionRequest,
@@ -177,7 +202,12 @@ export async function runMemoryExtraction(
     throw new MemoryExtractionError(error instanceof Error ? error.message : "Provider output failed provenance validation.");
   }
 
-  const evaluated = candidates.map((candidate) => ({
+  const identified = await Promise.all(candidates.map(async (candidate) => ({
+    ...candidate,
+    // Model-provided IDs are not stable across batches; derive identity from Thread, source and candidate semantics.
+    id: await stableCandidateId(request.context, candidate),
+  })));
+  const evaluated = identified.map((candidate) => ({
     candidate,
     evaluation: evaluateMemoryCandidate(candidate, request.policy),
   }));
@@ -195,6 +225,10 @@ export interface MemoryVersionPlan {
   memoryId: string;
   version: number;
   previousVersionId: string | null;
+  /** Required for every non-first version so the domain evolution rules can be re-evaluated. */
+  previousVersion?: MemoryVersion;
+  /** Set only when a user explicitly confirms a persisted low-confidence candidate. */
+  resolveCandidateId?: string;
   changeKind: "new" | "supplement" | "correction" | "conflict" | "rejection" | "extension";
   relation?: {
     id: string;
@@ -208,6 +242,7 @@ export interface MemoryCandidatePersistenceRepository {
   transaction<T>(datasetId: string, operation: (tx: {
     appendMemoryVersion(version: import("../../domain-core/src/index.ts").MemoryVersion): Promise<unknown>;
     appendMemoryRelation(relation: import("../../domain-core/src/index.ts").MemoryRelation): Promise<unknown>;
+    resolveMemoryCandidate(candidateId: string, status: "accepted" | "rejected", updatedAt: string): Promise<boolean>;
   }) => Promise<T>): Promise<T>;
 }
 
@@ -252,17 +287,32 @@ export async function persistAcceptedMemoryCandidates(
         sourceReferences: structuredClone(candidate.sourceReferences),
         createdAt: now(),
       } as const;
-      await tx.appendMemoryVersion(version);
-      if (plan.relation) {
-        await tx.appendMemoryRelation({
-          id: plan.relation.id,
-          fromVersionId: candidate.id,
-          toVersionId: plan.relation.toVersionId,
-          relationType: plan.relation.relationType,
-          sourceMessageIds: [...candidate.sourceMessageIds],
-          sourceReferences: structuredClone(candidate.sourceReferences),
-          createdAt: plan.relation.createdAt,
-        });
+      if (plan.previousVersionId !== (plan.previousVersion?.id ?? null)) {
+        throw new MemoryExtractionError("The supplied previous version does not match previousVersionId.");
+      }
+      if (plan.relation && (!plan.previousVersion || plan.relation.toVersionId !== plan.previousVersion.id)) {
+        throw new MemoryExtractionError("An evolution relation must point to the explicitly supplied previous version.");
+      }
+      const relation = plan.relation ? {
+        id: plan.relation.id,
+        fromVersionId: candidate.id,
+        toVersionId: plan.relation.toVersionId,
+        relationType: plan.relation.relationType,
+        sourceMessageIds: [...candidate.sourceMessageIds],
+        sourceReferences: structuredClone(candidate.sourceReferences),
+        createdAt: plan.relation.createdAt,
+      } : null;
+      let validated;
+      try {
+        validated = validateMemoryEvolution(plan.previousVersion ?? null, version, relation);
+      } catch (error) {
+        throw new MemoryExtractionError(error instanceof Error ? error.message : "Memory evolution plan failed domain validation.");
+      }
+      await tx.appendMemoryVersion(validated.version);
+      if (validated.relation) await tx.appendMemoryRelation(validated.relation);
+      if (plan.resolveCandidateId) {
+        const resolved = await tx.resolveMemoryCandidate(plan.resolveCandidateId, "accepted", now());
+        if (!resolved) throw new MemoryExtractionError("The pending candidate no longer exists or has already been resolved.");
       }
       persisted.push(candidate.id);
     }

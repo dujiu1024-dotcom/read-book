@@ -3,6 +3,7 @@ import type {
   AssistantMessageStatus,
   MemoryVersion,
   MemoryRelation,
+  MemoryCandidate,
   Message,
   ReadingPosition,
   ReadingRound,
@@ -147,6 +148,17 @@ export interface GenerationDeliveryRecord {
   updatedAt: string;
 }
 
+export interface MemoryCandidateRecord {
+  id: string;
+  datasetId: string;
+  threadId: string;
+  candidate: MemoryCandidate;
+  evaluationScore: number;
+  status: "needs_confirmation" | "accepted" | "rejected";
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RepositorySnapshot {
   datasetId: string;
   schemaVersion: number;
@@ -160,6 +172,7 @@ export interface RepositorySnapshot {
   memories: MemoryRecord[];
   memoryVersions: MemoryVersion[];
   memoryRelations: MemoryRelation[];
+  memoryCandidates: MemoryCandidateRecord[];
   generationDeliveries: GenerationDeliveryRecord[];
 }
 
@@ -189,6 +202,8 @@ export interface LocalRepositoryTransaction {
   saveNote(note: NoteRecord): Promise<void>;
   appendMemoryVersion(version: MemoryVersion): Promise<MemoryVersion>;
   appendMemoryRelation(relation: MemoryRelation): Promise<MemoryRelation>;
+  saveMemoryCandidate(candidate: MemoryCandidateRecord): Promise<MemoryCandidateRecord>;
+  resolveMemoryCandidate(candidateId: string, status: "accepted" | "rejected", updatedAt: string): Promise<boolean>;
 
   createAccountDataSetBinding(binding: AccountDataSetBinding): Promise<AccountDataSetBinding>;
   getAccountDataSetBinding(bindingId: string): Promise<AccountDataSetBinding | null>;
@@ -219,6 +234,7 @@ export interface LocalRepository {
   listPendingGenerationDeliveries(datasetId: string): Promise<GenerationDeliveryRecord[]>;
   getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]>;
   getMemoryRelations(datasetId: string, versionId: string): Promise<MemoryRelation[]>;
+  getMemoryCandidates(datasetId: string, threadId: string): Promise<MemoryCandidateRecord[]>;
   close(): Promise<void>;
 }
 

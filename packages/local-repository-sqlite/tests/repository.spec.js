@@ -215,7 +215,7 @@ test("schema v2 migration preserves a legacy v1 dataset and advances its schema 
     return dataset;
   });
   expect(migrated.id).toBe("legacy-v1-dataset");
-  expect(migrated.schemaVersion).toBe(2);
+  expect(migrated.schemaVersion).toBe(5);
   expect(migrated.dirtySequence).toBe(7);
   expect(migrated.lastAckedSequence).toBe(2);
 });
@@ -359,4 +359,52 @@ test("backup acknowledgement advances only through the uploaded snapshot and pre
   expect(result.finalDataset.lastAckedSequence).toBe(1);
   expect(result.staleRejected).toBe(true);
   expect(result.futureRejected).toBe(true);
+});
+
+
+test("SQLite persists pending memory candidates with Thread and user-message provenance", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    const candidate = {
+      id: "candidate-pending-1",
+      title: "目标一致性比沟通频率更重要",
+      content: "协同质量取决于目标一致，而不是沟通次数。",
+      viewpoint: "user",
+      confidence: 0.62,
+      ambiguity: 0.3,
+      value: { novelty: 0.8, stability: 0.7, explanatoryPower: 0.9, discussionDepth: 0.6, relationStrength: 0.8 },
+      sourceMessageIds: [ids.messageA],
+      sourceReferences: [],
+      requiresBookCitation: false,
+    };
+    const record = {
+      id: candidate.id, datasetId: ids.datasetA, threadId: ids.threadId, candidate,
+      evaluationScore: 0.66, status: "needs_confirmation",
+      createdAt: "2026-11-14T02:00:00.000Z", updatedAt: "2026-11-14T02:00:00.000Z",
+    };
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({ id: ids.threadId, datasetId: ids.datasetA, bookRevisionId: ids.revision, createdAt: "2026-11-14T00:00:00.000Z" });
+      await tx.appendUserMessage({ id: ids.messageA, threadId: ids.threadId, content: "我认为目标一致更重要。", createdAt: "2026-11-14T00:00:01.000Z", sourceReferences: [] });
+      await tx.saveMemoryCandidate(record);
+    });
+    const pending = await repository.getMemoryCandidates(ids.datasetA, ids.threadId);
+    await repository.transaction(ids.datasetA, (tx) => tx.resolveMemoryCandidate(candidate.id, "accepted", "2026-11-14T02:01:00.000Z"));
+    const pendingAfterResolution = await repository.getMemoryCandidates(ids.datasetA, ids.threadId);
+    const snapshot = await repository.createConsistentSnapshot(ids.datasetA);
+    await repository.close();
+    return { pending, pendingAfterResolution, snapshot };
+  }, {
+    datasetA: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    revision: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    messageA: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  });
+  expect(result.pending).toHaveLength(1);
+  expect(result.pending[0].status).toBe("needs_confirmation");
+  expect(result.pending[0].candidate.viewpoint).toBe("user");
+  expect(result.pendingAfterResolution).toHaveLength(0);
+  expect(result.snapshot.memoryCandidates).toHaveLength(1);
+  expect(result.snapshot.memoryCandidates[0].status).toBe("accepted");
 });
