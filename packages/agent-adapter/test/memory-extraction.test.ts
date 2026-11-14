@@ -178,3 +178,14 @@ test("memory persistence revalidates the evolution relation before writing", asy
   );
   assert.equal(writes, 0);
 });
+
+
+test("memory candidate IDs remain stable when a provider changes its temporary IDs", async () => {
+  const first = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [{ ...candidate, id: "provider-id-a" }] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  const second = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [{ ...candidate, id: "provider-id-b" }] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  assert.equal(first.accepted[0].candidate.id, second.accepted[0].candidate.id);
+});
