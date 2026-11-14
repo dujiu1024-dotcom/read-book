@@ -156,6 +156,12 @@ async function loadMaoXuanVolume(fetchImpl, book) {
   if (!units.length) throw new Error(book.title + "未提取到正文段落。");
   return units;
 }
+async function sourceFingerprint(units) {
+  const sourceIdentity = units.map((unit) => unit.source.repository + "/" + unit.source.path + ":" + unit.source.revision).join("\n");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sourceIdentity));
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 export function createGithubCorpusProvider({ fetchImpl = globalThis.fetch } = {}) {
   if (typeof fetchImpl !== "function") throw new TypeError("GitHub 语料 Provider 需要 fetch 实现。");
   return Object.freeze({
@@ -164,10 +170,13 @@ export function createGithubCorpusProvider({ fetchImpl = globalThis.fetch } = {}
       const book = GITHUB_CORPUS_BOOKS.find((item) => item.key === key);
       if (!book) throw new Error("不支持的 GitHub 语料书目：" + key);
       const units = key === "chuanxilu" ? await loadChuanxiLu(fetchImpl) : await loadMaoXuanVolume(fetchImpl, VOLUMES.find((item) => item.key === key));
+      const sourceSnapshotSha256 = await sourceFingerprint(units);
       return {
-        bookRevisionId: "github-corpus-" + key, title: book.title, author: book.author,
+        bookRevisionId: "github-corpus-" + key + "-" + sourceSnapshotSha256.slice(0, 20),
+        title: book.title, author: book.author,
         initialMainlineUnitId: units[0].id, units,
         sourceMetadata: {
+          sourceSnapshotSha256,
           kind: "public-github-source", repository: book.source,
           sourceUrl: key === "chuanxilu" ? "https://github.com/garychowcmu/daizhigev20" : "https://github.com/ruguoaaa/gushi",
           attribution: "正文按需从公开 GitHub 仓库读取。公开可访问不等于已确认再分发许可；本模式不将正文复制进 read-book 仓库。",
