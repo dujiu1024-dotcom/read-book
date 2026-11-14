@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://read-book.local/schemas/asset.schema.json",
+  "title": "Book package asset manifest",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["asset_id", "path", "asset_type", "mime_type", "sha256", "size_bytes"],
+    "properties": {
+      "asset_id": { "type": "string", "minLength": 1 },
+      "path": { "type": "string", "minLength": 1 },
+      "asset_type": { "enum": ["image", "page_render", "figure", "table", "other"] },
+      "mime_type": { "type": "string", "pattern": "^[a-zA-Z0-9.+-]+/[a-zA-Z0-9.+-]+$" },
+      "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+      "size_bytes": { "type": "integer", "minimum": 1 },
+      "caption": { "type": ["string", "null"] },
+      "alt_text": { "type": ["string", "null"] },
+      "locator": {
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "required": ["locator_type", "start_locator", "end_locator"],
+        "properties": {
+          "locator_type": { "enum": ["epub_cfi", "text_anchor", "pdf_page_text", "txt_offset", "paragraph_offset", "custom"] },
+          "start_locator": { "type": "string", "minLength": 1 },
+          "end_locator": { "type": "string", "minLength": 1 },
+          "page_number": { "type": ["integer", "null"], "minimum": 1 }
+        }
+      }
+    }
+  }
+}
