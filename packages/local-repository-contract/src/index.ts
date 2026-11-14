@@ -211,6 +211,7 @@ export interface LocalRepository {
   getDataSet(datasetId: string): Promise<LocalDataSet | null>;
   getMessages(datasetId: string, threadId: string, afterSequence?: number): Promise<PersistedMessage[]>;
   getGenerationDelivery(datasetId: string, clientGenerationId: string): Promise<GenerationDeliveryRecord | null>;
+  listPendingGenerationDeliveries(datasetId: string): Promise<GenerationDeliveryRecord[]>;
   getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]>;
   getMemoryRelations(datasetId: string, versionId: string): Promise<MemoryRelation[]>;
   close(): Promise<void>;
@@ -256,7 +257,7 @@ export function assertDataSetSequenceInvariant(dataSet: LocalDataSet): void {
 
 /** Structural adapter for the Agent turn orchestrator; both messages commit atomically before network work. */
 export function createAgentGenerationTurnRepository(
-  repository: Pick<LocalRepository, "transaction">,
+  repository: Pick<LocalRepository, "transaction" | "getGenerationDelivery" | "listPendingGenerationDeliveries">,
   datasetId: string,
 ) {
   return {
@@ -264,9 +265,16 @@ export function createAgentGenerationTurnRepository(
       appendUserMessage(message: NewUserMessage): Promise<PersistedMessage>;
       appendAssistantMessage(message: NewAssistantMessage): Promise<PersistedMessage>;
       transitionAssistantMessage(messageId: string, status: AssistantMessageStatus, content?: string): Promise<AssistantMessage>;
+      saveGenerationDelivery(delivery: GenerationDeliveryRecord): Promise<GenerationDeliveryRecord>;
     }) => Promise<T>): Promise<T> {
       if (id !== datasetId) throw new RepositoryError("DATASET_NOT_FOUND", "Agent turn dataset does not match the bound local dataset.");
       return repository.transaction(datasetId, (tx) => operation(tx));
+    },
+    getGenerationDelivery(clientGenerationId: string) {
+      return repository.getGenerationDelivery(datasetId, clientGenerationId);
+    },
+    listPendingGenerationDeliveries() {
+      return repository.listPendingGenerationDeliveries(datasetId);
     },
   };
 }
