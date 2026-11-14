@@ -83,6 +83,9 @@ window.READ_BOOK_CONFIG = {
    - `getAccessToken`：返回当前登录令牌的异步函数；也可由 `window.READ_BOOK_AUTH.getAccessToken` 提供
    - `encryptedBackupPort.uploadSnapshot(snapshot)`：可选自定义加密备份端口；未提供时，阅读运行时自动创建 HTTP 加密备份客户端
    - `onRecoveryCredential(secret)`：首次备份时展示独立恢复凭证，用户确认已安全保存后返回 `true`；不配置则停止首次上传
+   - `confirmRestore({datasetId, backups})`：新设备发现远端备份时询问是否恢复；也可使用内置确认框
+   - `getRecoveryCredential()`：用户选择恢复后获取独立恢复凭证；也可使用内置输入框
+   - `createNewDataSet({previousDatasetId})`：用户拒绝恢复时，由宿主创建全新的服务端数据集并返回新 UUID；不允许复用原数据集覆盖远端备份
    - `backupKdfIterations`、`backupChunkBytes`、`backupCheckpointInterval`：可选 KDF、分块大小和全量检查点间隔
    - `memoryExtractionProvider`、`memoryCandidatePolicy`：可选的结构化认知抽取 Provider 与价值评估策略
    - `planMemoryEvolution(input)`：可选的跨批次认知演变规划器；必须为每条 accepted 候选返回明确的版本计划，含前序版本和必要关系；未配置时不自动写入认知
@@ -101,4 +104,4 @@ window.READ_BOOK_CONFIG = {
 
 本地讨论消息在发起网络请求前与 Assistant 占位消息、生成回执一并提交到 OPFS。启动时会创建一致性快照并尝试通过加密备份 API 上传；首次上传必须先让用户保存独立恢复凭证。SSE delta 只用于临时显示，最终消息以服务端完成快照为准。刷新后会恢复本地消息并尝试恢复待处理生成任务。
 
-当前限制：项目尚未提供真实 API 环境、登录模块和服务端备份实现；恢复到 Repository 的事务性导入和新设备恢复确认 UI 仍待接入。缺少对应配置时页面明确报错/显示未配置，不会伪造真实书籍、Agent 回复或云端备份状态。实体真机测试不属于开发前置。
+新设备本地数据为空时会先查询远端备份并询问是否恢复；恢复时要求独立恢复凭证，并且只允许导入空数据集。若用户拒绝恢复，宿主必须先创建新的数据集 ID，避免把新数据写入旧备份链。缺少对应配置时页面明确报错/显示未配置，不会伪造真实书籍、Agent 回复或云端备份状态。实体真机测试不属于开发前置。
