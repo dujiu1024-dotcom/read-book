@@ -363,6 +363,11 @@ export function validateMemoryExtractionResult(
     if (!candidate || typeof candidate !== "object") {
       throw new DomainRuleError("Every extraction candidate must be an object.");
     }
+    if (typeof candidate.id !== "string" || !candidate.id.trim() ||
+        typeof candidate.title !== "string" || !candidate.title.trim() ||
+        typeof candidate.content !== "string" || !candidate.content.trim()) {
+      throw new DomainRuleError("Every candidate requires a non-empty id, title and content.");
+    }
     if (candidateIds.has(candidate.id)) throw new DomainRuleError("Candidate IDs must be unique within one result.");
     candidateIds.add(candidate.id);
     if (!["user", "author", "assistant_inference"].includes(candidate.viewpoint)) {
@@ -388,6 +393,9 @@ export function validateMemoryExtractionResult(
     }
     const sourceKeys = new Set<string>();
     for (const reference of candidate.sourceReferences) {
+      if (!reference || typeof reference !== "object") {
+        throw new DomainRuleError("Candidate source references must be objects.");
+      }
       if (reference.bookRevisionId !== context.bookRevisionId) {
         throw new DomainRuleError("Candidate citation belongs to a different BookRevision.");
       }
@@ -405,7 +413,7 @@ export function validateMemoryExtractionResult(
     if (candidate.requiresBookCitation && candidate.sourceReferences.length === 0) {
       throw new DomainRuleError("A book-based candidate must include a Book Citation.");
     }
-    const fingerprint = `${candidate.title.trim().toLocaleLowerCase()}::${candidate.content.trim().replace(/\\s+/g, " ").toLocaleLowerCase()}`;
+    const fingerprint = `${candidate.title.trim().toLocaleLowerCase()}::${candidate.content.trim().replace(/\s+/g, " ").toLocaleLowerCase()}`;
     if (contentFingerprints.has(fingerprint)) {
       throw new DomainRuleError("Duplicate candidates in one extraction result must be collapsed.");
     }
@@ -415,7 +423,12 @@ export function validateMemoryExtractionResult(
 }
 
 export function validateMemoryRelation(relation: MemoryRelation): MemoryRelation {
-  if (!relation.id.trim() || !relation.fromVersionId.trim() || !relation.toVersionId.trim()) {
+  if (!relation || typeof relation !== "object") {
+    throw new DomainRuleError("MemoryRelation must be an object.");
+  }
+  if (typeof relation.id !== "string" || !relation.id.trim() ||
+      typeof relation.fromVersionId !== "string" || !relation.fromVersionId.trim() ||
+      typeof relation.toVersionId !== "string" || !relation.toVersionId.trim()) {
     throw new DomainRuleError("MemoryRelation requires id and both version endpoints.");
   }
   if (relation.fromVersionId === relation.toVersionId) {
@@ -431,8 +444,10 @@ export function validateMemoryRelation(relation: MemoryRelation): MemoryRelation
       relation.sourceMessageIds.some((id) => !id.trim())) {
     throw new DomainRuleError("MemoryRelation source message IDs must be unique and non-empty.");
   }
-  if (relation.sourceReferences.some((reference) =>
-    !reference.bookRevisionId.trim() || !reference.structureNodeId.trim() || !reference.locator.trim()
+  if (!Array.isArray(relation.sourceReferences) || relation.sourceReferences.some((reference) =>
+    !reference || typeof reference.bookRevisionId !== "string" || !reference.bookRevisionId.trim() ||
+    typeof reference.structureNodeId !== "string" || !reference.structureNodeId.trim() ||
+    typeof reference.locator !== "string" || !reference.locator.trim()
   )) {
     throw new DomainRuleError("MemoryRelation Book Citations must have complete locators.");
   }
@@ -449,6 +464,9 @@ export function validateMemoryEvolution(
   next: MemoryVersion,
   relation: MemoryRelation | null = null,
 ): { version: MemoryVersion; relation: MemoryRelation | null } {
+  if (!["new", "supplement", "correction", "conflict", "rejection", "extension"].includes(next.changeKind)) {
+    throw new DomainRuleError("MemoryVersion changeKind is invalid.");
+  }
   const version = appendMemoryVersion(previous, next);
   const requiredRelation: Partial<Record<MemoryChangeKind, MemoryRelationType>> = {
     conflict: "contradicts",
