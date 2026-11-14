@@ -644,7 +644,22 @@ import { createSourceRetriever } from "./source-retriever.js";
         $("menuButton").hidden = true;
         $("simulateFailure").hidden = true;
         try {
-          productionRuntime = await createProductionReaderRuntime(readerConfig, bookRevision);
+          const getAccessToken = readerConfig.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken;
+          const hasBackupService = Boolean(
+            readerConfig.encryptedBackupPort ||
+            typeof readerConfig.createEncryptedBackupPort === "function" ||
+            readerConfig.apiBaseUrl
+          );
+          const hasFullServices = Boolean(
+            readerConfig.localDataSetId &&
+            typeof getAccessToken === "function" &&
+            (readerConfig.generationApiBaseUrl || readerConfig.apiBaseUrl) &&
+            hasBackupService
+          );
+          productionRuntime = await createProductionReaderRuntime({
+            ...readerConfig,
+            localOnly: readerConfig.localOnly === true || !hasFullServices,
+          }, bookRevision);
           const position = productionRuntime.readingPosition;
           if (position) {
             const index = units.findIndex((unit) => unit.id === position.mainlineNodeId);
@@ -671,7 +686,7 @@ import { createSourceRetriever } from "./source-retriever.js";
             : "已启用在线优先的本机来源缓存。";
           const agentMessage = productionRuntime.generationConfigured
             ? "Agent 接口已配置，生成结果仍以服务端权威响应为准。"
-            : "Agent 服务尚未配置，当前仅支持原文阅读和历史查看。";
+            : "Agent 或云端备份配置不完整，当前使用本地阅读与历史查看模式。";
           setGenerationStatus("已从 GitHub 读取 " + units.length + " 个阅读单元。" + cacheMessage + " " + agentMessage + " " + productionRuntime.backupStatus.detail);
         } catch (runtimeError) {
           productionRuntime = null;
