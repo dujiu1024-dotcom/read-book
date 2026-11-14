@@ -192,3 +192,34 @@ button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px sol
 
 .topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .topbar-actions .text-button { white-space: nowrap; padding: 6px 9px; }
+
+
+/* Memory provenance and relation history */
+.memory-provenance,
+.memory-relations {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-muted, #f5f3ef);
+  color: var(--text-secondary, #625d56);
+  font-size: 0.88rem;
+}
+.memory-provenance strong,
+.memory-relations strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-primary, #302d29);
+}
+.memory-provenance ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.memory-provenance li,
+.memory-relations p {
+  overflow-wrap: anywhere;
+  margin: 5px 0;
+  line-height: 1.55;
+}
+.memory-history-item .memory-provenance {
+  margin: 8px 0 12px;
+}
