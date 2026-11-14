@@ -113,7 +113,7 @@
 - AccountDataSetBinding
 - ShelfEntry / EntitlementProof
 - Thread / Message / GenerationReceipt
-- PresentedSource / ReadingRound / ReadingRoundState
+- PresentedSource / ReadingRound / ReadingPosition + ReadingUnitProgress
 - Citation
 - Note / NoteSource
 - Memory / MemoryRelation / MemorySource
