@@ -254,7 +254,7 @@ import { createSourceRetriever } from "./source-retriever.js";
       setGenerating(true);
       setGenerationStatus("正在将消息保存到本地…");
       try {
-        const additionalUnits = sourceRetriever?.retrieve(value, state.displayedUnit?.id, 3) || [];
+        const additionalUnits = sourceRetriever?.retrieve(value, state.displayedUnit?.id, 7) || [];
         const result = await productionRuntime.send(value, state.displayedUnit, {
           additionalUnits,
           onPersisted() {
