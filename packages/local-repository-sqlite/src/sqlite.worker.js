@@ -447,7 +447,11 @@ function txOperation(datasetId, operation, input) {
       const old=first("SELECT * FROM generation_delivery WHERE client_generation_id=? AND dataset_id=?",[d.clientGenerationId,datasetId]);
       if (old && (old.thread_id!==d.threadId || old.user_message_id!==d.userMessageId || old.assistant_message_id!==d.assistantMessageId || old.idempotency_key!==d.idempotencyKey)) throw new Error("GenerationDelivery 不允许更换原始消息或幂等键");
       if (old && d.lastSequence<old.last_sequence) throw new Error("GenerationDelivery 事件游标不允许回退");
+      if (old && d.lastSequence===old.last_sequence && old.last_event_id && d.lastEventId && old.last_event_id!==d.lastEventId) throw new Error("GenerationDelivery 相同序号不能对应不同事件");
       if (old && old.generation_id && d.generationId && old.generation_id!==d.generationId) throw new Error("GenerationDelivery generation_id 不允许变更");
+      const terminalStatuses=["completed","failed","cancelled","expired"];
+      if (old && terminalStatuses.includes(old.status) && d.status!==old.status) throw new Error("GenerationDelivery 终态不可回退或变更");
+      if (old && old.status==="running" && d.status==="queued") throw new Error("GenerationDelivery running 状态不可回退为 queued");
       execute("INSERT INTO generation_delivery(client_generation_id,dataset_id,generation_id,thread_id,user_message_id,assistant_message_id,idempotency_key,status,last_sequence,last_event_id,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(client_generation_id) DO UPDATE SET generation_id=COALESCE(excluded.generation_id,generation_delivery.generation_id),status=excluded.status,last_sequence=excluded.last_sequence,last_event_id=excluded.last_event_id,expires_at=COALESCE(excluded.expires_at,generation_delivery.expires_at),updated_at=excluded.updated_at",
         [d.clientGenerationId,datasetId,d.generationId,d.threadId,d.userMessageId,d.assistantMessageId,d.idempotencyKey,d.status,d.lastSequence,d.lastEventId,d.expiresAt,d.updatedAt]);
       transactionDirty=true;
