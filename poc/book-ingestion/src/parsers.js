@@ -105,8 +105,13 @@ async function parsePdf(bytes) {
       .filter((item) => !repeatedEdgeText.has(item.text.replace(/\\s+/g, ' ').trim()));
     const ordered = orderPdfItems(visibleItems, page.width);
     const items = ordered.items;
+    // PDF.js text transforms may use a bottom-origin coordinate system.
+    // Detect numeric printed page labels near either page edge rather than
+    // assuming one fixed coordinate orientation or a narrow absolute offset.
+    const edgeThreshold = page.height * 0.12;
     const printedPageItem = items.find((item) =>
-      item.y < 40 && /^\\d{1,4}$/.test(item.text.trim())
+      (item.y < edgeThreshold || item.y > page.height - edgeThreshold) &&
+      /^\\d{1,4}$/.test(item.text.trim())
     );
     const bodyItems = printedPageItem ? items.filter((item) => item !== printedPageItem) : items;
     return {
