@@ -1,7 +1,6 @@
 export type GenerationStatus =
   | "queued"
   | "running"
-  | "cancel_requested"
   | "completed"
   | "failed"
   | "cancelled"
@@ -175,7 +174,7 @@ export function validateGenerationAccepted(value: unknown): GenerationAccepted {
 export function validateGenerationSnapshot(value: unknown): GenerationSnapshot {
   const item = record(value);
   const statuses: GenerationStatus[] = [
-    "queued", "running", "cancel_requested", "completed", "failed", "cancelled", "expired",
+    "queued", "running", "completed", "failed", "cancelled", "expired",
   ];
   if (!statuses.includes(item.status as GenerationStatus)) {
     throw new GenerationProtocolError("GenerationSnapshot has an invalid status.");
