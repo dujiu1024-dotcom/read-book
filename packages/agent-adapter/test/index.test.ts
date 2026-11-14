@@ -312,7 +312,21 @@ test("conversation controller resumes queued deliveries in its bound dataset", a
     expiresAt: null,
     updatedAt: "2026-11-14T00:00:00.000Z",
   });
+  repository.deliveries.set("generation-other-thread", {
+    clientGenerationId: "generation-other-thread",
+    generationId: null,
+    threadId: "thread-another-book",
+    userMessageId: "user-other-thread",
+    assistantMessageId: "assistant-other-thread",
+    idempotencyKey: "idempotency-other-thread",
+    status: "queued",
+    lastSequence: 0,
+    lastEventId: null,
+    expiresAt: null,
+    updatedAt: "2026-11-14T00:00:01.000Z",
+  });
   repository.messages.set("assistant-message-recovery", { status: "generating", content: "" });
+  repository.messages.set("assistant-other-thread", { status: "generating", content: "" });
   const client = createGenerationClient({
     async createGeneration() { return accepted; },
     async getGeneration() {
@@ -327,8 +341,9 @@ test("conversation controller resumes queued deliveries in its bound dataset", a
     async streamEvents() {},
   });
   const controller = createGenerationTurnController(repository as any, client, "dataset-01");
-  const results = await controller.resumePending(async () => request);
+  const results = await controller.resumePending(async () => request, { threadId: request.thread_id });
   assert.equal(results.length, 1);
+  assert.equal(repository.deliveries.get("generation-other-thread").status, "queued");
   assert.equal(results[0].snapshot.result?.content, "恢复后的权威结果");
   assert.deepEqual(repository.messages.get("assistant-message-recovery"), {
     status: "completed",

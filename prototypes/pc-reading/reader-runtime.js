@@ -436,24 +436,35 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   async function resumePending(callbacks = {}) {
     if (!controller) return [];
     const results = await controller.resumePending(async (delivery) => {
+      if (delivery.threadId !== thread.id) {
+        throw new Error("待恢复任务不属于当前书籍 Thread，已阻止跨书籍恢复。");
+      }
       const messages = await repository.getMessages(datasetId, delivery.threadId);
       const user = messages.find((item) => item.message.id === delivery.userMessageId)?.message;
       if (!user) throw new Error("待恢复任务关联的用户消息不存在，已保留本地记录。");
       const sourceBundle = createSourceBundleFromReferences(user.sourceReferences);
-      const unit = sourceBundle.units[0];
+      if (!sourceBundle.current_source ||
+          user.sourceReferences?.[0]?.bookRevisionId !== bookRevision.bookRevisionId) {
+        throw new Error("待恢复任务的原文证据不属于当前书籍版本，已阻止错误恢复。");
+      }
+      const priorMessages = messages
+        .filter((item) => item.message.sequence < user.sequence)
+        .slice(-12)
+        .map(({ message }) => ({ role: message.role, content: message.content }));
       return {
         client_generation_id: delivery.clientGenerationId,
-        thread_id: thread.id,
+        thread_id: delivery.threadId,
         book_revision_id: bookRevision.bookRevisionId,
         user_message: { local_message_id: user.id, content: user.content },
         context: {
           current_source: sourceBundle.current_source,
           ...(sourceBundle.additional_sources.length ? { additional_sources: sourceBundle.additional_sources } : {}),
-          recent_messages: messages.slice(-12).map(({ message }) => ({ role: message.role, content: message.content })),
+          recent_messages: priorMessages,
           response_preferences: { language: "zh-CN" },
         },
       };
     }, {
+      threadId: thread.id,
       onDelta: callbacks.onDelta,
       onStatus: callbacks.onStatus,
     });
