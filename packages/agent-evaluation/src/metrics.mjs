@@ -78,6 +78,10 @@ export function evaluateRecords(records, options = {}) {
   const inputTokens = records.reduce((sum, record) => sum + record.input_tokens, 0);
   const outputTokens = records.reduce((sum, record) => sum + record.output_tokens, 0);
   const pricing = options.pricing || null;
+  if (pricing && (
+    !Number.isFinite(pricing.input_per_million) || pricing.input_per_million < 0 ||
+    !Number.isFinite(pricing.output_per_million) || pricing.output_per_million < 0
+  )) throw new Error("Token prices must be finite non-negative values.");
   const authorizationCounts = Object.fromEntries(["approved", "pending", "not_required"].map((status) => [
     status, records.filter((record) => record.source.authorization_status === status).length
   ]));
@@ -93,6 +97,9 @@ export function evaluateRecords(records, options = {}) {
     generated_at: (options.now || (() => new Date().toISOString()))(),
     sample_count: records.length,
     models: unique(records.map((record) => record.model_id)),
+    model_counts: Object.fromEntries(unique(records.map((record) => record.model_id)).map((model) => [
+      model, records.filter((record) => record.model_id === model).length
+    ])),
     runs: unique(records.map((record) => record.run_id)),
     sample_provenance: {
       source_type_counts: sourceTypeCounts,
