@@ -211,6 +211,8 @@ export interface LocalRepository {
   transaction<T>(datasetId: string, operation: (tx: LocalRepositoryTransaction) => Promise<T>): Promise<T>;
   /** Read a transactionally consistent export snapshot without acknowledging it as backed up. */
   createConsistentSnapshot(datasetId: string): Promise<RepositorySnapshot>;
+  /** Acknowledge only after the remote encrypted backup has durably accepted this snapshot. */
+  acknowledgeBackup(datasetId: string, snapshotSequence: number, backupId: string, backedUpAt: string): Promise<void>;
   getDataSet(datasetId: string): Promise<LocalDataSet | null>;
   getMessages(datasetId: string, threadId: string, afterSequence?: number): Promise<PersistedMessage[]>;
   getGenerationDelivery(datasetId: string, clientGenerationId: string): Promise<GenerationDeliveryRecord | null>;
