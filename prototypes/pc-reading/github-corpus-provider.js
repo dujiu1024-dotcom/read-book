@@ -79,17 +79,23 @@ function numberedSort(left, right) {
   const b = Number(right.name.match(/^(\d+)/)?.[1] || 999999);
   return a - b || left.name.localeCompare(right.name, "zh-CN");
 }
-function makeUnit({ id, chapter, title, text, locator, sourceUrl, sourcePath, order }) {
+function makeUnit({ id, chapter, title, text, locator, sourceUrl, sourcePath, sourceSha, order }) {
   return { id, chapter, title, text, locator, order, source: {
     repository: sourcePath.startsWith("儒藏/") ? "garychowcmu/daizhigev20" : "ruguoaaa/gushi",
-    path: sourcePath, url: sourceUrl, revision: sourcePath.startsWith("儒藏/") ? "master" : "main"
+    path: sourcePath, url: sourceUrl, revision: sourceSha || null
   }};
 }
 async function loadChuanxiLu(fetchImpl) {
   const repository = "garychowcmu/daizhigev20";
   const path = "儒藏/语录/传习录.txt";
-  const url = RAW_GITHUB + "/" + repository + "/master/" + path.split("/").map(encodeURIComponent).join("/");
-  const raw = await (await request(fetchImpl, url, "《传习录》")).text();
+  const apiPath = path.split("/").map(encodeURIComponent).join("/");
+  const metadataUrl = GITHUB_API + "/repos/" + repository + "/contents/" + apiPath + "?ref=master";
+  const metadata = await (await request(fetchImpl, metadataUrl, "《传习录》来源元数据")).json();
+  if (metadata.type !== "file" || typeof metadata.sha !== "string" || typeof metadata.download_url !== "string") {
+    throw new Error("《传习录》来源元数据不完整。");
+  }
+  const url = metadata.download_url;
+  const raw = await (await request(fetchImpl, url, "《传习录》正文")).text();
   if (!raw.trim()) throw new Error("《传习录》来源文件为空。");
   if (raw.length > MAX_BOOK_CHARACTERS) throw new Error("《传习录》超过单书读取上限。");
   const lines = raw.replace(/\r\n/g, "\n").split("\n");
@@ -106,8 +112,8 @@ async function loadChuanxiLu(fetchImpl) {
         id: "chuanxilu-" + String(order + 1).padStart(5, "0"),
         chapter: volume, title: volume + " · 第" + (order + 1) + "段", text: part,
         locator: path + "#line-" + (lineIndex + 1),
-        sourceUrl: "https://github.com/" + repository + "/blob/master/" + path.split("/").map(encodeURIComponent).join("/"),
-        sourcePath: path, order
+        sourceUrl: "https://github.com/" + repository + "/blob/" + metadata.sha + "/" + path.split("/").map(encodeURIComponent).join("/"),
+        sourcePath: path, sourceSha: metadata.sha, order
       }));
     }
   }
@@ -125,7 +131,7 @@ async function loadMaoXuanVolume(fetchImpl, book) {
   let totalCharacters = 0;
   const articles = await mapConcurrent(files, CONCURRENCY, async (file) => {
     const url = file.download_url;
-    if (typeof url !== "string" || !url.startsWith(RAW_GITHUB + "/ruguoaaa/gushi/")) throw new Error("GitHub 返回了非预期的正文下载地址：" + file.name);
+    if (typeof url !== "string" || !url.startsWith(RAW_GITHUB + "/ruguoaaa/gushi/") || typeof file.sha !== "string") throw new Error("GitHub 返回了非预期的正文来源信息：" + file.name);
     const raw = await (await request(fetchImpl, url, file.name)).text();
     if (!raw.trim()) throw new Error(file.name + " 正文为空。");
     if (raw.length > MAX_FILE_CHARACTERS) throw new Error(file.name + " 超过单篇读取上限。");
@@ -142,7 +148,8 @@ async function loadMaoXuanVolume(fetchImpl, book) {
         chapter: book.volume + " / " + article.title,
         title: article.title + " · 第" + (paragraphIndex + 1) + "段",
         text, locator: article.file.path + "#paragraph-" + (paragraphIndex + 1),
-        sourceUrl: article.url, sourcePath: article.file.path, order
+        sourceUrl: "https://github.com/ruguoaaa/gushi/blob/" + article.file.sha + "/" + article.file.path.split("/").map(encodeURIComponent).join("/"),
+        sourcePath: article.file.path, sourceSha: article.file.sha, order
       }));
     });
   }
