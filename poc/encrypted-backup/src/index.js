@@ -56,6 +56,7 @@ function recordKey(collection, record) {
     memories: "id",
     memoryVersions: "id",
     memoryRelations: "id",
+    memoryCandidates: "id",
     generationDeliveries: "clientGenerationId",
   };
   const path = keys[collection];
