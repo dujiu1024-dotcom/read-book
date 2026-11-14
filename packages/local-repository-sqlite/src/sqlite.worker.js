@@ -391,6 +391,59 @@ function txOperation(datasetId, operation, input) {
       transactionDirty=true;
       return r;
     }
+    case "updateReadingRound": {
+      const round=first("SELECT * FROM reading_round WHERE id=? AND dataset_id=?",[input.roundId,datasetId]);
+      if (!round || round.status!=="active") throw new Error("只有 active ReadingRound 可以结束");
+      if (!["completed","abandoned"].includes(input.status) || !Number.isFinite(Date.parse(input.completedAt))) throw new Error("ReadingRound 终态或时间非法");
+      if (input.status==="completed") {
+        const progress=first("SELECT COUNT(*) AS total,SUM(CASE WHEN status IN ('discussed','skipped') THEN 1 ELSE 0 END) AS done FROM reading_unit_progress WHERE reading_round_id=?",[input.roundId]);
+        if (!progress || progress.total===0 || progress.total!==progress.done) throw new Error("所有主线单元必须先完成讨论或确认略读");
+      }
+      execute("UPDATE reading_round SET status=?,completed_at=? WHERE id=?",[input.status,input.completedAt,input.roundId]);
+      transactionDirty=true;
+      return undefined;
+    }
+    case "createPresentedSource": {
+      const s=input.source;
+      const thread=first("SELECT book_revision_id FROM thread WHERE id=? AND dataset_id=?",[s.threadId,datasetId]);
+      if (!thread || thread.book_revision_id!==s.bookRevisionId) throw new Error("PresentedSource 必须绑定当前 Thread 的 BookRevision");
+      if (!["mainline","review","temporary","citation"].includes(s.presentationType)) throw new Error("PresentedSource presentationType 非法");
+      if (!s.sourceLocator || typeof s.sourceLocator!=="object" || Array.isArray(s.sourceLocator)) throw new Error("PresentedSource 必须保存原文定位");
+      if (s.presentationType==="mainline" && !s.readingRoundId) throw new Error("主线呈现必须绑定 ReadingRound");
+      if (s.readingRoundId && !first("SELECT id FROM reading_round WHERE id=? AND thread_id=? AND dataset_id=?",[s.readingRoundId,s.threadId,datasetId])) throw new Error("PresentedSource ReadingRound 不属于当前 Thread");
+      execute("INSERT INTO presented_source(id,dataset_id,thread_id,book_revision_id,structure_node_id,chunk_id,presentation_type,reading_round_id,presented_at,source_locator) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [s.id,datasetId,s.threadId,s.bookRevisionId,s.structureNodeId,s.chunkId||null,s.presentationType,s.readingRoundId||null,s.presentedAt,JSON.stringify(s.sourceLocator)]);
+      transactionDirty=true;
+      return s;
+    }
+    case "saveReadingUnitProgress":
+    case "restoreReadingUnitProgress": {
+      const p=input.progress;
+      const round=first("SELECT thread_id FROM reading_round WHERE id=? AND dataset_id=?",[p.readingRoundId,datasetId]);
+      if (!round) throw new Error("ReadingUnitProgress ReadingRound 不属于当前数据集");
+      const allowedStatuses=["not_presented","presented","awaiting_user","discussion_active","discussed","skipped"];
+      if (!allowedStatuses.includes(p.status)) throw new Error("ReadingUnitProgress status 非法");
+      if (p.firstPresentedSourceId) {
+        const source=first("SELECT reading_round_id,thread_id,structure_node_id FROM presented_source WHERE id=? AND dataset_id=?",[p.firstPresentedSourceId,datasetId]);
+        if (!source || source.reading_round_id!==p.readingRoundId || source.thread_id!==round.thread_id || source.structure_node_id!==p.structureNodeId) throw new Error("ReadingUnitProgress firstPresentedSourceId 不匹配");
+      }
+      if (p.lastActivityMessageId) {
+        const msg=first("SELECT thread_id FROM message WHERE id=? AND dataset_id=?",[p.lastActivityMessageId,datasetId]);
+        if (!msg || msg.thread_id!==round.thread_id) throw new Error("ReadingUnitProgress lastActivityMessageId 不匹配");
+      }
+      const old=first("SELECT * FROM reading_unit_progress WHERE reading_round_id=? AND structure_node_id=?",[p.readingRoundId,p.structureNodeId]);
+      const transitions={not_presented:["not_presented","presented"],presented:["presented","awaiting_user"],awaiting_user:["awaiting_user","discussion_active","skipped"],discussion_active:["discussion_active","discussed"],discussed:["discussed"],skipped:["skipped"]};
+      const restoring=operation==="restoreReadingUnitProgress";
+      if (old && !restoring && !transitions[old.status]?.includes(p.status)) throw new Error("ReadingUnitProgress 状态不可回退或跨越");
+      if (!old && !restoring && p.status!=="not_presented") throw new Error("新 ReadingUnitProgress 必须从 not_presented 开始");
+      if (old?.first_presented_source_id && p.firstPresentedSourceId && old.first_presented_source_id!==p.firstPresentedSourceId) throw new Error("ReadingUnitProgress firstPresentedSourceId 不可变更");
+      const completedAt=p.status==="discussed"||p.status==="skipped" ? p.completedAt : null;
+      if ((p.status==="discussed"||p.status==="skipped") && !Number.isFinite(Date.parse(completedAt))) throw new Error("已完成单元必须有 completedAt");
+      execute("INSERT INTO reading_unit_progress(reading_round_id,dataset_id,thread_id,structure_node_id,status,first_presented_source_id,last_activity_message_id,completed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(reading_round_id,structure_node_id) DO UPDATE SET status=excluded.status,first_presented_source_id=COALESCE(reading_unit_progress.first_presented_source_id,excluded.first_presented_source_id),last_activity_message_id=COALESCE(excluded.last_activity_message_id,reading_unit_progress.last_activity_message_id),completed_at=excluded.completed_at,updated_at=excluded.updated_at",
+        [p.readingRoundId,datasetId,round.thread_id,p.structureNodeId,p.status,p.firstPresentedSourceId||null,p.lastActivityMessageId||null,completedAt,p.updatedAt]);
+      transactionDirty=true;
+      return undefined;
+    }
     case "saveReadingPosition": {
       const p=input.position;
       if (!first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [p.threadId,datasetId])) throw new Error("ReadingPosition Thread 不属于当前数据集");
