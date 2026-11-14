@@ -423,7 +423,7 @@ function classifyRepositoryError(error) {
   const message = error?.message || String(error);
   if (/SQLITE_FULL|database or disk is full|quota exceeded|storage quota/i.test(message)) return "QUOTA_EXCEEDED";
   if (/SQLITE_CORRUPT|SQLITE_NOTADB|database disk image is malformed|file is not a database/i.test(message)) return "INTEGRITY_FAILED";
-  if (/Schema v\\d+ 迁移失败|数据库版本高于当前客户端/i.test(message)) return "MIGRATION_FAILED";
+  if (/Schema v\d+ 迁移失败|数据库版本高于当前客户端/i.test(message)) return "MIGRATION_FAILED";
   return null;
 }
 
