@@ -385,11 +385,15 @@ export async function runGenerationTurn(
   let accepted: GenerationAccepted;
   try {
     accepted = await client.create(input.request, input.idempotencyKey);
-    await repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "running", lastSequence: 0, lastEventId: null, expiresAt: accepted.expires_at, updatedAt: now() }));
   } catch (error) {
-    await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "failed"));
+    await repository.transaction(input.datasetId, async (tx) => {
+      await tx.transitionAssistantMessage(input.assistantMessageId, "failed");
+      await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: null, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "failed", lastSequence: 0, lastEventId: null, expiresAt: null, updatedAt: now() });
+    });
     throw error;
   }
+  // If this local write fails, leave the queued receipt intact. Recovery retries create with the same idempotency key.
+  await repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "running", lastSequence: 0, lastEventId: null, expiresAt: accepted.expires_at, updatedAt: now() }));
   let cursor: GenerationEventCursor = { generationId: accepted.generation_id, lastSequence: 0, lastEventId: null };
   let streamError: unknown = null;
   let persistEvents = Promise.resolve();
@@ -416,7 +420,10 @@ export async function runGenerationTurn(
   } catch (error) {
     if (input.signal.aborted) {
       await client.cancel(accepted.generation_id, input.idempotencyKey + ":cancel").catch(() => undefined);
-      await repository.transaction(input.datasetId, (tx) => tx.transitionAssistantMessage(input.assistantMessageId, "cancelled"));
+      await repository.transaction(input.datasetId, async (tx) => {
+        await tx.transitionAssistantMessage(input.assistantMessageId, "cancelled");
+        await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "cancelled", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: accepted.expires_at, updatedAt: now() });
+      });
     }
     throw streamError ?? error;
   }
@@ -462,7 +469,8 @@ export async function recoverGenerationTurn(
   await client.stream(accepted.generation_id, cursor, input.signal, (event) => {
     cursor = advanceGenerationEventCursor(cursor, event).cursor;
     const status = event.type === "failed" ? "failed" : event.type === "cancelled" ? "cancelled" : "running";
-    pendingWrites = pendingWrites.then(() => persist(status, cursor.lastSequence, cursor.lastEventId));
+    const eventCursor = { ...cursor };
+    pendingWrites = pendingWrites.then(() => persist(status, eventCursor.lastSequence, eventCursor.lastEventId));
     if (event.type === "delta") input.onDelta?.(event.text);
   });
   await pendingWrites;
