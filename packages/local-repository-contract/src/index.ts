@@ -318,7 +318,7 @@ export function createRepositoryBackupPort(
     createSnapshot() {
       return repository.createConsistentSnapshot(datasetId);
     },
-    acknowledgeUploadedSnapshot(snapshot, backupId, backedUpAt) {
+    async acknowledgeUploadedSnapshot(snapshot, backupId, backedUpAt) {
       if (snapshot.datasetId !== datasetId) {
         throw new RepositoryError("DATASET_NOT_FOUND", "Backup snapshot does not belong to the bound local dataset.");
       }
