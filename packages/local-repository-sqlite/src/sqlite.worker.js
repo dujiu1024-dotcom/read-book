@@ -298,6 +298,16 @@ function txOperation(datasetId, operation, input) {
       transactionDirty=true;
       return v;
     }
+    case "createAccountDataSetBinding": {
+      const b=input.binding;
+      if (b.localDataSetId !== datasetId || !b.accountId || b.status === "revoked" || b.revokedAt !== null) {
+        throw new Error("AccountDataSetBinding 必须绑定当前数据集且处于 active/inactive 状态");
+      }
+      execute("INSERT INTO account_dataset_binding(id,dataset_id,account_id,status,bound_at,last_selected_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)",
+        [b.id,datasetId,b.accountId,b.status,b.boundAt,b.lastSelectedAt]);
+      transactionDirty=true;
+      return b;
+    }
     case "getAccountDataSetBinding": {
       const row=first("SELECT * FROM account_dataset_binding WHERE id=? AND dataset_id=?", [input.bindingId,datasetId]);
       return row ? { id:row.id,accountId:row.account_id,localDataSetId:row.dataset_id,status:row.status,boundAt:row.bound_at,lastSelectedAt:row.last_selected_at,revokedAt:row.revoked_at } : null;
