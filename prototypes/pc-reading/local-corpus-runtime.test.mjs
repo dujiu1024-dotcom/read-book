@@ -63,6 +63,7 @@ test("creates a local Thread and restores its saved mainline position", async ()
 test("uses a separate local Thread for each immutable BookRevision", async () => {
   const repository = fakeRepository();
   const first = await createLocalCorpusRuntime({ bookRevisionId: "revision-a", initialMainlineUnitId: "a" }, {
+    datasetId: "test-dataset",
     repositoryFactory: () => repository
   });
   const second = await createLocalCorpusRuntime({ bookRevisionId: "revision-b", initialMainlineUnitId: "b" }, {
