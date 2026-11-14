@@ -164,10 +164,48 @@ export async function parseBookPackage(input, identity = {}) {
   const bookId = identity.bookId || crypto.randomUUID();
   const bookRevisionId = identity.bookRevisionId || crypto.randomUUID();
   if (!UUID.test(bookId) || !UUID.test(bookRevisionId)) throw new Error("本地 Book/BookRevision 标识必须是 UUID。");
+
+  const sourcePath = requiredText(manifest.source?.file, "manifest.source.file");
+  const sourceFormat = requiredText(manifest.source?.format, "manifest.source.format").toLowerCase();
+  if (!["epub", "pdf", "txt"].includes(sourceFormat)) throw new Error("不支持的原始书籍格式。");
+  if (!sourcePath.startsWith("source/") || sourcePath.split("/").some((part) => !part || part === "." || part === "..")) {
+    throw new Error("manifest.source.file 必须位于 source/ 安全目录下。");
+  }
+  if (typeof manifest.source?.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(manifest.source.sha256)) {
+    throw new Error("manifest.source.sha256 格式无效。");
+  }
+  if (!Number.isInteger(manifest.source?.size_bytes) || manifest.source.size_bytes < 1) throw new Error("manifest.source.size_bytes 无效。");
+  if (sourcePath.split(".").pop().toLowerCase() !== sourceFormat) throw new Error("原始文件扩展名与声明格式不一致。");
+
+  const processing = manifest.processing;
+  for (const field of ["processor_name", "processor_version", "rules_version", "parser", "parser_version"]) {
+    requiredText(processing?.[field], "manifest.processing." + field);
+  }
   const bookPath = requiredText(manifest.artifacts?.book, "manifest.artifacts.book");
   const chaptersPath = requiredText(manifest.artifacts?.chapters, "manifest.artifacts.chapters");
   const chunksPath = requiredText(manifest.artifacts?.chunks, "manifest.artifacts.chunks");
-  const sourcePath = requiredText(manifest.source?.file, "manifest.source.file");
+  if (![bookPath, chaptersPath, chunksPath].every((path) => path.startsWith("content/"))) {
+    throw new Error("书籍、章节和正文工件必须位于 content/ 目录。");
+  }
+  for (const field of ["assets", "embeddings", "local_report"]) {
+    if (!(field in (manifest.artifacts || {}))) throw new Error("manifest.artifacts 缺少字段：" + field);
+  }
+  const optionalArtifactPaths = [
+    [manifest.artifacts.assets, "content/"],
+    [manifest.artifacts.embeddings, "embeddings/"],
+    [manifest.artifacts.local_report, "validation/"],
+  ];
+  for (const [path, prefix] of optionalArtifactPaths) {
+    if (path !== null && (typeof path !== "string" || !path.startsWith(prefix))) {
+      throw new Error("可选工件路径必须位于 " + prefix + " 目录。");
+    }
+    if (path && !(files[path] instanceof Uint8Array)) throw new Error("书籍包缺少声明工件：" + path);
+  }
+  const rootNames = new Set(["manifest.json", "source", "content", "assets", "embeddings", "validation"]);
+  for (const path of Object.keys(files)) {
+    if (!rootNames.has(path.split("/")[0])) throw new Error("书籍包包含未约定的顶层目录：" + path);
+  }
+
   const book = parseJson(files[bookPath], bookPath);
   const chapters = parseJson(files[chaptersPath], chaptersPath);
   const chunkBytes = files[chunksPath];
@@ -175,18 +213,34 @@ export async function parseBookPackage(input, identity = {}) {
   if (!Array.isArray(chapters) || chapters.length === 0) throw new Error("书籍包没有有效章节。");
   const sourceBytes = files[sourcePath];
   if (!(sourceBytes instanceof Uint8Array)) throw new Error("书籍包缺少原始文件。");
-  if (await sha256(sourceBytes) !== manifest.source.sha256) throw new Error("原始文件 SHA-256 校验失败。");
+  if (await sha256(sourceBytes) !== manifest.source.sha256.toLowerCase()) throw new Error("原始文件 SHA-256 校验失败。");
   if (sourceBytes.byteLength !== manifest.source.size_bytes) throw new Error("原始文件大小与清单不一致。");
 
-  requiredText(book.title, "book.title");
-  const author = Array.isArray(book.authors) ? requiredText(book.authors[0], "book.authors[0]") : "";
-  if (!author) throw new Error("书籍包必须提供至少一位作者。");
+  const title = requiredText(book.title, "book.title");
+  if (!Array.isArray(book.authors) || !book.authors.length) throw new Error("book.authors 必须包含至少一位作者。");
+  const author = requiredText(book.authors[0], "book.authors[0]");
+  const language = requiredText(book.language, "book.language");
+  if (title !== manifest.book?.title || language !== manifest.book?.language ||
+      JSON.stringify(book.authors) !== JSON.stringify(manifest.book?.authors)) {
+    throw new Error("manifest.book 与 content/book.json 元数据不一致。");
+  }
+  for (const field of ["isbn", "edition", "translator", "publisher"]) {
+    if (!(field in (manifest.book || {}))) throw new Error("manifest.book 缺少字段：" + field);
+  }
+  if (!Number.isInteger(manifest.counts?.chapters) || !Number.isInteger(manifest.counts?.chunks) ||
+      !Number.isInteger(manifest.counts?.assets) || manifest.counts.chapters < 1 || manifest.counts.chunks < 1 || manifest.counts.assets < 0) {
+    throw new Error("manifest.counts 字段无效。");
+  }
 
   const chaptersById = new Map();
   for (const chapter of chapters) {
     requiredText(chapter.chapter_id, "chapter.chapter_id");
     requiredText(chapter.title, "chapter.title");
     if (!Number.isInteger(chapter.order_index) || chapter.order_index < 0) throw new Error("章节必须提供非负整数 order_index。");
+    if (!Number.isInteger(chapter.level) || chapter.level < 1 || chapter.level > 12) throw new Error("章节 level 必须在 1–12 之间。");
+    requiredText(chapter.start_locator, "chapter.start_locator");
+    requiredText(chapter.end_locator, "chapter.end_locator");
+    if (!(chapter.parent_chapter_id === null || typeof chapter.parent_chapter_id === "string")) throw new Error("chapter.parent_chapter_id 必须是字符串或 null。");
     if (chaptersById.has(chapter.chapter_id)) throw new Error("书籍包存在重复章节 ID。");
     chaptersById.set(chapter.chapter_id, chapter);
   }
@@ -206,17 +260,35 @@ export async function parseBookPackage(input, identity = {}) {
     requiredText(chunk.chunk_id, `chunks[${index}].chunk_id`);
     requiredText(chunk.chapter_id, `chunks[${index}].chapter_id`);
     requiredText(chunk.content, `chunks[${index}].content`);
+    requiredText(chunk.chapter_title, `chunks[${index}].chapter_title`);
+    requiredText(chunk.parser_version, `chunks[${index}].parser_version`);
+    requiredText(chunk.chunker_version, `chunks[${index}].chunker_version`);
     requiredText(chunk.locator_type, `chunks[${index}].locator_type`);
+    if (!["epub_cfi", "text_anchor", "pdf_page_text", "txt_offset", "paragraph_offset", "custom"].includes(chunk.locator_type)) throw new Error("正文切片 locator_type 无效。");
     requiredText(chunk.start_locator, `chunks[${index}].start_locator`);
     requiredText(chunk.end_locator, `chunks[${index}].end_locator`);
     if (!Number.isInteger(chunk.order_index) || chunk.order_index < 0) throw new Error("正文切片必须提供非负整数 order_index。");
     if (typeof chunk.content_sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(chunk.content_sha256)) throw new Error("正文切片必须提供有效 content_sha256。");
     if (!chaptersById.has(chunk.chapter_id)) throw new Error("正文切片引用了不存在的章节：" + chunk.chapter_id);
+    if (chunk.chapter_title !== chaptersById.get(chunk.chapter_id).title) throw new Error("正文切片 chapter_title 与章节树不一致：" + chunk.chunk_id);
     return chunk;
   });
+  const chapterOrderPath = (chapter) => {
+    const order = [];
+    let current = chapter;
+    while (current) {
+      order.push(current.order_index);
+      current = current.parent_chapter_id ? chaptersById.get(current.parent_chapter_id) : null;
+    }
+    return order.reverse();
+  };
   chunks.sort((left, right) => {
-    const chapterOrder = chaptersById.get(left.chapter_id).order_index - chaptersById.get(right.chapter_id).order_index;
-    return chapterOrder || left.order_index - right.order_index;
+    const leftPath = chapterOrderPath(chaptersById.get(left.chapter_id));
+    const rightPath = chapterOrderPath(chaptersById.get(right.chapter_id));
+    for (let index = 0; index < Math.min(leftPath.length, rightPath.length); index += 1) {
+      if (leftPath[index] !== rightPath[index]) return leftPath[index] - rightPath[index];
+    }
+    return leftPath.length - rightPath.length || left.order_index - right.order_index;
   });
   const ids = new Set();
   const units = [];
@@ -237,15 +309,48 @@ export async function parseBookPackage(input, identity = {}) {
       text: chunk.content,
     });
   }
-  if (manifest.counts?.chapters !== chapters.length || manifest.counts?.chunks !== chunks.length) {
-    throw new Error("书籍包清单中的章节或正文数量与实际内容不一致。");
+  const chapterOrderKeys = new Set();
+  for (const chapter of chapters) {
+    const key = (chapter.parent_chapter_id || "root") + ":" + chapter.order_index;
+    if (chapterOrderKeys.has(key)) throw new Error("同级章节 order_index 重复。");
+    chapterOrderKeys.add(key);
+  }
+  const chunkOrderKeys = new Set();
+  for (const chunk of chunks) {
+    const key = chunk.chapter_id + ":" + chunk.order_index;
+    if (chunkOrderKeys.has(key)) throw new Error("同一章节内正文切片 order_index 重复。");
+    chunkOrderKeys.add(key);
+  }
+  const assetPaths = Object.keys(files).filter((path) => path.startsWith("assets/") && !path.endsWith("/"));
+  if (manifest.counts.chapters !== chapters.length || manifest.counts.chunks !== chunks.length || manifest.counts.assets !== assetPaths.length) {
+    throw new Error("书籍包清单中的章节、正文或资源数量与实际内容不一致。");
+  }
+  if (manifest.artifacts.assets) {
+    const assets = parseJson(files[manifest.artifacts.assets], manifest.artifacts.assets);
+    if (!Array.isArray(assets)) throw new Error("资源清单必须是数组。");
+    const ids = new Set();
+    const paths = new Set();
+    for (const asset of assets) {
+      const id = requiredText(asset.asset_id, "asset.asset_id");
+      const path = requiredText(asset.path, "asset.path");
+      if (!path.startsWith("assets/") || !files[path]) throw new Error("资源文件缺失或不在 assets/ 目录：" + path);
+      if (ids.has(id) || paths.has(path)) throw new Error("资源清单存在重复 ID 或路径。");
+      ids.add(id); paths.add(path);
+      const bytes = files[path];
+      if (bytes.byteLength !== asset.size_bytes || await sha256(bytes) !== asset.sha256?.toLowerCase()) {
+        throw new Error("资源文件大小或 SHA-256 校验失败：" + path);
+      }
+    }
+    if (paths.size !== assetPaths.length || assetPaths.some((path) => !paths.has(path))) throw new Error("存在未声明的资源文件。");
+  } else if (assetPaths.length) {
+    throw new Error("存在 assets/ 文件，但 manifest.artifacts.assets 未提供资源清单。");
   }
   return {
     bookRevisionId,
     bookId,
     title: book.title,
     author,
-    language: book.language || "zh-CN",
+    language,
     initialMainlineUnitId: units[0].id,
     units,
     packageMetadata: {
