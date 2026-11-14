@@ -359,6 +359,8 @@ export interface GenerationTurnInput {
   signal: AbortSignal;
   onDelta?: (text: string) => void;
   onStatus?: (status: GenerationStatus) => void;
+  /** Called only after the local transaction containing both messages and delivery receipt commits. */
+  onPersisted?: () => void;
 }
 
 export interface GenerationTurnResult {
@@ -397,6 +399,7 @@ export async function runGenerationTurn(
     await tx.appendAssistantMessage({ id: input.assistantMessageId, threadId: input.userMessage.threadId, content: "", status: "generating", createdAt: now(), sourceReferences: [], idempotencyKey: input.idempotencyKey + ":assistant" });
     await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: null, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "queued", lastSequence: 0, lastEventId: null, expiresAt: null, updatedAt: now() });
   });
+  input.onPersisted?.();
   let accepted: GenerationAccepted;
   try {
     accepted = await client.create(input.request, input.idempotencyKey);

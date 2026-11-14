@@ -1,0 +1,15 @@
+{
+  "name": "@read-book/pc-reader",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@sqlite.org/sqlite-wasm": "3.54.1-build1"
+  },
+  "devDependencies": {
+    "vite": "7.2.2"
+  }
+}

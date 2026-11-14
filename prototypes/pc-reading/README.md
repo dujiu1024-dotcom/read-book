@@ -67,3 +67,34 @@ window.READ_BOOK_CONFIG = {
 ```
 
 若没有配置公共 API，页面明确使用 Demo Provider；若配置了真实书籍，页面不会展示演示讨论消息或固定演示回复，讨论输入暂时禁用，等待 #26/#27 接入。
+
+
+## 本地运行（正式阅读客户端）
+
+本目录现由 Vite 构建，生产模式会接入 SQLite WASM + OPFS 本地 Repository、公共书籍 API Provider 和 HTTP/SSE Agent Transport，不再使用固定演示回复。
+
+1. 在本目录安装依赖：`npm install`
+2. 启动：`npm run dev`
+3. 在页面加载前注入 `window.READ_BOOK_CONFIG`：
+   - `apiBaseUrl`：公共书籍 API 地址
+   - `generationApiBaseUrl`：生成服务 API 地址（可与 apiBaseUrl 相同）
+   - `bookRevisionId`：已发布书籍版本 UUID
+   - `localDataSetId`：本地数据集 ID
+   - `getAccessToken`：返回当前登录令牌的异步函数；也可由 `window.READ_BOOK_AUTH.getAccessToken` 提供
+   - `encryptedBackupPort.uploadSnapshot(snapshot)`：可选的加密备份端口；只有该端口返回 backupId 后才确认备份序号
+
+示例（必须由宿主登录系统注入令牌，不要把令牌写入静态文件）：
+
+```js
+window.READ_BOOK_CONFIG = {
+  apiBaseUrl: "https://your-book-api.example",
+  generationApiBaseUrl: "https://your-generation-api.example",
+  bookRevisionId: "00000000-0000-4000-8000-000000000001",
+  localDataSetId: "local-dataset-1",
+  getAccessToken: async () => window.READ_BOOK_AUTH.getAccessToken(),
+};
+```
+
+本地讨论消息在发起网络请求前与 Assistant 占位消息、生成回执一并提交到 OPFS。SSE delta 只用于临时显示，最终消息以服务端完成快照为准。刷新后会恢复本地消息并尝试恢复待处理生成任务。
+
+当前限制：项目尚未提供真实 API 环境、登录模块和生产加密备份服务；缺少对应配置时页面明确报错/显示未配置，不会伪造真实书籍、Agent 回复或云端备份状态。实体真机测试不属于开发前置。
