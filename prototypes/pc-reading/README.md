@@ -22,7 +22,7 @@ npm run dev
 - 临时查看、复习、引用回跳均不改变主线游标；可返回当前主线。
 - 历史消息滚动位置保护：用户正在阅读历史时，新消息不强制滚到底部。
 - 模拟消息先显示“本地已保存”，并演示生成中、停止、失败和重试。
-- 轻量备份状态只展示演示状态，不上传数据。
+- 备份状态来自实际备份端口；未配置时明确显示未配置，演示模式不上传数据。
 - 支持键盘发送（Ctrl/Cmd + Enter）、焦点可见、状态文字不只依赖颜色。
 - 触控操作目标最小高度 44 CSS px；输入框字号 16 CSS px，降低 iOS 聚焦自动缩放风险。
 - 不包含收藏、测验、评分、主动提问、主动提醒或自动续读。
@@ -42,7 +42,7 @@ CI 使用 Chromium 和 Playwright 验证折叠/展开、临时查看、复习、
 
 页面通过 `BookContentProvider.loadBookRevision(bookRevisionId)` 加载书籍版本，不再在页面脚本中内嵌章节与原文 fixtures。Provider 对返回内容执行结构校验：版本 ID、书籍元数据、初始主线单元、单元唯一 ID、章节、定位和正文均须有效。
 
-当前接入的是 `createDemoBookContentProvider()`，仅用于开发与自动化测试；它不是真实书籍服务，也不代表 EPUB/PDF/TXT 导入已接通。后续可替换为本地书籍包或公共书籍 API Provider，而不改变阅读页面。真实内容接入仍是 Issue #25 的未完成验收项。
+当前支持 Demo Provider、公共书籍 API Provider、GitHub 六书 Provider 和本地标准书籍包 Provider。Demo 仅用于开发与自动化测试；没有显式选择 GitHub 书目或本地书籍包、也未配置正式 API 时才使用 Demo。
 
 运行 Provider 契约测试：
 
@@ -68,7 +68,7 @@ window.READ_BOOK_CONFIG = {
 };
 ```
 
-若没有配置公共 API，页面明确使用 Demo Provider；若配置了真实书籍，页面不会展示演示讨论消息或固定演示回复，讨论输入暂时禁用，等待 #26/#27 接入。
+若没有配置公共 API，且没有显式选择 GitHub 书目或本地书籍包，页面使用 Demo Provider；真实书籍不会展示演示讨论消息或固定演示回复。
 
 
 ## 本地运行（正式阅读客户端）
@@ -83,7 +83,7 @@ window.READ_BOOK_CONFIG = {
    - `bookRevisionId`：已发布书籍版本 UUID
    - `localDataSetId`：本地数据集 ID
    - `getAccessToken`：返回当前登录令牌的异步函数；也可由 `window.READ_BOOK_AUTH.getAccessToken` 提供
-   - `encryptedBackupPort.uploadSnapshot(snapshot)`：可选自定义加密备份端口；未提供时，阅读运行时自动创建 HTTP 加密备份客户端
+   - `encryptedBackupPort`：自定义加密备份端口，必须同时实现 `uploadSnapshot(snapshot)`、`listBackups()` 和 `restoreToRepository(repository, recoveryCredential)`；也可用 `createEncryptedBackupPort(datasetId)` 工厂注入完整端口；未提供时使用 HTTP 加密备份客户端
    - `onRecoveryCredential(secret)`：首次备份时展示独立恢复凭证，用户确认已安全保存后返回 `true`；不配置则停止首次上传
    - `confirmRestore({datasetId, backups})`：新设备发现远端备份时询问是否恢复；也可使用内置确认框
    - `getRecoveryCredential()`：用户选择恢复后获取独立恢复凭证；也可使用内置输入框
@@ -122,7 +122,7 @@ window.READ_BOOK_CONFIG = {
 
 导入实现：`local-book-package-provider.js`。对应自动化测试：`node --test local-book-package-provider.test.mjs`；本目录脚本：`npm run test:book-package`。按项目统一验收约定，本轮未运行测试或构建。
 
-## GitHub 六本真实语料（只读接入）
+## GitHub 六本真实语料接入
 
 阅读页现在可以直接选择六本公开 GitHub 语料，不需要先下载或上传到 read-book 仓库：
 
@@ -130,8 +130,8 @@ window.READ_BOOK_CONFIG = {
 - 《毛泽东选集》第一至第五卷：ruguoaaa/gushi 各卷目录中的 Markdown 正文，按原始篇目编号排序，再按段落拆分阅读单元。
 - 阅读页顶部书目选择器可切换六本书；五卷分别使用独立 BookRevision ID，不会拼接。
 - 原文卡片显示章节/段落定位，并提供对应 GitHub 原始文件链接。
-- 当前为公开来源只读模式：正文直接从来源仓库读取，不复制进 read-book 仓库；不声称来源仓库已授予再分发许可。可通过“导入书籍”入口选择符合 v1.0.0 的本地书籍包，进入独立的本地持久化阅读模式。
-- 已接入 SQLite WASM + OPFS 本地阅读位置持久化；来源正文使用 Cache Storage 在线优先缓存。真实 Agent 对话、认知沉淀和加密云端备份仍未接入。
+- 正文直接从来源仓库读取，不复制进 read-book 仓库；公开访问不代表已授予再分发许可。可通过“导入书籍”入口选择符合 v1.0.0 的本地书籍包，进入本地持久化阅读模式。
+- 已接入 SQLite WASM + OPFS 本地阅读位置/Thread/历史持久化，来源正文使用 Cache Storage 在线优先缓存；宿主配置完整 Generation API、认证和备份服务后，可使用正式 Agent、认知沉淀和加密云端备份。
 - GitHub API 或 Raw 内容读取失败时优先使用本机已有来源缓存；无缓存时显示错误，不回退到演示正文。
 
 启动方式：
@@ -146,7 +146,7 @@ npm run dev
 
 公开语料模式会使用与本地导入书籍相同的 localDataSetId 和 SQLite WASM + OPFS Repository 保存阅读主线、临时查看位置和 Thread；默认数据集标识保存在 read-book:local-dataset-id。书籍版本 ID 根据本次读取的 Git blob SHA 集合计算指纹；来源文件变化后会形成新的 BookRevision，不会把新版本误当成旧版本。
 
-此模式只在本机保存阅读位置。启动时创建本地一致性快照，但没有配置加密备份服务时不会上传；界面明确显示“备份未配置”。Agent 消息和认知数据仍未接入。
+当宿主没有配置完整的 Generation API、认证和加密备份服务时，阅读位置、Thread 和历史消息只保存在本机，并创建本地一致性快照；界面明确显示 Agent/备份未配置。服务配置完整时则走正式 Reader Runtime 的备份检查、恢复提示和上传流程。
 
 ## GitHub 语料离线缓存
 
@@ -162,4 +162,4 @@ GitHub 语料 Provider 使用浏览器 Cache Storage 缓存来源仓库的目录
 
 GitHub 语料的 BookRevision ID 和结构节点 ID 均由来源 Git Blob SHA、文件路径和定位确定性生成 UUID，满足 GenerationRequest 的 UUID 契约。在线加载时逐文件计算 Git Blob SHA-1；若网络缓存内容与目录元数据声明的 Blob SHA 不一致，整本书拒绝加载，防止混合新旧版本。
 
-若宿主配置了 Generation API 和认证，GitHub 语料模式可使用正式阅读运行时、历史消息、认知状态与多来源引用；未配置时仍可本地阅读，并明确显示 Agent 未配置。备份服务若未配置，界面明确显示未配置，不会伪称云端备份成功。
+若宿主配置了 Generation API、访问令牌、本地数据集 ID 和完整加密备份服务，GitHub 语料模式可使用正式阅读运行时、Agent、历史消息、认知状态、多来源引用及备份/恢复。配置不完整时自动使用本地模式，不会伪称 Agent 或云端备份成功。自定义备份端口必须同时实现上传、备份清单查询和恢复到本地 Repository。

@@ -645,9 +645,13 @@ import { createSourceRetriever } from "./source-retriever.js";
         $("simulateFailure").hidden = true;
         try {
           const getAccessToken = readerConfig.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken;
+          const customBackup = readerConfig.encryptedBackupPort;
           const hasBackupService = Boolean(
-            readerConfig.encryptedBackupPort ||
             typeof readerConfig.createEncryptedBackupPort === "function" ||
+            (customBackup &&
+              typeof customBackup.uploadSnapshot === "function" &&
+              typeof customBackup.listBackups === "function" &&
+              typeof customBackup.restoreToRepository === "function") ||
             readerConfig.apiBaseUrl
           );
           const hasFullServices = Boolean(
