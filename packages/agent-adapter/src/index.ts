@@ -515,3 +515,102 @@ export async function recoverGenerationTurn(
   input.onStatus?.(snapshot.status);
   return { accepted, snapshot, assistantMessageId: delivery.assistantMessageId, lastCursor: cursor };
 }
+
+
+export interface GenerationTurnControllerOptions {
+  onDelta?: (clientGenerationId: string, text: string) => void;
+  onStatus?: (clientGenerationId: string, status: GenerationStatus) => void;
+}
+
+export interface GenerationTurnController {
+  /** Submit one turn. The controller owns its AbortController so the caller can stop it explicitly. */
+  send(input: Omit<GenerationTurnInput, "signal">): Promise<GenerationTurnResult>;
+  /** Resume one durable queued/running delivery after the caller has rebuilt its request context. */
+  resume(input: {
+    datasetId: string;
+    clientGenerationId: string;
+    request: GenerationRequest;
+    now?: () => string;
+  }): Promise<GenerationTurnResult>;
+  /** Resume all durable pending deliveries in creation order. */
+  resumePending(
+    requestForDelivery: (delivery: NonNullable<Awaited<ReturnType<GenerationTurnRepository["getGenerationDelivery"]>>>) => Promise<GenerationRequest>,
+    options?: { now?: () => string },
+  ): Promise<GenerationTurnResult[]>;
+  stop(): void;
+  isBusy(): boolean;
+}
+
+/**
+ * UI-facing lifecycle boundary for a single reader conversation.
+ * It centralizes cancellation and reload recovery without coupling the UI to transport details.
+ * The caller remains responsible for rendering provisional deltas and reloading persisted messages.
+ */
+export function createGenerationTurnController(
+  repository: GenerationTurnRepository,
+  client: ReturnType<typeof createGenerationClient>,
+  options: GenerationTurnControllerOptions = {},
+): GenerationTurnController {
+  let activeController: AbortController | null = null;
+
+  async function execute<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    if (activeController) {
+      throw new GenerationProtocolError("A generation turn is already active for this conversation.");
+    }
+    const controller = new AbortController();
+    activeController = controller;
+    try {
+      return await operation(controller.signal);
+    } finally {
+      if (activeController === controller) activeController = null;
+    }
+  }
+
+  return Object.freeze({
+    send(input: Omit<GenerationTurnInput, "signal">) {
+      return execute((signal) => runGenerationTurn(repository, client, {
+        ...input,
+        signal,
+        onDelta: (text) => options.onDelta?.(input.request.client_generation_id, text),
+        onStatus: (status) => options.onStatus?.(input.request.client_generation_id, status),
+      }));
+    },
+    resume(input: { datasetId: string; clientGenerationId: string; request: GenerationRequest; now?: () => string }) {
+      return execute((signal) => recoverGenerationTurn(repository, client, {
+        ...input,
+        signal,
+        onDelta: (text) => options.onDelta?.(input.clientGenerationId, text),
+        onStatus: (status) => options.onStatus?.(input.clientGenerationId, status),
+      }));
+    },
+    resumePending(requestForDelivery, resumeOptions = {}) {
+      return execute(async (signal) => {
+        const pending = await repository.listPendingGenerationDeliveries();
+        const results: GenerationTurnResult[] = [];
+        for (const delivery of pending) {
+          if (signal.aborted) break;
+          const request = await requestForDelivery(delivery);
+          if (request.client_generation_id !== delivery.clientGenerationId) {
+            throw new GenerationProtocolError("Recovery request does not match its pending delivery.");
+          }
+          results.push(await recoverGenerationTurn(repository, client, {
+            datasetId: delivery.threadId ? (await repository.getGenerationDelivery(delivery.clientGenerationId)) && (resumeOptions as { datasetId?: string }).datasetId || "" : "",
+            clientGenerationId: delivery.clientGenerationId,
+            request,
+            signal,
+            now: resumeOptions.now,
+            onDelta: (text) => options.onDelta?.(delivery.clientGenerationId, text),
+            onStatus: (status) => options.onStatus?.(delivery.clientGenerationId, status),
+          }));
+        }
+        return results;
+      });
+    },
+    stop() {
+      activeController?.abort();
+    },
+    isBusy() {
+      return activeController !== null;
+    },
+  });
+}
