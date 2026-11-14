@@ -295,6 +295,53 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     return result;
   }
 
+  async function retryFailedGeneration(assistantMessageId, callbacks = {}) {
+    const snapshot = await repository.createConsistentSnapshot(datasetId);
+    const delivery = snapshot.generationDeliveries.find((item) => item.assistantMessageId === assistantMessageId);
+    if (!delivery || !["failed", "expired", "cancelled"].includes(delivery.status)) {
+      throw new Error("找不到可重试的失败生成记录。");
+    }
+    const messages = await loadMessages();
+    const user = messages.find((item) => item.message.id === delivery.userMessageId)?.message;
+    if (!user) throw new Error("原始用户消息不存在，不能重试。");
+    const source = user.sourceReferences?.[0];
+    const unit = bookRevision.units.find((item) => item.id === source?.structureNodeId);
+    if (!unit) throw new Error("原始消息关联的书籍原文已不可用，不能重试。");
+    const priorMessages = messages
+      .filter((item) => item.message.sequence < user.sequence)
+      .slice(-12)
+      .map(({ message }) => ({ role: message.role, content: message.content }));
+    const userMessageId = user.id;
+    const clientGenerationId = uuid();
+    const idempotencyKey = uuid() + "-" + uuid();
+    const request = {
+      client_generation_id: clientGenerationId,
+      thread_id: thread.id,
+      book_revision_id: bookRevision.bookRevisionId,
+      user_message: { local_message_id: userMessageId, content: user.content },
+      context: {
+        current_source: { structure_node_id: unit.id, excerpt: unit.text },
+        recent_messages: priorMessages,
+        response_preferences: { language: "zh-CN" },
+      },
+    };
+    const result = await controller.send({
+      datasetId,
+      userMessage: { id: user.id, threadId: thread.id, content: user.content },
+      assistantMessageId: uuid(),
+      request,
+      idempotencyKey,
+      sourceReferences: user.sourceReferences || [],
+      reuseExistingUserMessage: true,
+      onPersisted: callbacks.onPersisted,
+      onDelta: callbacks.onDelta,
+    });
+    if (config.memoryExtractionProvider && config.memoryCandidatePolicy) {
+      void extractMemories().then((memoryState) => callbacks.onMemoryUpdate?.(memoryState)).catch((error) => callbacks.onMemoryError?.(error));
+    }
+    return result;
+  }
+
   async function resumePending(callbacks = {}) {
     const results = await controller.resumePending(async (delivery) => {
       const messages = await repository.getMessages(datasetId, delivery.threadId);
@@ -351,6 +398,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     resolveMemoryCandidate,
     savePosition,
     send,
+    retryFailedGeneration,
     stop: () => controller.stop(),
     resumePending,
     close: () => repository.close(),

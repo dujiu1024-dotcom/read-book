@@ -361,6 +361,8 @@ export interface GenerationTurnInput {
   onStatus?: (status: GenerationStatus) => void;
   /** Called only after the local transaction containing both messages and delivery receipt commits. */
   onPersisted?: () => void;
+  /** Reuses an already-persisted user message when creating a new assistant attempt. */
+  reuseExistingUserMessage?: boolean;
 }
 
 export interface GenerationTurnResult {
@@ -395,7 +397,9 @@ export async function runGenerationTurn(
     return { accepted, snapshot, assistantMessageId: existing.assistantMessageId, lastCursor: { generationId: existing.generationId, lastSequence: existing.lastSequence, lastEventId: existing.lastEventId } };
   }
   await repository.transaction(input.datasetId, async (tx) => {
-    await tx.appendUserMessage({ ...input.userMessage, createdAt: now(), sourceReferences: input.sourceReferences, idempotencyKey: input.idempotencyKey });
+    if (!input.reuseExistingUserMessage) {
+      await tx.appendUserMessage({ ...input.userMessage, createdAt: now(), sourceReferences: input.sourceReferences, idempotencyKey: input.idempotencyKey });
+    }
     await tx.appendAssistantMessage({ id: input.assistantMessageId, threadId: input.userMessage.threadId, content: "", status: "generating", createdAt: now(), sourceReferences: [], idempotencyKey: input.idempotencyKey + ":assistant" });
     await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: null, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "queued", lastSequence: 0, lastEventId: null, expiresAt: null, updatedAt: now() });
   });
