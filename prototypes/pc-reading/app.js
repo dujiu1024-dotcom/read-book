@@ -124,7 +124,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       retry.type = "button";
       retry.className = "text-button";
       retry.textContent = "重试";
-      retry.addEventListener("click", () => productionRuntime ? productionRuntime.resumePending().then(refreshPersistedMessages).catch(error => setGenerationStatus(error.message)) : retryLast());
+      retry.addEventListener("click", () => productionRuntime ? productionRuntime.retryFailedGeneration(message.id).then(refreshPersistedMessages).catch(error => setGenerationStatus("重试失败：" + error.message)) : retryLast());
       content.append(retry);
     }
     article.append(avatar, content);
@@ -455,6 +455,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
     for (const item of persisted) {
       const message = item.message;
       appendMessage({
+        id: message.id,
         role: message.role === "user" ? "user" : "agent",
         text: message.content || (message.status === "generating" ? "正在生成…" : "本次生成未返回内容。"),
         time: message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "刚刚",
