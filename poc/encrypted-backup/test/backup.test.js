@@ -112,3 +112,10 @@ test("creates full checkpoints at the configured interval", () => {
   assert.equal(shouldCreateFullCheckpoint(10, 10), true);
   assert.equal(shouldCreateFullCheckpoint(0, 1), false);
 });
+
+
+test("device backup key is a non-extractable HKDF CryptoKey", async () => {
+  const bundle = await createRecoveryBundle("dataset-1", undefined, { iterations: 100_000 });
+  assert.equal(bundle.dataKey.algorithm.name, "HKDF");
+  assert.equal(bundle.dataKey.extractable, false);
+});
