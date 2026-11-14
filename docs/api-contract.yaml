@@ -787,15 +787,17 @@ components:
             type: { type: string, const: cancelled }
     BackupClientManifest:
       type: object
-      required: [format, formatVersion, datasetId, backupId, backupSequence, parentBackupId, backupType, schemaVersion, cipherSuite, keyVersion, ciphertextHash, ciphertextSize, partCount, chunks, keyEnvelope, createdAt]
+      required: [format, formatVersion, datasetId, backupId, backupSequence, dirtySequence, parentBackupId, backupType, kind, schemaVersion, cipherSuite, keyVersion, ciphertextHash, ciphertextSize, partCount, chunkCount, chunks, keyEnvelope, createdAt]
       properties:
         format: { type: string, const: read-book-encrypted-backup }
         formatVersion: { type: integer, minimum: 1 }
         datasetId: { type: string, format: uuid }
         backupId: { type: string, format: uuid }
         backupSequence: { type: integer, minimum: 1 }
+        dirtySequence: { type: integer, minimum: 1 }
         parentBackupId: { type: [string, 'null'], format: uuid }
         backupType: { type: string, enum: [full, incremental] }
+        kind: { type: string, enum: [full, delta] }
         schemaVersion: { type: integer, minimum: 1 }
         cipherSuite: { type: string, const: AES-256-GCM }
         keyVersion: { type: integer, minimum: 1 }
