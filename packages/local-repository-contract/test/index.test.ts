@@ -103,7 +103,7 @@ test("backup port acknowledges only the sequence from its own consistent snapsho
     datasetId: "dataset-1",
     schemaVersion: 3,
     dirtySequence: 12,
-    threads: [], messages: [], readingRounds: [], readingPositions: [],
+    threads: [], messages: [], readingRounds: [], readingPositions: [], presentedSources: [], readingUnitProgress: [],
     citations: [], notes: [], memories: [], memoryVersions: [], memoryRelations: [], memoryCandidates: [], generationDeliveries: [],
   };
   const port = createRepositoryBackupPort({
