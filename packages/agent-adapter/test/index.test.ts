@@ -11,6 +11,7 @@ import {
   validateGenerationRequest,
   validateGenerationSnapshot,
   verifiedGenerationSourceReferences,
+  verifiedGenerationCitationRecords,
   type GenerationRequest,
 } from "../src/index.ts";
 
@@ -202,6 +203,7 @@ function memoryTurnRepository() {
   const messages = new Map<string, { status: string; content: string }>();
   const deliveries = new Map<string, any>();
   const references = new Map<string, unknown[]>();
+  const citations: unknown[] = [];
   let appendUserCount = 0;
   let appendAssistantCount = 0;
   const repository = {
@@ -218,6 +220,7 @@ function memoryTurnRepository() {
           references.set(id, sourceReferences);
           return { id, status, content };
         },
+        async saveCitation(citation: unknown) { citations.push(citation); return citation; },
         async saveGenerationDelivery(delivery: any) {
           deliveries.set(delivery.clientGenerationId, { ...delivery });
           return delivery;
@@ -230,6 +233,7 @@ function memoryTurnRepository() {
     messages,
     deliveries,
     references,
+    citations,
   };
   return repository;
 }
@@ -386,9 +390,9 @@ test("only citations from the current BookRevision and current source node becom
   const result = {
     content: "回答",
     citations: [
-      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-1" },
-      { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "other-node" },
-      { book_revision_id: "66666666-6666-4666-8666-666666666666", structure_node_id: request.context.current_source.structure_node_id, locator: "other-book" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-1", excerpt: "当前原文片段" },
+      { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "other-node", excerpt: "当前原文片段" },
+      { book_revision_id: "66666666-6666-4666-8666-666666666666", structure_node_id: request.context.current_source.structure_node_id, locator: "other-book", excerpt: "当前原文片段" },
       { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "locator-1" },
     ],
   };
@@ -435,4 +439,19 @@ test("generation turn persists only service-verified citations for its current s
     structureNodeId: request.context.current_source.structure_node_id,
     locator: "locator-current",
   }]);
+});
+
+
+test("citation records require a quoted excerpt found in the current source text", () => {
+  const result = {
+    content: "回答",
+    citations: [
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "valid", excerpt: "当前原文片段" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "fabricated", excerpt: "不存在的引用片段" },
+    ],
+  };
+  const records = verifiedGenerationCitationRecords(result, request, "assistant-message-citation", request.thread_id, "2026-11-14T00:00:00.000Z");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].excerpt, "当前原文片段");
+  assert.equal(records[0].messageId, "assistant-message-citation");
 });
