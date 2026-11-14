@@ -341,8 +341,20 @@ export async function planAcceptedMemoryCandidates(
       },
     });
   }
+  if (toPropose.length > 0 && latestVersions.length === 0) {
+    for (const item of toPropose) {
+      plans.push({
+        candidateId: item.candidate.id,
+        memoryId: nextId(),
+        version: 1,
+        previousVersionId: null,
+        changeKind: "new",
+      });
+    }
+    return { plans, alreadyPersistedCandidateIds };
+  }
   if (toPropose.length > 0 && !planner) {
-    throw new MemoryExtractionError("A semantic MemoryEvolutionPlanner is required when no exact duplicate match exists.");
+    throw new MemoryExtractionError("A semantic MemoryEvolutionPlanner is required when existing memories may need evolution.");
   }
   if (toPropose.length > 0) {
     const proposals = await planner!.propose({
