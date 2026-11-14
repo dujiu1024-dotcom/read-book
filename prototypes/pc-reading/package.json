@@ -6,6 +6,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "test:book-package": "node --test local-book-package-provider.test.mjs",
+    "test:reader": "node --test *.test.mjs",
     "test:source-retrieval": "node --test source-retrieval.test.mjs",
     "test:reader-unit": "node --test local-book-package-provider.test.mjs source-retrieval.test.mjs"
   },
