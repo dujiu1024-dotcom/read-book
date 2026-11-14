@@ -18,3 +18,5 @@ Independent browser/Node Web Crypto PoC. Uses synthetic data and an in-memory mo
 - The in-memory mock server is not a substitute for server-side atomic tombstone enforcement and audit logs.
 - Incremental records are ID-based snapshot deltas; this PoC does not implement a production append-only event log or concurrent multi-device merge.
 - Never commit recovery credentials or plaintext dataset keys. Production KDF parameters and recovery UX require independent security review.
+
+- Device-side key persistence is isolated in `browser-key-store.js`: IndexedDB stores a non-extractable HKDF CryptoKey and public wrapped-key envelope; the recovery credential is never stored.
