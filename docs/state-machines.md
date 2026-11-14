@@ -1,7 +1,7 @@
 # 知行核心状态机
 
-> 版本：0.2.0-draft  
-> 状态：设计草案；产品语义边界已按已确认原则约束，讨论完成判定、消息持久化边界及恢复流程仍有待确认。  
+> 版本：0.3.0-draft  
+> 状态：SQLite v6 本地阅读状态已落地；服务端账号、恢复挑战和备份后端仍是 API/设计契约，尚未有正式服务端实现。  
 > 权威范围：定义阅读主线、阅读轮次、生成任务、消息、备份和数据集的状态及转换。字段定义见 [核心数据字典](data-dictionary.md)，API 定义见 [OpenAPI 契约](api-contract.yaml)。
 
 ## 1. 状态机总原则
@@ -14,6 +14,40 @@
 6. 状态变更必须在本地数据库事务内完成；网络生成结果不能直接修改主线状态，必须由本地领域逻辑根据用户行为和最终结果推进。
 
 ## 2. 主线论述单元状态机
+
+### 2.1 状态定义
+
+| 状态 | 含义 | 是否允许推进 |
+|---|---|---:|
+| not_presented | 本轮主线尚未展示该论述单元 | 否 |
+| presented | 原文已展示，PresentedSource 已写入本地 | 否 |
+| awaiting_user | 原文展示完成，等待用户表达 | 否 |
+| discussion_active | 用户消息已先行持久化，且来源标记为 mainline | 否 |
+| discussed | 用户在讨论后主动点击继续，单元完成 | 是 |
+| skipped | 用户确认理解并选择略读 | 是 |
+
+### 2.2 已实现状态转换（SQLite v6）
+
+| 当前状态 | 事件/条件 | 下一状态 | 持久化规则 |
+|---|---|---|---|
+| not_presented | 主线原文展示并创建 PresentedSource | presented | PresentedSource 与 progress 在本地事务中提交 |
+| presented | 同一展示流程进入等待 | awaiting_user | 允许同一事务内连续写入 presented → awaiting_user |
+| awaiting_user | 用户消息本地持久化，来源 presentationType=mainline | discussion_active | 记录 last_activity_message_id；必须先保存 Message |
+| discussion_active | 用户点击“继续下一单元” | discussed | 终态，不回退 |
+| awaiting_user | 用户确认“已理解并略读” | skipped | 只接受显式确认，不根据沉默/停留时长自动略读 |
+| discussed / skipped | 重新查看或深入讨论 | 不变 | 创建 review PresentedSource，不回退进度 |
+| 任意状态 | 临时查看、复习或引用展示 | 不变 | 只新增 temporary / review / citation PresentedSource |
+
+当前实现不声称能从语义上判断用户是否真正理解，也不以模型自动判定讨论是否收束。V1 将“已讨论”定义为：至少一条关联当前主线单元的用户消息已持久化，随后用户主动选择继续。后续可增加语义分类，但不得改变原始消息与来源证据。
+
+### 2.3 实质性讨论与略读边界
+
+- 任何关联当前主线单元的用户消息都会使状态进入 discussion_active；这只表示发生了讨论输入，不代表理解正确。
+- 纯确认、沉默或停留时间不会自动进入 discussed。
+- 用户点击继续时，如果没有讨论输入，界面必须先询问是否确认略读。
+- skipped 必须由用户明确确认；不能批量跳过尚未展示的单元。
+- review / temporary / citation 不改变 ReadingUnitProgress。
+
 
 ### 2.1 状态定义
 
@@ -82,6 +116,24 @@ presented 与 awaiting_user 可以在同一事务中连续发生，但保留两�
 | 状态 | 含义 |
 |---|---|
 | active | 当前阅读轮次进行中 |
+| completed | 本轮全部主线单元均为 discussed 或 skipped |
+| abandoned | 本轮被明确终止；不等同于完成 |
+
+### 3.2 转换规则与当前实现
+
+- 首次打开 Thread 且不存在历史轮次时，自动创建 round_number=1。
+- 已有 active 轮次时恢复该轮，不创建新轮。
+- 只有所有 ReadingUnitProgress 都进入 discussed / skipped，才能将 ReadingRound 标记为 completed。
+- completed 后不自动开启下一轮；PC 页面显示“开启新一轮阅读”，由用户主动触发。
+- 新一轮在同一 Thread 下 round_number 递增，从当前 BookRevision 的主线第一个单元开始；历史 Message、Note、Memory、PresentedSource 全部保留。
+- abandoned 状态在 Repository 中可表达，但当前 UI 暂无主动放弃入口。
+
+
+### 3.1 状态
+
+| 状态 | 含义 |
+|---|---|
+| active | 当前阅读轮次进行中 |
 | completed | 当前版本的全部主线论述单元均已讨论或由用户确认略读 |
 | abandoned | 用户明确终止本轮；不等同于完成 |
 
@@ -96,6 +148,26 @@ presented 与 awaiting_user 可以在同一事务中连续发生，但保留两�
 - abandoned 不允许被报告为 completed；是否允许恢复 abandoned 轮次需在产品规则中另行确认。
 
 ## 4. 主线位置与临时查看/复习
+
+### 4.1 主线位置
+
+- Thread 级位置由 SQLite v6 的 ReadingPosition 保存：mainline_node_id、displayed_node_id、view_mode、current_unit_discussed。
+- 每轮每个单元的状态由 ReadingUnitProgress 保存；两者不能混为一张表。
+- 主线推进必须先将当前单元写入 discussed / skipped，再更新 ReadingPosition 并呈现下一单元。
+- 若下一单元原文加载失败，不得提前改变主线位置。
+
+### 4.2 临时查看
+
+- 因知识关联查看其他章节，presentation_type=temporary。
+- 临时查看可以展示原文并继续讨论，但不得改变 ReadingPosition.mainline_node_id、ReadingUnitProgress 或轮次完成状态。
+- 临时讨论消息保留来源引用，并标记 presentationType=temporary。
+
+### 4.3 复习与引用
+
+- 复习已读内容，presentation_type=review；引用回看，presentation_type=citation。
+- 复习/引用不创建新 ReadingRound，不改变主线节点和单元状态。
+- 复习中的讨论仍写入原 Thread，但不能回退 discussed / skipped 终态。
+
 
 ### 4.1 主线推进
 
@@ -117,19 +189,40 @@ presented 与 awaiting_user 可以在同一事务中连续发生，但保留两�
 - 复习不创建新 ReadingRound，不改变当前主线节点和单元状态。
 - 复习中的讨论消息仍写入原 Thread，并关联复习 PresentedSource；是否形成 Note/Memory 仍按自动沉淀规则判断。
 
-## 5. Thread 状态机
+## 5. Thread 生命周期边界
 
-Thread 状态仅表达会话生命周期，不表达阅读进度。
+SQLite v6 的 Thread 只持久化 id、dataset_id、book_revision_id、created_at，并通过 (dataset_id, book_revision_id) 保证唯一。当前版本没有 Thread.status 字段，也没有归档/恢复状态转换；因此不应把 active / archived 描述为已实现能力。不同阅读轮次在同一 Thread 内累积。
 
-| 当前状态 | 事件 | 下一状态 | 规则 |
-|---|---|---|---|
-| 不存在 | 用户首次打开具体 BookRevision 的阅读对话 | active | 创建唯一 Thread |
-| active | 用户归档 | archived | 保留全部历史数据 |
-| archived | 用户重新打开 | active | 恢复同一 Thread，不创建新 Thread |
-
-唯一性：同一 LocalDataSet + BookRevision 只能有一条 Thread。不同版本分别建立 Thread。
 
 ## 6. Message 与 Generation 状态机
+
+### 6.1 本地 Message
+
+| 角色 | 状态 | 含义 |
+|---|---|---|
+| user | saved | 用户原始消息已本地持久化 |
+| assistant | generating | 已创建占位消息，生成尚未完成 |
+| assistant | completed | 服务端权威结果已写入本地 |
+| assistant | failed | 生成失败，保留失败记录 |
+| assistant | cancelled | 生成取消，保留消息与任务记录 |
+
+- 本地 Message 只允许 user / assistant，不持久化 system。
+- 用户消息必须先写入本地，再请求生成。
+- SSE delta 仅用于临时显示，不作为正式消息正文。
+- Assistant Message 只有在服务端权威快照返回 completed + result，且本地事务提交后才变为 completed。
+- 用户消息及失败记录不因生成失败而删除。
+
+### 6.2 服务端 GenerationJob 与本地 GenerationDelivery
+
+服务端 GenerationJob 的设计状态：queued → running → completed / failed / cancelled / expired。
+
+本地 GenerationDelivery（SQLite v3）状态：queued → running → completed / failed / cancelled / expired。
+
+- 本地 delivery 保存 client_generation_id、generation_id、idempotency_key、消息关联、last_sequence、last_event_id 和 expires_at。
+- 重复提交复用同一客户端生成身份与幂等键；事件游标不回退；终态不可回退。
+- 网络断开不等于任务失败；恢复时从本地 cursor 续传，并以服务端最终快照作为权威结果。
+- 正式服务端 GenerationJob 尚未部署；上述服务端状态是 API/设计契约，不代表后端已实现。
+
 
 ### 6.1 Message
 
@@ -165,21 +258,15 @@ submitted → streaming → completed / failed / cancelled / expired
 
 ## 7. 备份上传状态机
 
-queued → snapshotting → serializing → encrypting → uploading → verifying → committed
+客户端流程阶段：snapshotting → encrypting → uploading → awaiting_commit → committed。
 
-失败分支：
-- retryable_failed：网络错误、超时、服务端暂时不可用；保留任务并退避重试。
-- permanent_failed：协议不兼容、密文校验失败、数据集已清除、授权无效；停止自动重试并提示。
-- cancelled：仅允许在备份提交前取消。
+- 只有服务端返回 committed，客户端才调用 acknowledgeBackup。
+- dirty_sequence 在本地事务提交时递增；acknowledgeBackup 只确认本次一致性快照的 sequence。
+- 上传期间的新写入保留更高 sequence，不会被本次确认吞掉。
+- 失败或网络断开不自动确认；待上传密文包和幂等身份保存在本地，恢复时查询服务端 received_parts 后续传。
+- 新设备先查询备份并询问是否恢复；恢复只允许导入空数据集。
+- 客户端已实现 HTTP 上传/下载适配器与加密链恢复；正式服务端、清除墓碑并发竞态和生产安全评审仍未完成。
 
-约束：
-- 备份快照绑定单一 dirty_sequence。
-- 上传期间产生的新变更进入更高 dirty_sequence，不混入当前快照。
-- 服务端确认 committed 后，客户端才推进 last_acked_sequence。
-- 增量备份必须绑定已提交 parent_backup_id；父链不完整时不能作为可恢复备份提交。
-- 同一备份请求重试必须幂等；分块上传按 part_no 和密文哈希去重。
-- 清除墓碑优先于任何上传完成请求；已清除数据集不得产生新的可恢复备份。
-- 每次应用启动执行备份检查；检查异步执行，不阻塞首屏和本地阅读。
 
 ## 8. 数据集生命周期状态机
 
@@ -295,34 +382,28 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 
 ## 11. 备份任务、上传会话与备份清单的状态映射
 
-三类状态不可混为一个枚举：
+三层状态不可混为一个枚举：
 
-| 层级 | 状态/阶段 | 含义与映射 |
-|---|---|---|
-| 客户端备份任务 | queued / snapshotting / serializing / encrypting | 本地准备阶段；尚未形成服务端可恢复备份 |
-| 客户端备份任务 | uploading | 服务端 BackupUploadSession 应为 open |
-| 客户端备份任务 | verifying | 服务端 BackupUploadSession 为 completing；服务端校验分块、数量、密文哈希、版本和墓碑 |
-| 客户端备份任务 | committed | 服务端 BackupUploadSession 为 completed，且 BackupManifest 为 committed；客户端才推进 last_acked_sequence |
-| 客户端备份任务 | retryable_failed | 保留本地任务与快照上下文，退避重试；不得伪造服务端 rejected |
-| 客户端备份任务 | permanent_failed | 记录错误并停止自动重试；服务端是否 rejected 由实际校验结果决定 |
-| 服务端 BackupUploadSession | open / completing / completed / expired / rejected | 上传会话生命周期；completed 不得绕过 Manifest 最终提交检查 |
-| 服务端 BackupManifest | uploading / committed / rejected / inaccessible | 备份清单生命周期；只有 committed 且父链完整的备份可进入可恢复清单 |
+| 层级 | 当前契约 |
+|---|---|
+| 客户端 Repository 备份边界 | createConsistentSnapshot → upload → acknowledgeBackup；上传失败不确认 |
+| 服务端 BackupUploadSession | API 目前定义上传会话标识、过期时间、分块大小上限和 received_parts；会话内部状态机尚未由正式服务端实现 |
+| 服务端 BackupRecord / Manifest | API 响应只将 committed 备份列入可恢复清单；未提交备份不得作为恢复源 |
 
 补充约束：
-- 网络中断、页面关闭或客户端超时不等于服务端上传失败；恢复后先查询会话和备份清单，再决定续传或重建。
-- 客户端不得仅凭 HTTP 成功响应推进 `last_acked_sequence`，必须确认服务端 `BackupManifest.committed`。
-- `retryable_failed`、`permanent_failed` 是客户端任务状态，不是 BackupManifest 的新枚举值。
-- 同一幂等键重试必须返回同一上传会话；已提交备份不可被重试覆盖。
-- 清除墓碑在会话完成和清单提交时再次检查；墓碑存在时拒绝提交且不得复活数据集。
+- 网络中断、页面关闭或客户端超时不等于服务端上传失败；恢复后先查询会话和清单，再决定续传。
+- 客户端不得仅凭 HTTP 成功响应推进 last_acked_sequence，必须确认 BackupRecord.status=committed。
+- 服务端清除墓碑优先于上传完成和恢复；正式服务端必须在 complete/restore 时再次检查。
 
-## 12. 消息与生成状态边界（待契约确认）
 
-- `GenerationJob` 是服务端短暂计算任务；`GenerationReceipt` 是本地恢复生成状态的记录；`Message` 是本地长期对话记录。三者不能共用一个状态字段。
-- 用户 Message 必须在发起网络生成前本地持久化成功；生成失败不删除用户 Message。
-- Assistant Message 只有完整结果写入本地事务后才可标记 `complete`。
-- 当前数据字典为 Message 定义了 `pending / complete / failed / cancelled`，但尚未明确 `pending` 是否表示本地持久化事务未完成，还是生成过程进行中。不得用 Message.pending 代替 GenerationReceipt.streaming；该字段语义须在契约评审中明确。
-- 流式 delta 仅为临时 UI 状态；不得作为正式 Message 或备份数据。
-- GenerationJob 的 `completed / failed / cancelled / expired` 是服务端终态；终态竞态由服务端原子提交决定。客户端以查询到的最终结果为准，不以 SSE 事件流作为最终权威。
+## 12. 消息与生成状态边界（实现对齐）
+
+- Message 是本地长期对话记录；GenerationDelivery 是本地可恢复任务交付记录；GenerationJob 是服务端计算任务。三者不能共用一个状态字段。
+- user Message 状态为 saved；assistant Message 使用 generating / completed / failed / cancelled。
+- GenerationDelivery 使用 queued / running / completed / failed / cancelled / expired。
+- completed Assistant Message 必须来自服务端权威快照并在本地事务中提交。
+- 当前代码不存在 Message.pending，也不存在独立 GenerationReceipt 表；旧文档中的这两个概念已分别由 saved/generating 状态和 GenerationDelivery 取代。
+
 
 ## 13. 事件与审计最低要求
 
@@ -374,7 +455,19 @@ queued → snapshotting → serializing → encrypting → uploading → verifyi
 | SM-023 | ExternalIdentity 已 revoked | 使用原 provider_subject 登录 | 拒绝旧映射；重新绑定必须创建新记录并通过唯一性校验 |
 | SM-024 | AccountDataSetBinding 为 inactive | 用户明确重新选择该账号下的数据集 | 重新校验权限与 DataSetLifecycle 后才可转为 active |
 
-## 15. 尚待确认与验证
+## 15. 外部实现与最终验收边界
+
+### 尚未由正式服务端实现的状态机
+- Account / ExternalIdentity / BackupAuthorization / RecoveryChallenge / DataSetLifecycle / GenerationJob 的状态定义仍是服务端契约；需要正式后端实现、授权与安全评审。
+- BackupUploadSession 的服务端内部状态转换、墓碑并发控制、挑战失败次数/速率限制和授权撤销竞态需要后端实现与安全评审。
+- Thread archived 状态、MigrationLog 独立审计表和 BackupJournal 逐行变更表不属于当前 SQLite v6 已实现范围。
+
+### 最终统一验收（本轮开发不执行）
+- SQLite v5→v6 原子迁移、ReadingRound/PresentedSource/ReadingUnitProgress 状态转换与快照恢复。
+- 页面关闭/刷新、生成断线/取消、备份续传和新设备恢复。
+- 临时查看/复习/citation 不改变主线进度。
+- 正式服务端清除墓碑、账号注销、恢复授权和生成终态竞态。
+
 
 ### 需要产品确认
 1. 简短回应（如“确实”“不对”）是否可由 Agent 结合上下文判定为实质性讨论；建议允许上下文判断，但不得依赖字数阈值。
