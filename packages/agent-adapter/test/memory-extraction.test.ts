@@ -250,16 +250,22 @@ test("cross-batch planner rejects unknown targets and incomplete proposals", asy
   const accepted = await runMemoryExtraction({
     async extractStructured() { return { candidates: [candidate] }; },
   }, { context, messages, policy, modelVersion: "mock-v1" });
+  const existing = {
+    id: "version-existing", memoryId: "memory-existing", version: 1, previousVersionId: null,
+    changeKind: "new" as const, title: "另一条认知", content: "不同内容",
+    viewpoint: "author" as const, sourceMessageIds: ["older-user"], sourceReferences: [],
+    createdAt: "2026-11-13T00:00:00.000Z",
+  };
   const planner: MemoryEvolutionPlanner = {
     async propose() {
       return [{ candidateId: candidate.id, changeKind: "conflict", targetMemoryId: "missing-memory", rationale: "冲突" }];
     },
   };
   await assert.rejects(planAcceptedMemoryCandidates({
-    async createConsistentSnapshot() { return { memoryVersions: [] }; },
+    async createConsistentSnapshot() { return { memoryVersions: [existing] }; },
   }, "dataset-1", accepted, planner), /unknown memory/);
   await assert.rejects(planAcceptedMemoryCandidates({
-    async createConsistentSnapshot() { return { memoryVersions: [] }; },
+    async createConsistentSnapshot() { return { memoryVersions: [existing] }; },
   }, "dataset-1", accepted), /planner is required/);
 });
 
