@@ -23,3 +23,14 @@ npm test
 ## 边界
 
 当前只有协议、校验和编排边界，没有生产 HTTP/SSE 传输实现、数据库 Repository、真实模型服务或 UI 接入。传输实现必须注入 `GenerationTransport`，本地 Repository 必须注入 `UserMessageRepository`。不得把 Mock 测试结果描述为真实 Agent 质量或生产可靠性。
+
+
+## HTTP/SSE Transport（PR #35）
+
+- `createHttpGenerationTransport` 实现 OpenAPI 定义的创建、查询、取消和事件流端点。
+- API base URL 与短期 Bearer Token 由宿主注入；不硬编码真实域名或凭据。
+- SSE 通过带 Authorization 的 fetch + ReadableStream 解析，支持按最后已处理 sequence 使用 `after` 参数恢复。
+- 校验 SSE 的 id/event 与 JSON payload 一致性，限制单事件大小；AbortSignal 取消流读取。
+- API 错误保留 HTTP 状态、错误码、request_id 和 retryable。
+- SSE 只用于临时增量展示；最终结果仍以 GET GenerationStatus 为准。
+- 当前仅 Mock Fetch 契约测试，未连接真实服务端；网络重试策略由上层编排，Transport 不自动重试。
