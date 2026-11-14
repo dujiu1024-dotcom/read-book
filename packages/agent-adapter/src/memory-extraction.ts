@@ -1,6 +1,8 @@
 import {
   evaluateMemoryCandidate,
   validateMemoryExtractionResult,
+  validateMemoryEvolution,
+  type MemoryVersion,
   type MemoryCandidate,
   type MemoryCandidateEvaluation,
   type MemoryCandidatePolicy,
@@ -195,6 +197,8 @@ export interface MemoryVersionPlan {
   memoryId: string;
   version: number;
   previousVersionId: string | null;
+  /** Required for every non-first version so the domain evolution rules can be re-evaluated. */
+  previousVersion?: MemoryVersion;
   changeKind: "new" | "supplement" | "correction" | "conflict" | "rejection" | "extension";
   relation?: {
     id: string;
@@ -252,18 +256,29 @@ export async function persistAcceptedMemoryCandidates(
         sourceReferences: structuredClone(candidate.sourceReferences),
         createdAt: now(),
       } as const;
-      await tx.appendMemoryVersion(version);
-      if (plan.relation) {
-        await tx.appendMemoryRelation({
-          id: plan.relation.id,
-          fromVersionId: candidate.id,
-          toVersionId: plan.relation.toVersionId,
-          relationType: plan.relation.relationType,
-          sourceMessageIds: [...candidate.sourceMessageIds],
-          sourceReferences: structuredClone(candidate.sourceReferences),
-          createdAt: plan.relation.createdAt,
-        });
+      if (plan.previousVersionId !== (plan.previousVersion?.id ?? null)) {
+        throw new MemoryExtractionError("The supplied previous version does not match previousVersionId.");
       }
+      if (plan.relation && (!plan.previousVersion || plan.relation.toVersionId !== plan.previousVersion.id)) {
+        throw new MemoryExtractionError("An evolution relation must point to the explicitly supplied previous version.");
+      }
+      const relation = plan.relation ? {
+        id: plan.relation.id,
+        fromVersionId: candidate.id,
+        toVersionId: plan.relation.toVersionId,
+        relationType: plan.relation.relationType,
+        sourceMessageIds: [...candidate.sourceMessageIds],
+        sourceReferences: structuredClone(candidate.sourceReferences),
+        createdAt: plan.relation.createdAt,
+      } : null;
+      let validated;
+      try {
+        validated = validateMemoryEvolution(plan.previousVersion ?? null, version, relation);
+      } catch (error) {
+        throw new MemoryExtractionError(error instanceof Error ? error.message : "Memory evolution plan failed domain validation.");
+      }
+      await tx.appendMemoryVersion(validated.version);
+      if (validated.relation) await tx.appendMemoryRelation(validated.relation);
       persisted.push(candidate.id);
     }
     return persisted;
