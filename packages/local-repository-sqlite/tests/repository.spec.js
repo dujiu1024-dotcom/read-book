@@ -501,7 +501,7 @@ test("ReadingUnitProgress rejects backward transitions and temporary presentatio
     });
     await repository.close();
     return { backwardRejected, before: result.before, after: result.after };
-  }, { datasetA: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", roundId: "77777777-7777-4777-8777-777777777777", sourceId: "66666666-6666-4666-8666-666666666666" });
+  }, { datasetA: "abababab-abab-4aba-8aba-abababababab", revision: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd", threadId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", roundId: "88888888-8888-4888-8888-888888888888", sourceId: "99999999-9999-4999-8999-999999999999" });
   expect(result.backwardRejected).toBe(true);
   expect(result.before[0].status).toBe("not_presented");
   expect(result.after[0].status).toBe("not_presented");
