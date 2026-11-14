@@ -5,6 +5,7 @@ import {
   createGenerationTurnController,
 } from "../../packages/agent-adapter/src/index.ts";
 import { createHttpGenerationTransport } from "../../packages/agent-adapter/src/http-transport.ts";
+import { createHttpEncryptedBackupPort } from "../../poc/encrypted-backup/src/http-backup-port.js";
 import { runMemoryExtraction, persistAcceptedMemoryCandidates } from "../../packages/agent-adapter/src/memory-extraction.ts";
 
 function uuid() {
@@ -272,9 +273,19 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     detail: "本地数据已保存在浏览器 OPFS。云端加密备份尚未配置；没有上传明文数据。",
   };
   const snapshot = await repository.createConsistentSnapshot(datasetId);
-  if (config.encryptedBackupPort && typeof config.encryptedBackupPort.uploadSnapshot === "function") {
+  const encryptedBackupPort = config.encryptedBackupPort || createHttpEncryptedBackupPort({
+    baseUrl: config.apiBaseUrl,
+    datasetId,
+    getAccessToken,
+    onRecoveryCredential: config.onRecoveryCredential,
+    keyStore: config.backupKeyStore,
+    kdfIterations: config.backupKdfIterations,
+    chunkBytes: config.backupChunkBytes,
+    checkpointInterval: config.backupCheckpointInterval,
+  });
+  if (encryptedBackupPort && typeof encryptedBackupPort.uploadSnapshot === "function") {
     try {
-      const receipt = await config.encryptedBackupPort.uploadSnapshot(snapshot);
+      const receipt = await encryptedBackupPort.uploadSnapshot(snapshot);
       if (!receipt || typeof receipt.backupId !== "string" || !receipt.backupId.trim()) {
         throw new Error("加密备份服务未返回有效 backupId，不能确认备份成功。");
       }

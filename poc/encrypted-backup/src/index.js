@@ -32,8 +32,8 @@ function canonicalJson(value) {
   return JSON.stringify(canonicalize(value));
 }
 async function sha256(bytes) {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return toBase64(new Uint8Array(digest));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 function aadForChunk({ datasetId, backupId, parentBackupId, schemaVersion, chunkIndex }) {
   return encoder.encode(canonicalJson({
@@ -184,6 +184,9 @@ export async function encryptBackup(snapshot, options = {}) {
   const backupId = options.backupId ?? crypto.randomUUID();
   if (options.forceFull && options.parentBackupId) throw new Error("A full checkpoint cannot have a parent backup");
   const payload = options.forceFull ? createBackupPayload(snapshot, null) : createBackupPayload(snapshot, options.previousSnapshot ?? null);
+  if (!Number.isSafeInteger(snapshot.dirtySequence) || snapshot.dirtySequence < 1) throw new Error("Backup sequence must be a positive integer");
+  if (payload.kind === "delta" && !parentBackupId) throw new Error("Incremental backup requires a parent backup ID");
+  if (payload.kind === "full" && parentBackupId) throw new Error("Full backup cannot have a parent backup ID");
   const backupKey = await deriveBackupChunkKey(dataKey, snapshot.datasetId, backupId);
   const plaintext = encoder.encode(canonicalJson(payload));
   const chunks = [];
@@ -210,15 +213,26 @@ export async function encryptBackup(snapshot, options = {}) {
     chunks.push(encrypted);
     descriptors.push({ index: chunkIndex, nonce: toBase64(nonce), sha256: await sha256(encrypted), byteLength: encrypted.length });
   }
+  const ciphertextSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const ciphertext = new Uint8Array(ciphertextSize);
+  let ciphertextOffset = 0;
+  for (const chunk of chunks) { ciphertext.set(chunk, ciphertextOffset); ciphertextOffset += chunk.length; }
   return {
     manifest: {
       format: "read-book-encrypted-backup",
       formatVersion: FORMAT_VERSION,
       datasetId: snapshot.datasetId,
       backupId,
+      backupSequence: snapshot.dirtySequence,
       parentBackupId,
+      backupType: payload.kind === "full" ? "full" : "incremental",
       kind: payload.kind,
       schemaVersion: snapshot.schemaVersion,
+      cipherSuite: "AES-256-GCM",
+      keyVersion: options.keyVersion ?? 1,
+      ciphertextHash: await sha256(ciphertext),
+      ciphertextSize,
+      partCount: chunks.length,
       dirtySequence: snapshot.dirtySequence,
       plaintextBytes: plaintext.length,
       chunkCount: chunks.length,

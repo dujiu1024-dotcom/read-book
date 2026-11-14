@@ -81,7 +81,9 @@ window.READ_BOOK_CONFIG = {
    - `bookRevisionId`：已发布书籍版本 UUID
    - `localDataSetId`：本地数据集 ID
    - `getAccessToken`：返回当前登录令牌的异步函数；也可由 `window.READ_BOOK_AUTH.getAccessToken` 提供
-   - `encryptedBackupPort.uploadSnapshot(snapshot)`：可选的加密备份端口；只有该端口返回 backupId 后才确认备份序号
+   - `encryptedBackupPort.uploadSnapshot(snapshot)`：可选自定义加密备份端口；未提供时，阅读运行时自动创建 HTTP 加密备份客户端
+   - `onRecoveryCredential(secret)`：首次备份时展示独立恢复凭证，用户确认已安全保存后返回 `true`；不配置则停止首次上传
+   - `backupKdfIterations`、`backupChunkBytes`、`backupCheckpointInterval`：可选 KDF、分块大小和全量检查点间隔
    - `memoryExtractionProvider`、`memoryCandidatePolicy`：可选的结构化认知抽取 Provider 与价值评估策略
    - `planMemoryEvolution(input)`：可选的跨批次认知演变规划器；必须为每条 accepted 候选返回明确的版本计划，含前序版本和必要关系；未配置时不自动写入认知
 
@@ -97,6 +99,6 @@ window.READ_BOOK_CONFIG = {
 };
 ```
 
-本地讨论消息在发起网络请求前与 Assistant 占位消息、生成回执一并提交到 OPFS。SSE delta 只用于临时显示，最终消息以服务端完成快照为准。刷新后会恢复本地消息并尝试恢复待处理生成任务。
+本地讨论消息在发起网络请求前与 Assistant 占位消息、生成回执一并提交到 OPFS。启动时会创建一致性快照并尝试通过加密备份 API 上传；首次上传必须先让用户保存独立恢复凭证。SSE delta 只用于临时显示，最终消息以服务端完成快照为准。刷新后会恢复本地消息并尝试恢复待处理生成任务。
 
-当前限制：项目尚未提供真实 API 环境、登录模块和生产加密备份服务；缺少对应配置时页面明确报错/显示未配置，不会伪造真实书籍、Agent 回复或云端备份状态。实体真机测试不属于开发前置。
+当前限制：项目尚未提供真实 API 环境、登录模块和服务端备份实现；恢复到 Repository 的事务性导入和新设备恢复确认 UI 仍待接入。缺少对应配置时页面明确报错/显示未配置，不会伪造真实书籍、Agent 回复或云端备份状态。实体真机测试不属于开发前置。

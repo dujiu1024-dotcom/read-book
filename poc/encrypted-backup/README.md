@@ -20,3 +20,18 @@ Independent browser/Node Web Crypto PoC. Uses synthetic data and an in-memory mo
 - Never commit recovery credentials or plaintext dataset keys. Production KDF parameters and recovery UX require independent security review.
 
 - Device-side key persistence is isolated in `browser-key-store.js`: IndexedDB stores a non-extractable HKDF CryptoKey and public wrapped-key envelope; the recovery credential is never stored.
+
+
+## HTTP API adapter
+
+`src/http-backup-port.js` implements the client side of the documented backup endpoints:
+- `POST /v1/backups/init` with the client manifest and idempotency key.
+- `PUT /v1/backups/{backup_id}/parts/{part_no}` with encrypted bytes and per-part SHA-256.
+- `POST /v1/backups/{backup_id}/complete` with the aggregate ciphertext hash.
+- Resumes a pending upload by reusing the same encrypted package and init idempotency key; the server's `received_parts` is authoritative.
+- Lists and downloads committed ciphertext backups, validates the parent chain, and decrypts the chain with the independent recovery credential.
+- Exposes the dataset clear-tombstone endpoint; this is an explicit action and does not physically delete remote ciphertext or key material.
+
+First use requires an `onRecoveryCredential(secret)` callback. The callback must securely show/store the independent recovery credential and return `true` only after the user confirms they have saved it. The credential is never written to IndexedDB. The local key store retains only a non-extractable HKDF CryptoKey, wrapped-key envelope, last acknowledged snapshot and pending ciphertext package.
+
+The API contract now carries an opaque `client_manifest` in init/list/download responses. This is required to restore chunk boundaries and unwrap the dataset key. Server implementation and production security review remain separate.
