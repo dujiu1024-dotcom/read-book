@@ -26,8 +26,9 @@ test("backup configuration does not imply Agent generation configuration", () =>
   assert.equal(hasEncryptedBackupService(config), true);
 });
 
-test("a partial custom backup port is not considered configured", () => {
+test("a partial custom backup port is not considered configured, even with a fallback URL", () => {
   assert.equal(hasEncryptedBackupService({
+    apiBaseUrl: "https://api.example",
     encryptedBackupPort: { uploadSnapshot: async () => ({ backupId: "backup-1" }) },
   }), false);
 });
