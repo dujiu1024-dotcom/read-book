@@ -152,3 +152,44 @@ test("account binding revocation clears account authorization but preserves the 
   expect(result.after.revokedAt).toBe("2026-11-14T00:01:00.000Z");
   expect(result.dataset).not.toBeNull();
 });
+
+test("message source references cannot cross immutable BookRevision boundaries", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    let rejected = false;
+    try {
+      await repository.transaction(ids.datasetA, async (tx) => {
+        await tx.createThread({
+          id: ids.threadId,
+          datasetId: ids.datasetA,
+          bookRevisionId: ids.revision,
+          createdAt: "2026-11-14T00:00:00.000Z",
+        });
+        await tx.appendUserMessage({
+          id: ids.messageId,
+          threadId: ids.threadId,
+          content: "引用不应跨版本",
+          createdAt: "2026-11-14T00:00:01.000Z",
+          sourceReferences: [{
+            bookRevisionId: ids.otherRevision,
+            structureNodeId: "node-1",
+            locator: "epubcfi(/6/2)",
+          }],
+        });
+      });
+    } catch { rejected = true; }
+    const messages = await repository.getMessages(ids.datasetA, ids.threadId);
+    await repository.close();
+    return { rejected, messages };
+  }, {
+    datasetA: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    revision: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    otherRevision: "77777777-7777-4777-8777-777777777777",
+    threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    messageId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  });
+  expect(result.rejected).toBe(true);
+  expect(result.messages).toHaveLength(0);
+});
