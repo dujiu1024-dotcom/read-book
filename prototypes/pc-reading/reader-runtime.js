@@ -268,6 +268,62 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     }));
   }
 
+  function createSourceBundle(currentUnit, additionalUnits = []) {
+    const canonicalCurrent = bookRevision.units.find((item) => item.id === currentUnit?.id);
+    if (!canonicalCurrent) throw new Error("当前原文不属于已加载的 BookRevision。");
+    const selected = [canonicalCurrent];
+    const seen = new Set([canonicalCurrent.id]);
+    for (const candidate of Array.isArray(additionalUnits) ? additionalUnits : []) {
+      if (selected.length >= 8) break;
+      const unit = bookRevision.units.find((item) => item.id === candidate?.id);
+      if (!unit || seen.has(unit.id) || !unit.locator || typeof unit.text !== "string") continue;
+      seen.add(unit.id);
+      selected.push(unit);
+    }
+    let remainingCharacters = 120000;
+    const sources = selected.map((item, index) => {
+      const excerpt = item.text.slice(0, Math.min(30000, remainingCharacters));
+      remainingCharacters -= excerpt.length;
+      return {
+        unit: item,
+        source: {
+          structure_node_id: item.id,
+          locator: item.locator,
+          excerpt,
+        },
+      };
+    }).filter((item) => item.source.excerpt.trim());
+    const current = sources[0];
+    if (!current) throw new Error("当前原文没有可用于引用核验的内容。");
+    return {
+      units: sources.map((item) => item.unit),
+      current_source: current.source,
+      additional_sources: sources.slice(1).map((item) => item.source),
+    };
+  }
+
+  function createSourceBundleFromReferences(references) {
+    const refs = Array.isArray(references) ? references : [];
+    const currentReference = refs[0];
+    if (!currentReference || currentReference.bookRevisionId !== bookRevision.bookRevisionId) {
+      throw new Error("原始消息缺少当前书籍版本的来源引用。");
+    }
+    const currentUnit = bookRevision.units.find((item) =>
+      item.id === currentReference.structureNodeId && item.locator === currentReference.locator);
+    if (!currentUnit) throw new Error("原始消息关联的主来源原文已不可用。");
+    const additionalUnits = refs.slice(1).map((reference) => {
+      if (reference.bookRevisionId !== bookRevision.bookRevisionId) return null;
+      return bookRevision.units.find((item) =>
+        item.id === reference.structureNodeId && item.locator === reference.locator) || null;
+    }).filter(Boolean);
+    return createSourceBundle(currentUnit, additionalUnits);
+  }
+
+  async function loadCitations() {
+    const snapshot = await repository.createConsistentSnapshot(datasetId);
+    return snapshot.citations.filter((item) => item.threadId === thread.id);
+  }
+
   async function send(content, unit, callbacks = {}) {
     if (!controller) throw new Error("真实 Agent 服务尚未配置；当前仅支持本地阅读与历史查看。");
     if (!unit) throw new Error("当前没有可关联的原文单元。");
@@ -280,18 +336,20 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     const assistantMessageId = uuid();
     const clientGenerationId = uuid();
     const idempotencyKey = uuid() + "-" + uuid();
-    const sourceReferences = [{
+    const sourceBundle = createSourceBundle(unit, callbacks.additionalUnits);
+    const sourceReferences = sourceBundle.units.map((sourceUnit) => ({
       bookRevisionId: bookRevision.bookRevisionId,
-      structureNodeId: unit.id,
-      locator: unit.locator,
-    }];
+      structureNodeId: sourceUnit.id,
+      locator: sourceUnit.locator,
+    }));
     const request = {
       client_generation_id: clientGenerationId,
       thread_id: thread.id,
       book_revision_id: bookRevision.bookRevisionId,
       user_message: { local_message_id: userMessageId, content },
       context: {
-        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
+        current_source: sourceBundle.current_source,
+        ...(sourceBundle.additional_sources.length ? { additional_sources: sourceBundle.additional_sources } : {}),
         recent_messages: recentMessages,
         response_preferences: { language: "zh-CN" },
       },
@@ -322,9 +380,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     const messages = await loadMessages();
     const user = messages.find((item) => item.message.id === delivery.userMessageId)?.message;
     if (!user) throw new Error("原始用户消息不存在，不能重试。");
-    const source = user.sourceReferences?.[0];
-    const unit = bookRevision.units.find((item) => item.id === source?.structureNodeId);
-    if (!unit) throw new Error("原始消息关联的书籍原文已不可用，不能重试。");
+    const sourceBundle = createSourceBundleFromReferences(user.sourceReferences);
+    const unit = sourceBundle.units[0];
     const priorMessages = messages
       .filter((item) => item.message.sequence < user.sequence)
       .slice(-12)
@@ -338,7 +395,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       book_revision_id: bookRevision.bookRevisionId,
       user_message: { local_message_id: userMessageId, content: user.content },
       context: {
-        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
+        current_source: sourceBundle.current_source,
+        ...(sourceBundle.additional_sources.length ? { additional_sources: sourceBundle.additional_sources } : {}),
         recent_messages: priorMessages,
         response_preferences: { language: "zh-CN" },
       },
@@ -349,7 +407,11 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       assistantMessageId: uuid(),
       request,
       idempotencyKey,
-      sourceReferences: user.sourceReferences || [],
+      sourceReferences: sourceBundle.units.map((sourceUnit) => ({
+        bookRevisionId: bookRevision.bookRevisionId,
+        structureNodeId: sourceUnit.id,
+        locator: sourceUnit.locator,
+      })),
       reuseExistingUserMessage: true,
       onPersisted: callbacks.onPersisted,
       onDelta: callbacks.onDelta,
@@ -366,17 +428,16 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       const messages = await repository.getMessages(datasetId, delivery.threadId);
       const user = messages.find((item) => item.message.id === delivery.userMessageId)?.message;
       if (!user) throw new Error("待恢复任务关联的用户消息不存在，已保留本地记录。");
-      const source = user.sourceReferences?.[0];
-      const unit = bookRevision.units.find((item) => item.id === source?.structureNodeId)
-        || bookRevision.units.find((item) => item.id === bookRevision.initialMainlineUnitId);
-      if (!unit) throw new Error("无法为待恢复任务重建原文上下文。");
+      const sourceBundle = createSourceBundleFromReferences(user.sourceReferences);
+      const unit = sourceBundle.units[0];
       return {
         client_generation_id: delivery.clientGenerationId,
         thread_id: thread.id,
         book_revision_id: bookRevision.bookRevisionId,
         user_message: { local_message_id: user.id, content: user.content },
         context: {
-          current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
+          current_source: sourceBundle.current_source,
+          ...(sourceBundle.additional_sources.length ? { additional_sources: sourceBundle.additional_sources } : {}),
           recent_messages: messages.slice(-12).map(({ message }) => ({ role: message.role, content: message.content })),
           response_preferences: { language: "zh-CN" },
         },
@@ -413,6 +474,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     backupStatus,
     generationConfigured: Boolean(controller),
     loadMessages,
+    loadCitations,
     loadMemoryState,
     extractMemories,
     resolveMemoryCandidate,
