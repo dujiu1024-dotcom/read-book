@@ -4,10 +4,12 @@ import { createGithubCorpusProvider } from "./github-corpus-provider.js";
 import { createLocalCorpusRuntime } from "./local-corpus-runtime.js";
 import { createProductionReaderRuntime } from "./reader-runtime.js";
 import { createLocalBookPackageProvider, importBookPackageFile } from "./local-book-package-provider.js";
+import { createSourceRetriever } from "./source-retriever.js";
 
 (() => {
   let units = [];
   let bookRevision = null;
+  let sourceRetriever = null;
   const readerConfig = window.READ_BOOK_CONFIG || {};
   const queryParams = new URLSearchParams(window.location.search);
   const queryBookId = queryParams.get("book");
@@ -130,20 +132,25 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
     const body = document.createElement("p");
     body.textContent = message.text;
     content.append(meta, body);
-    if (message.citation) {
+    const citations = Array.isArray(message.citations)
+      ? message.citations
+      : message.citation ? [{ structureNodeId: message.citation }] : [];
+    for (const record of citations) {
       const citation = document.createElement("div");
       citation.className = "citation-card";
       const label = document.createElement("div");
       label.className = "citation-label";
-      const citedUnit = units.find(item => item.id === message.citation);
+      const citedUnit = units.find(item => item.id === record.structureNodeId);
       label.textContent = "引用 · " + (citedUnit?.chapter || "原文来源");
       const quote = document.createElement("p");
-      quote.textContent = citedUnit ? "“" + citedUnit.text.slice(0, 55) + "……”" : "引用来源暂不可用。";
+      const excerpt = record.excerpt || citedUnit?.text || "";
+      quote.textContent = excerpt ? "“" + excerpt.slice(0, 120) + (excerpt.length > 120 ? "……”" : "”") : "引用来源暂不可用。";
       const link = document.createElement("button");
       link.type = "button";
       link.className = "text-button citation-link";
       link.textContent = "查看原文位置 ↗";
-      link.addEventListener("click", () => showCitation(message.citation));
+      link.disabled = !citedUnit;
+      link.addEventListener("click", () => showCitation(record.structureNodeId));
       citation.append(label, quote, link);
       content.append(citation);
     }
@@ -246,7 +253,9 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
       setGenerating(true);
       setGenerationStatus("正在将消息保存到本地…");
       try {
+        const additionalUnits = sourceRetriever?.retrieve(value, state.displayedUnit?.id, 3) || [];
         const result = await productionRuntime.send(value, state.displayedUnit, {
+          additionalUnits,
           onPersisted() {
             userBubble.saving = false;
             userBubble.saved = true;
@@ -541,7 +550,11 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
 
   async function refreshPersistedMessages() {
     if (!productionRuntime) return;
-    const persisted = await productionRuntime.loadMessages();
+    const [persisted, citationRecords] = await Promise.all([
+      productionRuntime.loadMessages(),
+      productionRuntime.loadCitations(),
+    ]);
+    const citations = citationRecords || [];
     state.messages = [];
     messageList.replaceChildren();
     for (const item of persisted) {
@@ -553,7 +566,11 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
         time: message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "刚刚",
         saved: message.role === "user",
         failed: message.status === "failed" || message.status === "cancelled",
-        citation: message.sourceReferences?.[0]?.structureNodeId,
+        citations: citations.filter((item) => item.messageId === message.id).map((item) => ({
+          structureNodeId: item.structureNodeId,
+          locator: item.locator,
+          excerpt: item.excerpt,
+        })),
       });
     }
   }
@@ -617,6 +634,7 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
       if (!requestedBookRevisionId) throw new Error("真实书籍模式必须提供 READ_BOOK_CONFIG.bookRevisionId。");
       bookRevision = await bookContentProvider.loadBookRevision(requestedBookRevisionId);
       units = bookRevision.units;
+      sourceRetriever = createSourceRetriever(units);
       state.mainlineIndex = units.findIndex(unit => unit.id === bookRevision.initialMainlineUnitId);
       if (state.mainlineIndex < 0) throw new Error("书籍主线起始单元不存在。");
       state.displayedUnit = units[state.mainlineIndex];
