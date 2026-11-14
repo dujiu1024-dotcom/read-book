@@ -115,3 +115,40 @@ test("failed transaction rolls back all writes and does not advance dirtySequenc
   expect(result.found).toBeNull();
   expect(result.dirtySequence).toBe(0);
 });
+
+test("account binding revocation clears account authorization but preserves the local dataset", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createAccountDataSetBinding({
+        id: ids.bindingId,
+        accountId: ids.accountId,
+        localDataSetId: ids.datasetA,
+        status: "active",
+        boundAt: "2026-11-14T00:00:00.000Z",
+        lastSelectedAt: null,
+        revokedAt: null,
+      });
+    });
+    await repository.transaction(ids.datasetA, async (tx) => {
+      const before = await tx.getAccountDataSetBinding(ids.bindingId);
+      if (!before || before.accountId !== ids.accountId) throw new Error("binding seed failed");
+      const revoked = await tx.softRevokeAccountDataSetBinding(ids.bindingId, "2026-11-14T00:01:00.000Z");
+      if (!revoked) throw new Error("binding revoke did not update the row");
+    });
+    const after = await repository.transaction(ids.datasetA, (tx) => tx.getAccountDataSetBinding(ids.bindingId));
+    const dataset = await repository.getDataSet(ids.datasetA);
+    await repository.close();
+    return { after, dataset };
+  }, {
+    datasetA: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    bindingId: "99999999-9999-4999-8999-999999999999",
+    accountId: "88888888-8888-4888-8888-888888888888",
+  });
+  expect(result.after.status).toBe("revoked");
+  expect(result.after.accountId).toBeNull();
+  expect(result.after.revokedAt).toBe("2026-11-14T00:01:00.000Z");
+  expect(result.dataset).not.toBeNull();
+});
