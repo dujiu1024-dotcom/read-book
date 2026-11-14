@@ -105,7 +105,10 @@ function schedule(task) {
 }
 
 await loadState();
+expireTasks();
 for (const task of tasks.values()) if (task.status === 'queued') schedule(task);
+const expiryTimer = setInterval(() => { expireTasks(); void persist(); }, Math.min(TASK_TTL_MS, 60_000));
+expiryTimer.unref?.();
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1:' + PORT);
@@ -124,11 +127,13 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 200, { ...existing, reused: true });
       }
-      const createdAt = new Date().toISOString();\n      const task = { id: randomUUID(), idempotencyKey, requestHash, status: 'queued', sequence: 0, events: [], finalResult: null, createdAt, expiresAt: new Date(Date.now() + TASK_TTL_MS).toISOString() };
+      const createdAt = new Date().toISOString();
+      const task = { id: randomUUID(), idempotencyKey, requestHash, status: 'queued', sequence: 0, events: [], finalResult: null, createdAt, expiresAt: new Date(Date.now() + TASK_TTL_MS).toISOString() };
       tasks.set(task.id, task);
       const receipt = { generation_id: task.id, status: task.status, idempotency_key: idempotencyKey, request_hash: requestHash };
       idempotency.set(idempotencyKey, receipt);
       await persist();
+      audit('generation.created', { generation_id: task.id, request_hash: requestHash, status: task.status });
       json(res, 202, receipt);
       schedule(task);
       return;
@@ -136,18 +141,33 @@ const server = http.createServer(async (req, res) => {
     const match = url.pathname.match(/^\/api\/generations\/([^/]+)(?:\/(events|cancel))?$/);
     if (match) {
       const task = tasks.get(match[1]);
-      if (!task) return json(res, 404, { error: 'generation not found' });\n      expireTasks();
+      if (!task) return json(res, 404, { error: 'generation not found' });
+      expireTasks();
       if (req.method === 'GET' && !match[2]) {
         return json(res, 200, { generation_id: task.id, status: task.status, sequence: task.sequence, final_result: task.status === 'completed' ? task.finalResult : null });
       }
       if (req.method === 'GET' && match[2] === 'events') {
         const after = Math.max(0, Number(url.searchParams.get('after') || 0));
-        res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
-        for (const event of task.events.filter((item) => item.sequence > after)) res.write(`id: ${event.event_id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-        if (['completed', 'cancelled', 'failed'].includes(task.status)) return res.end();
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+          'x-accel-buffering': 'no'
+        });
+        audit('generation.stream.open', { generation_id: task.id, after });
+        for (const event of task.events.filter((item) => item.sequence > after)) res.write(`id: ${event.event_id}\\nevent: ${event.type}\\ndata: ${JSON.stringify(event)}\\n\\n`);
+        if (['completed', 'cancelled', 'failed', 'expired'].includes(task.status)) return res.end();
         if (!subscribers.has(task.id)) subscribers.set(task.id, new Set());
         subscribers.get(task.id).add(res);
-        req.on('close', () => subscribers.get(task.id)?.delete(res));
+        const heartbeat = setInterval(() => {
+          if (!res.destroyed && !res.writableEnded) res.write(': heartbeat\\n\\n');
+        }, HEARTBEAT_MS);
+        heartbeat.unref?.();
+        res.on('close', () => {
+          clearInterval(heartbeat);
+          subscribers.get(task.id)?.delete(res);
+          audit('generation.stream.close', { generation_id: task.id });
+        });
         return;
       }
       if (req.method === 'POST' && match[2] === 'cancel') {
@@ -155,6 +175,7 @@ const server = http.createServer(async (req, res) => {
           task.status = 'cancelled';
           emit(task, 'cancelled');
           await persist();
+          audit('generation.cancelled', { generation_id: task.id, sequence: task.sequence });
         }
         return json(res, 200, { generation_id: task.id, status: task.status });
       }
