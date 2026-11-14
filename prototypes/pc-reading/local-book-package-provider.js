@@ -24,42 +24,52 @@ async function sha256(bytes) {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+function safeArchivePath(name) {
+  if (typeof name !== "string" || !name || name.includes("\\") || name.includes("\0") || name.startsWith("/") || /^[A-Za-z]:/.test(name)) {
+    throw new Error("ZIP 包含绝对路径或格式异常的路径。");
+  }
+  const trimmed = name.endsWith("/") ? name.slice(0, -1) : name;
+  const segments = trimmed.split("/");
+  if (!trimmed || segments.some((part) => !part || part === "." || part === "..")) {
+    throw new Error("ZIP 包含路径穿越或空路径段。");
+  }
+  return trimmed;
+}
+
 function inspectZipCentralDirectory(bytes) {
+  const maxEntries = 20000;
+  const maxFileBytes = 128 * 1024 * 1024;
+  const maxTotalBytes = MAX_EXPANDED_BYTES;
+  const maxCompressionRatio = 200;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const minimum = Math.max(0, bytes.byteLength - 65557);
   let endOffset = -1;
   for (let offset = bytes.byteLength - 22; offset >= minimum; offset -= 1) {
-    if (view.getUint32(offset, true) === 0x06054b50) {
-      endOffset = offset;
-      break;
-    }
+    if (view.getUint32(offset, true) === 0x06054b50) { endOffset = offset; break; }
   }
   if (endOffset < 0) throw new Error("书籍包缺少有效 ZIP 目录结束记录。");
-  const diskNumber = view.getUint16(endOffset + 4, true);
-  const directoryDisk = view.getUint16(endOffset + 6, true);
-  const entriesOnDisk = view.getUint16(endOffset + 8, true);
+  const disk = view.getUint16(endOffset + 4, true);
+  const centralDisk = view.getUint16(endOffset + 6, true);
+  const diskEntries = view.getUint16(endOffset + 8, true);
   const entryCount = view.getUint16(endOffset + 10, true);
-  const directorySize = view.getUint32(endOffset + 12, true);
-  const directoryOffset = view.getUint32(endOffset + 16, true);
+  const centralSize = view.getUint32(endOffset + 12, true);
+  const centralOffset = view.getUint32(endOffset + 16, true);
   const commentLength = view.getUint16(endOffset + 20, true);
   if (endOffset + 22 + commentLength !== bytes.byteLength) throw new Error("ZIP 目录结束记录长度无效。");
-  if (diskNumber !== 0 || directoryDisk !== 0 || entriesOnDisk !== entryCount) {
-    throw new Error("不支持分卷 ZIP 书籍包。");
-  }
-  if (entryCount === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff) {
-    throw new Error("暂不支持 ZIP64 书籍包。");
-  }
-  if (entryCount > 20000 || directoryOffset + directorySize > endOffset) {
-    throw new RangeError("ZIP 文件数量或中央目录边界无效。");
-  }
+  if (disk !== 0 || centralDisk !== 0 || diskEntries !== entryCount) throw new Error("不支持分卷 ZIP 书籍包。");
+  if (entryCount === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) throw new Error("暂不支持 ZIP64 书籍包。");
+  if (entryCount > maxEntries || centralOffset + centralSize > endOffset) throw new Error("ZIP 中央目录超过限制或结构损坏。");
 
-  let cursor = directoryOffset;
-  let expandedBytes = 0;
-  const decoder = new TextDecoder("utf-8");
+  const seen = new Set();
+  const expectedFiles = new Map();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let cursor = centralOffset;
+  let totalBytes = 0;
   for (let index = 0; index < entryCount; index += 1) {
-    if (cursor + 46 > bytes.byteLength || view.getUint32(cursor, true) !== 0x02014b50) {
+    if (cursor + 46 > centralOffset + centralSize || view.getUint32(cursor, true) !== 0x02014b50) {
       throw new Error("ZIP 中央目录条目损坏。");
     }
+    const madeBy = view.getUint16(cursor + 4, true) >>> 8;
     const flags = view.getUint16(cursor + 8, true);
     const method = view.getUint16(cursor + 10, true);
     const compressedSize = view.getUint32(cursor + 20, true);
@@ -67,30 +77,42 @@ function inspectZipCentralDirectory(bytes) {
     const nameLength = view.getUint16(cursor + 28, true);
     const extraLength = view.getUint16(cursor + 30, true);
     const entryCommentLength = view.getUint16(cursor + 32, true);
+    const externalAttributes = view.getUint32(cursor + 38, true);
     const localHeaderOffset = view.getUint32(cursor + 42, true);
     const entryEnd = cursor + 46 + nameLength + extraLength + entryCommentLength;
-    if (entryEnd > directoryOffset + directorySize) throw new Error("ZIP 中央目录条目长度越界。");
-    if (flags & 1) throw new Error("不支持加密 ZIP；请先在本地解密后再导入。");
-    if (method !== 0 && method !== 8) throw new Error("书籍包使用了不支持的 ZIP 压缩方式。");
-    if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localHeaderOffset === 0xffffffff) {
-      throw new Error("暂不支持 ZIP64 文件条目。");
+    if (entryEnd > centralOffset + centralSize) throw new Error("ZIP 条目元数据越界。");
+    const rawName = decoder.decode(bytes.subarray(cursor + 46, cursor + 46 + nameLength));
+    const path = safeArchivePath(rawName);
+    const directory = rawName.endsWith("/");
+    const folded = path.toLocaleLowerCase("en-US");
+    if (seen.has(folded)) throw new Error("ZIP 包含重复或大小写冲突路径：" + path);
+    seen.add(folded);
+    if ((flags & 1) !== 0) throw new Error("不接受加密 ZIP 条目。");
+    if (![0, 8].includes(method)) throw new Error("书籍包使用了不支持的 ZIP 压缩方式。");
+    const unixMode = externalAttributes >>> 16;
+    if (madeBy === 3 && (unixMode & 0o170000) === 0o120000) throw new Error("不接受 ZIP 符号链接。");
+    if (!directory && uncompressedSize > maxFileBytes) throw new Error("ZIP 单个文件超过 128 MiB 限制：" + path);
+    if (!directory && uncompressedSize > 0 && uncompressedSize / Math.max(compressedSize, 1) > maxCompressionRatio) {
+      throw new Error("ZIP 文件压缩比超过 200:1 限制：" + path);
     }
-    const path = decoder.decode(bytes.subarray(cursor + 46, cursor + 46 + nameLength));
-    if (path.startsWith("/") || path.split("/").some((part) => part === ".." || part === ".")) {
-      throw new Error("书籍包包含非法路径：" + path);
-    }
-    if (localHeaderOffset + 30 > directoryOffset || view.getUint32(localHeaderOffset, true) !== 0x04034b50) {
+    if (localHeaderOffset + 30 > centralOffset || view.getUint32(localHeaderOffset, true) !== 0x04034b50) {
       throw new Error("ZIP 本地文件头无效：" + path);
     }
     const localNameLength = view.getUint16(localHeaderOffset + 26, true);
     const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
+    const localName = decoder.decode(bytes.subarray(localHeaderOffset + 30, localHeaderOffset + 30 + localNameLength));
+    if (localName !== rawName) throw new Error("ZIP 本地文件头与中央目录路径不一致：" + path);
     const dataEnd = localHeaderOffset + 30 + localNameLength + localExtraLength + compressedSize;
-    if (dataEnd > directoryOffset) throw new Error("ZIP 文件数据越界：" + path);
-    expandedBytes += uncompressedSize;
-    if (expandedBytes > MAX_EXPANDED_BYTES) throw new RangeError("书籍包展开后体积超过 512 MiB 限制。");
+    if (dataEnd > centralOffset) throw new Error("ZIP 文件数据越界：" + path);
+    if (!directory) {
+      totalBytes += uncompressedSize;
+      if (totalBytes > maxTotalBytes) throw new Error("书籍包展开后体积超过 512 MiB 限制。");
+      expectedFiles.set(path, uncompressedSize);
+    }
     cursor = entryEnd;
   }
-  if (cursor !== directoryOffset + directorySize) throw new Error("ZIP 中央目录长度与条目数量不一致。");
+  if (cursor !== centralOffset + centralSize) throw new Error("ZIP 中央目录长度与条目数量不一致。");
+  return expectedFiles;
 }
 
 function chapterPath(chapter, chaptersById) {
@@ -111,12 +133,18 @@ export async function parseBookPackage(input, identity = {}) {
   if (!archiveBytes.length || archiveBytes.length > MAX_ARCHIVE_BYTES) {
     throw new RangeError("书籍包为空或超过 256 MiB 限制。");
   }
-  inspectZipCentralDirectory(archiveBytes);
+  const expectedFiles = inspectZipCentralDirectory(archiveBytes);
   let files;
   try { files = unzipSync(archiveBytes); }
   catch (error) { throw new Error("书籍包 ZIP 解压失败：" + error.message); }
 
   const entries = Object.entries(files);
+  if (entries.length !== expectedFiles.size) throw new Error("ZIP 解压后的文件数量与中央目录不一致。");
+  for (const [path, size] of expectedFiles) {
+    if (!(files[path] instanceof Uint8Array) || files[path].byteLength !== size) {
+      throw new Error("ZIP 文件解压结果与中央目录声明不一致：" + path);
+    }
+  }
   const expandedBytes = entries.reduce((total, [, bytes]) => total + bytes.byteLength, 0);
   if (entries.length > 20000 || expandedBytes > MAX_EXPANDED_BYTES) {
     throw new RangeError("书籍包展开后文件数量或体积超过安全限制。");
