@@ -421,9 +421,9 @@ function txOperation(datasetId, operation, input) {
       }
       assertSourceReferences(datasetId,record.threadId,candidate.sourceReferences);
       const serialized=JSON.stringify(candidate);
-      const old=first("SELECT candidate_json,evaluation_score FROM memory_candidate WHERE id=? AND dataset_id=?",[record.id,datasetId]);
+      const old=first("SELECT candidate_json,evaluation_score,thread_id FROM memory_candidate WHERE id=? AND dataset_id=?",[record.id,datasetId]);
       if (old) {
-        if (old.candidate_json!==serialized || old.evaluation_score!==record.evaluationScore) throw new Error("MemoryCandidate ID 已用于不同候选内容");
+        if (old.candidate_json!==serialized || old.evaluation_score!==record.evaluationScore || old.thread_id!==record.threadId) throw new Error("MemoryCandidate ID 已用于不同候选内容或 Thread");
         return record;
       }
       execute("INSERT INTO memory_candidate(id,dataset_id,thread_id,candidate_json,evaluation_score,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
