@@ -46,11 +46,12 @@
     },
     "artifacts": {
       "type": "object", "additionalProperties": false,
-      "required": ["book", "chapters", "chunks", "embeddings", "local_report"],
+      "required": ["book", "chapters", "chunks", "assets", "embeddings", "local_report"],
       "properties": {
         "book": { "type": "string", "minLength": 1 },
         "chapters": { "type": "string", "minLength": 1 },
         "chunks": { "type": "string", "minLength": 1 },
+        "assets": { "type": ["string", "null"] },
         "embeddings": { "type": ["string", "null"] },
         "local_report": { "type": ["string", "null"] }
       }
