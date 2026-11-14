@@ -1,9 +1,13 @@
 import { createDemoBookContentProvider } from "./book-content-provider.js";
+import { createPublicBookApiProvider } from "./public-book-content-provider.js";
 
 (() => {
   let units = [];
   let bookRevision = null;
-  const bookContentProvider = createDemoBookContentProvider();
+  const readerConfig = window.READ_BOOK_CONFIG || {};
+  const isDemoProvider = !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId;
+  let bookContentProvider = null;
+  const requestedBookRevisionId = readerConfig.bookRevisionId || (isDemoProvider ? "demo-book-revision-1" : "");
 
   const state = {
     mainlineIndex: 1,
@@ -285,19 +289,46 @@ import { createDemoBookContentProvider } from "./book-content-provider.js";
 
   async function initializeReader() {
     try {
-      bookRevision = await bookContentProvider.loadBookRevision("demo-book-revision-1");
+      if (isDemoProvider) {
+        bookContentProvider = createDemoBookContentProvider();
+      } else {
+        state.messages = [];
+        messageList.replaceChildren();
+        if (!readerConfig.apiBaseUrl || !readerConfig.bookRevisionId) {
+          throw new Error("真实书籍模式必须同时提供 READ_BOOK_CONFIG.apiBaseUrl 和 bookRevisionId。");
+        }
+        bookContentProvider = createPublicBookApiProvider({
+          baseUrl: readerConfig.apiBaseUrl,
+          getAccessToken: readerConfig.getAccessToken,
+        });
+      }
+      if (!requestedBookRevisionId) throw new Error("真实书籍模式必须提供 READ_BOOK_CONFIG.bookRevisionId。");
+      bookRevision = await bookContentProvider.loadBookRevision(requestedBookRevisionId);
       units = bookRevision.units;
       state.mainlineIndex = units.findIndex(unit => unit.id === bookRevision.initialMainlineUnitId);
+      if (state.mainlineIndex < 0) throw new Error("书籍主线起始单元不存在。");
       state.displayedUnit = units[state.mainlineIndex];
       renderSource();
-      updateCount();
-      messageList.scrollTop = messageList.scrollHeight;
-      setGenerationStatus("演示内容已通过 BookContentProvider 加载；尚未连接真实书籍服务。");
+      if (isDemoProvider) {
+        updateCount();
+        messageList.scrollTop = messageList.scrollHeight;
+        setGenerationStatus("演示内容已通过 BookContentProvider 加载；尚未连接真实书籍服务。");
+      } else {
+        state.messages = [];
+        messageList.replaceChildren();
+        state.discussed = false;
+        $("messageInput").disabled = true;
+        $("sendButton").disabled = true;
+        $("simulateFailure").disabled = true;
+        setGenerationStatus("已从公共书籍 API 加载真实书籍内容；讨论功能待接入本地 Repository 与 Agent 服务。");
+      }
     } catch (error) {
       $("sourceHeading").textContent = "书籍内容加载失败";
       $("sourceText").textContent = "当前无法加载此书籍版本，请检查内容提供器。";
       setGenerationStatus("内容加载失败：" + error.message);
+      $("messageInput").disabled = true;
       $("sendButton").disabled = true;
+      $("simulateFailure").disabled = true;
     }
   }
 

@@ -47,3 +47,23 @@ CI 使用 Chromium 和 Playwright 验证折叠/展开、临时查看、复习、
 ```bash
 node --test prototypes/pc-reading/book-content-provider.test.mjs
 ```
+
+
+## 公共书籍 API Provider
+
+已增加 `createPublicBookApiProvider`，按 OpenAPI 契约读取：
+- `GET /v1/book-revisions/{revision_id}`
+- `GET /v1/book-revisions/{revision_id}/structure`
+- `GET /v1/book-revisions/{revision_id}/nodes/{node_id}/content`
+
+真实 API 地址和访问令牌由宿主注入，不写死占位域名或凭据。配置方式是在加载 `app.js` 前注入：
+
+```js
+window.READ_BOOK_CONFIG = {
+  apiBaseUrl: "https://实际 API 域名/",
+  bookRevisionId: "已发布的 BookRevision UUID",
+  getAccessToken: async () => "由宿主认证模块提供的短期访问令牌"
+};
+```
+
+若没有配置公共 API，页面明确使用 Demo Provider；若配置了真实书籍，页面不会展示演示讨论消息或固定演示回复，讨论输入暂时禁用，等待 #26/#27 接入。
