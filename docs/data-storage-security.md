@@ -135,7 +135,11 @@
 ### 11.5 验证状态
 浏览器存储选型、崩溃恢复、配额、Web Crypto、恢复凭证、增量备份、清除竞态均未通过本项目 PoC。文档中的方案属于待验证设计，不能表述为已实现端到端加密或可靠备份。
 
-## Schema v5 补充（2026-11-14）
+## Schema v5/v6 补充（2026-11-14）
+- SQLite Schema v5 增加 `memory_candidate`，持久化需要确认的认知候选，并通过 dataset/thread/source message 外键边界隔离。
+- SQLite Schema v6 增加 `presented_source` 与 `reading_unit_progress`，将原文呈现历史和每轮单元状态纳入本地一致性快照、加密备份和恢复。
+- v1→v6 迁移按版本顺序原子执行；高版本数据库 fail-closed。迁移失败回滚，不推进目标版本。
+- HTTP 加密备份客户端已实现分块上传、幂等续传、服务端 committed 后确认和空数据集恢复；正式服务端、清除墓碑竞态及生产安全评审仍未完成。
 - SQLite Schema v5 增加 `memory_candidate`，持久化需要确认的认知候选，并通过 dataset/thread/source message 外键边界隔离。
 - 该表不代表候选已成为正式认知；只有 accepted 候选通过显式演变规划和领域规则校验后，才追加 MemoryVersion。
 - v1→v5 迁移按 v2、v3、v4、v5 顺序原子执行；高版本数据库继续 fail-closed。
