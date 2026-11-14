@@ -14,7 +14,7 @@ export interface GenerationRequest {
   book_revision_id: string;
   user_message: { local_message_id: string; content: string };
   context: {
-    current_source: { structure_node_id: string; excerpt: string };
+    current_source: { structure_node_id: string; locator: string; excerpt: string };
     recent_messages: Array<{ role: "user" | "assistant"; content: string }>;
     relevant_memory?: Array<Record<string, unknown>>;
     response_preferences?: { language?: string };
@@ -143,6 +143,7 @@ export function validateGenerationRequest(value: GenerationRequest): void {
     throw new GenerationProtocolError("user_message.content exceeds 50000 characters.");
   }
   requiredUuid(value.context.current_source.structure_node_id, "context.current_source.structure_node_id");
+  boundedString(value.context.current_source.locator, "context.current_source.locator", 1, 512);
   if (typeof value.context.current_source.excerpt !== "string" || value.context.current_source.excerpt.length > 30_000) {
     throw new GenerationProtocolError("context.current_source.excerpt must be a string up to 30000 characters.");
   }
@@ -248,7 +249,7 @@ export function verifiedGenerationSourceReferences(
   const sourceText = request.context.current_source.excerpt.replace(/\s+/g, " ").trim();
   const references = new Map<string, { bookRevisionId: string; structureNodeId: string; locator: string }>();
   for (const citation of result.citations || []) {
-    if (citation.book_revision_id !== expectedRevision || citation.structure_node_id !== expectedNode) continue;
+    if (citation.book_revision_id !== expectedRevision || citation.structure_node_id !== expectedNode || citation.locator !== request.context.current_source.locator) continue;
     if (!citation.excerpt?.trim()) continue;
     const excerpt = citation.excerpt.replace(/\s+/g, " ").trim();
     if (!sourceText.includes(excerpt)) continue;
