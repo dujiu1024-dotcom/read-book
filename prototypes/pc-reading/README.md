@@ -156,10 +156,13 @@ GitHub 语料 Provider 使用浏览器 Cache Storage 缓存来源仓库的目录
 
 ## Agent 多来源证据
 
-正式书籍服务模式会在用户发送讨论后，对当前 BookRevision 的阅读单元做本地词项检索，最多附带 3 条相关原文作为 additional_sources。服务端返回的每条引用仍必须通过 BookRevision、节点、定位和原文摘录核验，只有核验通过的 CitationRecord 才会显示。引用卡片逐条回跳到对应原文。该检索是轻量词项匹配，不等同于语义向量检索；真实 Agent 仍需宿主配置 Generation API 和认证。
+正式书籍服务模式会在用户发送讨论后，对当前 BookRevision 的阅读单元做本地词项检索，最多附带 7 条相关原文作为 additional_sources。检索使用中文二元/三元词组与英文词项的本地 BM25 风格排序，并对标题、章节名、原文命中、同章集中度和查询覆盖率进行加权；结果只来自当前 BookRevision。服务端返回的每条引用仍必须通过 BookRevision、节点、定位和原文摘录核验，只有核验通过的 CitationRecord 才会显示。引用卡片逐条回跳到对应原文。该检索是轻量词项匹配，不等同于语义向量检索；真实 Agent 仍需宿主配置 Generation API 和认证。
 
 ## GitHub 语料与 Agent 接入边界
 
 GitHub 语料的 BookRevision ID 和结构节点 ID 均由来源 Git Blob SHA、文件路径和定位确定性生成 UUID，满足 GenerationRequest 的 UUID 契约。在线加载时逐文件计算 Git Blob SHA-1；若网络缓存内容与目录元数据声明的 Blob SHA 不一致，整本书拒绝加载，防止混合新旧版本。
 
 若宿主配置了 Generation API 和认证，GitHub 语料模式可使用正式阅读运行时、历史消息、认知状态与多来源引用；未配置时仍可本地阅读，并明确显示 Agent 未配置。备份服务若未配置，界面明确显示未配置，不会伪称云端备份成功。
+
+
+来源检索的边界：客户端只负责从当前 BookRevision 中挑选有限候选原文；最多 7 条，每条最多 30,000 字符，当前原文与额外来源合计不超过 Generation API 的 120,000 字符上限。重试和断线恢复使用消息持久化的来源引用重建原始证据集合，不会因检索算法或书籍内容变化而静默替换来源。客户端检索结果不等于模型引用，只有服务端完成原文核验并持久化为 CitationRecord 的引用才会展示。测试代码位于 `source-retriever.test.mjs`，执行命令为 `npm run test:source-retriever`；按项目约定本轮不执行测试。
