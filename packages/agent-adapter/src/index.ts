@@ -573,8 +573,8 @@ export function createGenerationTurnController(
       return execute((signal) => runGenerationTurn(repository, client, {
         ...input,
         signal,
-        onDelta: (text) => options.onDelta?.(input.request.client_generation_id, text),
-        onStatus: (status) => options.onStatus?.(input.request.client_generation_id, status),
+        onDelta: (text) => { input.onDelta?.(text); options.onDelta?.(input.request.client_generation_id, text); },
+        onStatus: (status) => { input.onStatus?.(status); options.onStatus?.(input.request.client_generation_id, status); },
       }));
     },
     resume(input: { datasetId: string; clientGenerationId: string; request: GenerationRequest; now?: () => string }) {
@@ -582,7 +582,7 @@ export function createGenerationTurnController(
       return execute((signal) => recoverGenerationTurn(repository, client, {
         ...input,
         signal,
-        onDelta: (text) => options.onDelta?.(input.clientGenerationId, text),
+        onDelta: (text) => { options.onDelta?.(input.clientGenerationId, text); },
         onStatus: (status) => options.onStatus?.(input.clientGenerationId, status),
       }));
     },
