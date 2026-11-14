@@ -108,7 +108,7 @@ test('TXT 段落定位偏移与去除首尾空白后的原文完全一致', asyn
   await page.goto('/');
   const result = await page.evaluate(async () => {
     const { parseBook } = await import('/src/parsers.js');
-    const source = '  标题段落  \\n\\n   正文段落包含中文和 emoji 😀  \\n\\n\\t末段  ';
+    const source = '  标题段落  \n\n   正文段落包含中文和 emoji 😀  \n\n\t末段  ';
     const parsed = await parseBook('offset-check.txt', new TextEncoder().encode(source));
     return parsed.paragraphs.map((paragraph) => ({
       text: paragraph.text,
