@@ -21,7 +21,7 @@ function resolveTarget(source, raw) {
   if (!target || target.startsWith("#") || /^(https?:|mailto:|tel:|data:)/i.test(target)) return null;
   const clean = decodeURIComponent(target.split("#")[0].split("?")[0]);
   if (!clean) return null;
-  return path.resolve(path.dirname(source), clean.startsWith("/") ? "." + clean : clean);
+  return clean.startsWith("/") ? path.resolve(root, clean.slice(1)) : path.resolve(path.dirname(source), clean);
 }
 const failures = [];
 await walk(root);
@@ -38,10 +38,6 @@ for (const source of markdown) {
     try {
       const info = await stat(target);
       exists = info.isFile() || info.isDirectory();
-      if (info.isDirectory()) {
-        try { await stat(path.join(target, "README.md")); exists = true; }
-        catch { try { await stat(path.join(target, "index.md")); exists = true; } catch { exists = false; } }
-      }
     } catch {}
     if (!exists) failures.push({ source: path.relative(root, source), target: raw, reason: "target does not exist" });
   }
