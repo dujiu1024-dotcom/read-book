@@ -79,7 +79,7 @@ function emit(task, type, data = {}) {
 function expireTasks(now = Date.now()) {
   let changed = false;
   for (const task of tasks.values()) {
-    if (!['queued', 'running'].includes(task.status) || !task.expiresAt || Date.parse(task.expiresAt) > now) continue;
+    if (task.status === 'expired' || !task.expiresAt || Date.parse(task.expiresAt) > now) continue;
     task.status = 'expired';
     task.finalResult = null;
     emit(task, 'expired');
