@@ -131,8 +131,8 @@ window.READ_BOOK_CONFIG = {
 - 阅读页顶部书目选择器可切换六本书；五卷分别使用独立 BookRevision ID，不会拼接。
 - 原文卡片显示章节/段落定位，并提供对应 GitHub 原始文件链接。
 - 当前为公开来源只读模式：正文直接从来源仓库读取，不复制进 read-book 仓库；不声称来源仓库已授予再分发许可。可通过“导入书籍”入口选择符合 v1.0.0 的本地书籍包，进入独立的本地持久化阅读模式。
-- 该模式尚未接入本地阅读位置持久化、真实 Agent 对话和认知沉淀；这些能力不会显示为已保存或已完成。
-- GitHub API 或 Raw 内容读取失败时显示错误，不回退到演示正文。
+- 已接入 SQLite WASM + OPFS 本地阅读位置持久化；来源正文使用 Cache Storage 在线优先缓存。真实 Agent 对话、认知沉淀和加密云端备份仍未接入。
+- GitHub API 或 Raw 内容读取失败时优先使用本机已有来源缓存；无缓存时显示错误，不回退到演示正文。
 
 启动方式：
 
@@ -144,7 +144,7 @@ npm run dev
 
 ## GitHub 语料的本地阅读位置
 
-公开语料模式会使用与正式阅读器相同的 SQLite WASM + OPFS Repository 保存阅读主线、临时查看位置和 Thread。书籍版本 ID 根据本次读取的 Git blob SHA 集合计算指纹；来源文件变化后会形成新的 BookRevision，不会把新版本误当成旧版本。
+公开语料模式会使用与本地导入书籍相同的 localDataSetId 和 SQLite WASM + OPFS Repository 保存阅读主线、临时查看位置和 Thread；默认数据集标识保存在 read-book:local-dataset-id。书籍版本 ID 根据本次读取的 Git blob SHA 集合计算指纹；来源文件变化后会形成新的 BookRevision，不会把新版本误当成旧版本。
 
 此模式只在本机保存阅读位置。启动时创建本地一致性快照，但没有配置加密备份服务时不会上传；界面明确显示“备份未配置”。Agent 消息和认知数据仍未接入。
 
