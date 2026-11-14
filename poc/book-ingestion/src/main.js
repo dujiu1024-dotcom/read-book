@@ -3,6 +3,7 @@ import { getFixture } from './fixtures.js';
 import { parseBook } from './parsers.js';
 import { buildBookPackage } from './package-export.js';
 import { saveBook, getBook, listBooks } from './storage.js';
+import { importChuanxiLuFromWikisource } from './wikisource-provider.js';
 
 const $ = (id) => document.getElementById(id);
 let current = null;
@@ -61,7 +62,7 @@ function setCitations(parsed) {
   }
 }
 
-async function importFile(file) {
+async function importFile(file, sourceMetadata = null) {
   $('status').textContent = '正在解析 ' + file.name + ' …';
   const bytes = new Uint8Array(await file.arrayBuffer());
   const parsed = await parseBook(file.name, bytes);
@@ -69,13 +70,14 @@ async function importFile(file) {
   const metadata = identifyBook(file.name, parsed);
   const book = {
     id, name: file.name, type: file.type, bytes: bytes.buffer, parsed,
-    metadata, corpusKey: metadata.corpusKey, importedAt: new Date().toISOString()
+    metadata, corpusKey: metadata.corpusKey, sourceMetadata, importedAt: new Date().toISOString()
   };
   await saveBook(book);
   current = book;
   $('book-title').value = metadata.title;
   $('book-author').value = metadata.author;
   $('book-language').value = metadata.language;
+  $('batch-status').textContent = sourceMetadata?.completenessNote || '';
   $('export-package').disabled = false;
   setCitations(parsed);
   show({
@@ -139,6 +141,28 @@ $('import-fixture').addEventListener('click', async () => {
   }
 });
 
+
+$('import-wikisource').addEventListener('click', async () => {
+  const button = $('import-wikisource');
+  button.disabled = true;
+  try {
+    $('status').textContent = '正在从维基文库读取《传习录》上、中、下原文…';
+    const result = await importChuanxiLuFromWikisource();
+    const file = new File([result.bytes], result.fileName, { type: 'text/plain' });
+    const book = await importFile(file, result.sourceMetadata);
+    book.sections = result.sections;
+    await saveBook(book);
+    await renderSaved();
+    $('batch-status').textContent = '已导入《传习录》：' + result.sections.map((section) => section.title + ' ' + section.characterCount + ' 字').join('；') + '。请抽样核对版本和正文完整性。';
+    show({ title: '传习录', source: result.sourceMetadata, sections: result.sections, parsedUnits: book.parsed.paragraphs.length, characters: book.parsed.characterCount });
+  } catch (error) {
+    $('status').textContent = '维基文库导入失败：' + error.message;
+    show({ error: error.message });
+  } finally {
+    button.disabled = false;
+  }
+});
+
 $('file').addEventListener('change', async (event) => {
   const files = [...(event.target.files || [])];
   if (!files.length) return;
@@ -179,7 +203,8 @@ $('export-package').addEventListener('click', async () => {
       isbn: $('book-isbn').value,
       edition: $('book-edition').value,
       translator: $('book-translator').value,
-      publisher: $('book-publisher').value
+      publisher: $('book-publisher').value,
+      description: current.sourceMetadata?.attribution || ''
     };
     if (!metadata.title.trim() || !metadata.author.trim()) throw new Error('书名和作者必须核对填写。');
     current.metadata = metadata;
