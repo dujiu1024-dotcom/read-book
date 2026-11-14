@@ -18,12 +18,7 @@ export interface MemoryExtractionProviderInput {
   instruction: string;
   context: MemoryExtractionContext;
   messages: readonly MemoryExtractionMessage[];
-  outputSchema: {
-    type: "object";
-    required: ["candidates"];
-    maxCandidates: 10;
-    viewpoint: ["user", "author", "assistant_inference"];
-  };
+  outputSchema: Record<string, unknown>;
 }
 
 /** Provider implementations may wrap any model SDK; they must return structured JSON, not persist data. */
@@ -116,9 +111,54 @@ export async function runMemoryExtraction(
     messages: structuredClone(request.messages),
     outputSchema: {
       type: "object",
+      additionalProperties: false,
       required: ["candidates"],
-      maxCandidates: 10,
-      viewpoint: ["user", "author", "assistant_inference"],
+      properties: {
+        candidates: {
+          type: "array",
+          maxItems: 10,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "title", "content", "viewpoint", "confidence", "ambiguity", "value", "sourceMessageIds", "sourceReferences", "requiresBookCitation"],
+            properties: {
+              id: { type: "string", minLength: 1 },
+              title: { type: "string", minLength: 1 },
+              content: { type: "string", minLength: 1 },
+              viewpoint: { type: "string", enum: ["user", "author", "assistant_inference"] },
+              confidence: { type: "number", minimum: 0, maximum: 1 },
+              ambiguity: { type: "number", minimum: 0, maximum: 1 },
+              value: {
+                type: "object",
+                additionalProperties: false,
+                required: ["novelty", "stability", "explanatoryPower", "discussionDepth", "relationStrength"],
+                properties: {
+                  novelty: { type: "number", minimum: 0, maximum: 1 },
+                  stability: { type: "number", minimum: 0, maximum: 1 },
+                  explanatoryPower: { type: "number", minimum: 0, maximum: 1 },
+                  discussionDepth: { type: "number", minimum: 0, maximum: 1 },
+                  relationStrength: { type: "number", minimum: 0, maximum: 1 },
+                },
+              },
+              sourceMessageIds: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", minLength: 1 } },
+              sourceReferences: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["bookRevisionId", "structureNodeId", "locator"],
+                  properties: {
+                    bookRevisionId: { type: "string", minLength: 1 },
+                    structureNodeId: { type: "string", minLength: 1 },
+                    locator: { type: "string", minLength: 1 },
+                  },
+                },
+              },
+              requiresBookCitation: { type: "boolean" },
+            },
+          },
+        },
+      },
     },
   });
 
