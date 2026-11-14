@@ -384,6 +384,12 @@ test("validates structured citations and rejects malformed citation identity", (
     expires_at: accepted.expires_at,
     result: { content: "回答", citations: [{ book_revision_id: "invalid", structure_node_id: request.context.current_source.structure_node_id, locator: "x" }] },
   }), GenerationProtocolError);
+  assert.throws(() => validateGenerationSnapshot({
+    generation_id: accepted.generation_id,
+    status: "completed",
+    expires_at: accepted.expires_at,
+    result: { content: "回答", citations: [{ book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: request.context.current_source.locator }] },
+  }), GenerationProtocolError);
 });
 
 test("only citations from the current BookRevision and current source node become persisted references", () => {
