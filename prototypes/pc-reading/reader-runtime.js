@@ -7,6 +7,7 @@ import {
 import { createHttpGenerationTransport } from "../../packages/agent-adapter/src/http-transport.ts";
 import { createHttpEncryptedBackupPort } from "../../poc/encrypted-backup/src/http-backup-port.js";
 import { runMemoryExtraction, persistAcceptedMemoryCandidates } from "../../packages/agent-adapter/src/memory-extraction.ts";
+import { selectThreadMemoryState } from "./memory-thread-scope.js";
 
 function uuid() {
   return crypto.randomUUID();
@@ -141,10 +142,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   async function loadMemoryState() {
     const snapshot = await repository.createConsistentSnapshot(datasetId);
     return {
-      memories: snapshot.memories.filter((item) => item.threadId === thread.id),
-      versions: snapshot.memoryVersions,
-      relations: snapshot.memoryRelations,
-      pendingCandidates: snapshot.memoryCandidates.filter((item) => item.threadId === thread.id),
+      ...selectThreadMemoryState(snapshot, thread.id),
       providerConfigured: Boolean(config.memoryExtractionProvider && config.memoryCandidatePolicy),
       plannerConfigured: typeof config.planMemoryEvolution === "function",
     };
@@ -193,12 +191,15 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     }
     let persistedIds = [];
     if (result.accepted.length && typeof config.planMemoryEvolution === "function") {
-      const existing = await repository.createConsistentSnapshot(datasetId);
+      const existing = selectThreadMemoryState(
+        await repository.createConsistentSnapshot(datasetId),
+        thread.id,
+      );
       const plans = await config.planMemoryEvolution({
         accepted: result.accepted,
-        existingMemories: existing.memories.filter((item) => item.threadId === thread.id),
-        existingVersions: existing.memoryVersions,
-        existingRelations: existing.memoryRelations,
+        existingMemories: existing.memories,
+        existingVersions: existing.versions,
+        existingRelations: existing.relations,
         threadId: thread.id,
         bookRevisionId: bookRevision.bookRevisionId,
       });
@@ -225,7 +226,10 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     }
     if (resolution !== "accepted") throw new Error("未知的认知确认操作。");
     if (typeof config.planMemoryEvolution !== "function") throw new Error("尚未配置认知演变规划器，不能安全确认并写入。");
-    const existing = await repository.createConsistentSnapshot(datasetId);
+    const existing = selectThreadMemoryState(
+      await repository.createConsistentSnapshot(datasetId),
+      thread.id,
+    );
     const acceptedItem = {
       candidate: record.candidate,
       evaluation: { decision: "accept", score: record.evaluationScore, reasons: ["user_confirmed"] },
@@ -238,9 +242,9 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     };
     const plans = await config.planMemoryEvolution({
       accepted: [acceptedItem],
-      existingMemories: existing.memories.filter((item) => item.threadId === thread.id),
-      existingVersions: existing.memoryVersions,
-      existingRelations: existing.memoryRelations,
+      existingMemories: existing.memories,
+      existingVersions: existing.versions,
+      existingRelations: existing.relations,
       threadId: thread.id,
       bookRevisionId: bookRevision.bookRevisionId,
       userConfirmedCandidateId: candidateId,
