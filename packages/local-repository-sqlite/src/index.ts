@@ -15,7 +15,7 @@ import {
   type GenerationDeliveryRecord,
   type MemoryCandidateRecord,
 } from "../../local-repository-contract/src/index.ts";
-import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, MemoryRelation } from "../../domain-core/src/index.ts";
+import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, MemoryRelation, PresentedSource, ReadingUnitProgress } from "../../domain-core/src/index.ts";
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
