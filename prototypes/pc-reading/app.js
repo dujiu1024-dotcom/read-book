@@ -524,6 +524,8 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
 
   const bookSelector = $("bookSelector");
   if (bookSelector) {
+    const serviceOption = bookSelector.querySelector('option[value="service"]');
+    if (serviceOption) serviceOption.disabled = !(readerConfig.apiBaseUrl && readerConfig.bookRevisionId);
     bookSelector.value = isGithubCorpusMode ? queryBookId : (isDemoProvider ? "demo" : "service");
     bookSelector.addEventListener("change", () => {
       const next = bookSelector.value;
