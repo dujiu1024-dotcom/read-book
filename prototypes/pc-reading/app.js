@@ -141,7 +141,7 @@ import { createSourceRetriever } from "./source-retriever.js";
       const label = document.createElement("div");
       label.className = "citation-label";
       const citedUnit = units.find(item => item.id === record.structureNodeId);
-      label.textContent = "引用 · " + (citedUnit?.chapter || "原文来源");
+      label.textContent = "引用 · " + (citedUnit?.chapter || "原文来源") + (record.locator ? " · " + record.locator : "");
       const quote = document.createElement("p");
       const excerpt = record.excerpt || citedUnit?.text || "";
       quote.textContent = excerpt ? "“" + excerpt.slice(0, 120) + (excerpt.length > 120 ? "……”" : "”") : "引用来源暂不可用。";
@@ -261,7 +261,7 @@ import { createSourceRetriever } from "./source-retriever.js";
             userBubble.saved = true;
             const label = userArticle.querySelector(".saved-label");
             if (label) label.textContent = "本地已保存";
-            setGenerationStatus("本地已保存 · Agent 正在生成");
+            setGenerationStatus("本地已保存 · 已附带 " + additionalUnits.length + " 条关联原文证据 · Agent 正在生成");
           },
           onDelta(text) {
             assistantText.textContent += text;
