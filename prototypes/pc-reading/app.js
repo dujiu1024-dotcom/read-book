@@ -478,7 +478,7 @@ import { hasGenerationService } from "./reader-capabilities.js";
     const appendProvenance = (container, item) => {
       const sourceIds = item.sourceMessageIds || [];
       const references = (item.sourceReferences || []).filter((reference) =>
-        reference.bookRevisionId === state.bookRevisionId);
+        reference.bookRevisionId === bookRevision?.bookRevisionId);
       const sourceBox = document.createElement("div");
       sourceBox.className = "memory-provenance";
       const heading = document.createElement("strong");
