@@ -402,7 +402,39 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
       meta.textContent = "待确认 · " + viewpointLabel(record.candidate.viewpoint) + " · 置信度 " + Math.round(record.candidate.confidence * 100) + "%";
       const content = document.createElement("p");
       content.textContent = record.candidate.content;
-      card.append(heading, meta, content);
+      const actions = document.createElement("div");
+      actions.className = "memory-actions";
+      const confirm = document.createElement("button");
+      confirm.type = "button";
+      confirm.className = "soft-button primary-soft";
+      confirm.textContent = "确认沉淀";
+      confirm.disabled = !data.plannerConfigured;
+      confirm.title = data.plannerConfigured ? "确认后按演变规划追加一个新版本" : "需要先配置认知演变规划器";
+      confirm.addEventListener("click", async () => {
+        confirm.disabled = true;
+        try {
+          renderMemoryState(await productionRuntime.resolveMemoryCandidate(record.id, "accepted"));
+          toast("已确认，认知版本已追加。");
+        } catch (error) {
+          confirm.disabled = false;
+          setGenerationStatus("认知确认失败：" + error.message);
+        }
+      });
+      const reject = document.createElement("button");
+      reject.type = "button";
+      reject.className = "text-button";
+      reject.textContent = "不保留";
+      reject.addEventListener("click", async () => {
+        reject.disabled = true;
+        try {
+          renderMemoryState(await productionRuntime.resolveMemoryCandidate(record.id, "rejected"));
+        } catch (error) {
+          reject.disabled = false;
+          setGenerationStatus("处理待确认认知失败：" + error.message);
+        }
+      });
+      actions.append(confirm, reject);
+      card.append(heading, meta, content, actions);
       pending.append(card);
     }
     if (!(data.memories || []).length && !(data.pendingCandidates || []).length) {
