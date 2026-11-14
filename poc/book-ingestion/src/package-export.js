@@ -126,6 +126,13 @@ export async function buildBookPackage({ fileName, sourceBytes, parsed, metadata
   const title = requiredText(metadata?.title, "书名");
   const author = requiredText(metadata?.author, "作者");
   const language = requiredText(metadata?.language || "zh-CN", "语言");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(packageId)) {
+    throw new Error("packageId 必须是 UUID。");
+  }
+  const createdAt = now();
+  if (typeof createdAt !== "string" || !Number.isFinite(Date.parse(createdAt))) {
+    throw new Error("创建时间必须是有效的 ISO 日期时间。");
+  }
   const extension = sourceExtension(fileName, parsed.format);
   const { chapters, chunks } = toRecords(parsed);
   if (!chapters.length || !chunks.length) throw new Error("未提取到可打包的章节和正文切片。");
@@ -143,7 +150,7 @@ export async function buildBookPackage({ fileName, sourceBytes, parsed, metadata
     schema_name: "read-book-package",
     schema_version: "1.0.0",
     package_id: packageId,
-    created_at: now(),
+    created_at: createdAt,
     source: {
       file: sourcePath,
       format: extension,
