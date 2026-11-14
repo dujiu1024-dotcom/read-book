@@ -10,7 +10,10 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
   const activeLocalBookPackageId = readerConfig.localBookPackageId || (() => {
     try { return window.localStorage.getItem("read-book:active-local-book") || ""; } catch { return ""; }
   })();
-  const useLocalBookPackage = Boolean(activeLocalBookPackageId && !readerConfig.apiBaseUrl);
+  const preferLocalBookPackage = Boolean(readerConfig.localBookPackageId) || (() => {
+    try { return window.localStorage.getItem("read-book:prefer-local-book") === "true"; } catch { return false; }
+  })();
+  const useLocalBookPackage = Boolean(activeLocalBookPackageId && (preferLocalBookPackage || !readerConfig.bookRevisionId));
   const isDemoProvider = !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId && !activeLocalBookPackageId;
   let bookContentProvider = null;
   let productionRuntime = null;
@@ -572,7 +575,8 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
 
       const hasAgentConfiguration = Boolean(
         (readerConfig.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken) &&
-        (readerConfig.generationApiBaseUrl || readerConfig.apiBaseUrl)
+        (readerConfig.generationApiBaseUrl || readerConfig.apiBaseUrl) &&
+        readerConfig.localDataSetId
       );
       productionRuntime = await createProductionReaderRuntime({
         ...readerConfig,
