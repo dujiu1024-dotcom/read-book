@@ -1,4 +1,5 @@
 import { SqliteOpfsRepository } from "../../packages/local-repository-sqlite/src/index.ts";
+import { createSerializedRepository } from "./serialized-repository.js";
 import { createAgentGenerationTurnRepository } from "../../packages/local-repository-contract/src/index.ts";
 import {
   createGenerationClient,
@@ -42,7 +43,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     throw new Error("缺少生成服务地址，请配置 READ_BOOK_CONFIG.generationApiBaseUrl（或复用 apiBaseUrl）。");
   }
 
-  const repository = new SqliteOpfsRepository();
+  // 写事务统一排队，避免同标签页内 fire-and-forget 写入与初始化流程争抢写锁。
+  const repository = createSerializedRepository(() => new SqliteOpfsRepository());
   await repository.initialize();
   const makeBackupPort = (targetDatasetId) => {
     if (typeof config.createEncryptedBackupPort === "function") return config.createEncryptedBackupPort(targetDatasetId);
@@ -171,7 +173,15 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     };
   }
 
-  async function extractMemories() {
+  let extractionInFlight = null;
+
+  function extractMemories() {
+    if (extractionInFlight) return extractionInFlight;
+    extractionInFlight = runMemoryExtractionPass().finally(() => { extractionInFlight = null; });
+    return extractionInFlight;
+  }
+
+  async function runMemoryExtractionPass() {
     if (!config.memoryExtractionProvider || !config.memoryCandidatePolicy) {
       return { ...(await loadMemoryState()), extractionStatus: "provider_not_configured", persistedIds: [], acceptedNotPersisted: [] };
     }
@@ -400,9 +410,23 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   async function retryFailedGeneration(assistantMessageId, callbacks = {}) {
     if (!controller) throw new Error("真实 Agent 服务尚未配置；当前无法重试生成。");
     const snapshot = await repository.createConsistentSnapshot(datasetId);
-    const delivery = snapshot.generationDeliveries.find((item) => item.assistantMessageId === assistantMessageId);
-    if (!delivery || !["failed", "expired", "cancelled"].includes(delivery.status)) {
-      throw new Error("找不到可重试的失败生成记录。");
+    let delivery = snapshot.generationDeliveries.find((item) => item.assistantMessageId === assistantMessageId);
+    if (!delivery) throw new Error("找不到这条回复的生成记录，无法重试。");
+    if (!["failed", "expired", "cancelled"].includes(delivery.status)) {
+      // 刷新/断网/限流可能留下仍处于 queued/running 的投递记录与 generating 消息。
+      // 用户显式点“重试”时，若当前没有进行中的生成，就把这条残留标记为失败再重试，
+      // 避免消息永久停在“正在生成…”。
+      if (!["queued", "running"].includes(delivery.status)) throw new Error("这条回复当前不可重试。");
+      if (controller.isBusy()) throw new Error("当前仍有生成任务在进行，请等待结束后再重试。");
+      const messages = await loadMessages();
+      const assistant = messages.find((item) => item.message.id === assistantMessageId)?.message;
+      await repository.transaction(datasetId, async (tx) => {
+        if (assistant?.status === "generating") {
+          await tx.transitionAssistantMessage(assistantMessageId, "failed");
+        }
+        await tx.saveGenerationDelivery({ ...delivery, status: "failed", updatedAt: new Date().toISOString() });
+      });
+      delivery = { ...delivery, status: "failed" };
     }
     const messages = await loadMessages();
     const user = messages.find((item) => item.message.id === delivery.userMessageId)?.message;
@@ -505,6 +529,57 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     }
   }
 
+  async function loadNotes() {
+    const snapshot = await repository.createConsistentSnapshot(datasetId);
+    return (snapshot.notes || [])
+      .filter((note) => note.threadId === thread.id)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  async function createNote({ content, unitId, unitLocator }) {
+    const text = String(content || "").trim();
+    if (!text) throw new Error("笔记内容不能为空。");
+    const now = new Date().toISOString();
+    const note = {
+      id: uuid(),
+      datasetId,
+      threadId: thread.id,
+      readingRoundId: null,
+      content: text,
+      sourceMessageIds: [],
+      sourceReferences: unitId && unitLocator
+        ? [{ bookRevisionId: bookRevision.bookRevisionId, structureNodeId: unitId, locator: unitLocator }]
+        : [],
+      createdAt: now,
+      updatedAt: now,
+      revision: 1,
+    };
+    await repository.transaction(datasetId, async (tx) => {
+      await tx.saveNote(note);
+    });
+    return note;
+  }
+
+  async function updateNote({ id, content, baseRevision }) {
+    const text = String(content || "").trim();
+    if (!text) throw new Error("笔记内容不能为空。");
+    const existing = (await loadNotes()).find((note) => note.id === id);
+    if (!existing) throw new Error("笔记不存在或已被删除。");
+    if (existing.revision !== baseRevision) {
+      throw new Error("这条笔记已被更新，请刷新后再编辑；你的修改没有被覆盖，也没有覆盖别人的内容。");
+    }
+    const updated = {
+      ...existing,
+      content: text,
+      updatedAt: new Date().toISOString(),
+      revision: existing.revision + 1,
+    };
+    await repository.transaction(datasetId, async (tx) => {
+      await tx.saveNote(updated);
+    });
+    return updated;
+  }
+
   return {
     repository,
     thread,
@@ -513,6 +588,9 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     generationConfigured: Boolean(controller),
     loadMessages,
     loadCitations,
+    loadNotes,
+    createNote,
+    updateNote,
     loadMemoryState,
     extractMemories,
     resolveMemoryCandidate,

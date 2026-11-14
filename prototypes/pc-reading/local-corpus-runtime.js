@@ -1,4 +1,5 @@
 import { SqliteOpfsRepository } from "../../packages/local-repository-sqlite/src/index.ts";
+import { createSerializedRepository } from "./serialized-repository.js";
 
 const LOCAL_DATASET_STORAGE_KEY = "read-book:local-dataset-id";
 
@@ -34,7 +35,7 @@ function required(value, label) {
  */
 export async function createLocalCorpusRuntime(bookRevision, {
   datasetId = getOrCreateLocalDataSetId(),
-  repositoryFactory = () => new SqliteOpfsRepository(),
+  repositoryFactory = () => createSerializedRepository(() => new SqliteOpfsRepository()),
   now = () => new Date().toISOString(),
 } = {}) {
   if (!bookRevision || typeof bookRevision.bookRevisionId !== "string" || !bookRevision.bookRevisionId.trim()) {
