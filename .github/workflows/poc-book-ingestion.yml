@@ -1,0 +1,30 @@
+name: PoC C - Book Ingestion
+
+on:
+  pull_request:
+    paths:
+      - "poc/book-ingestion/**"
+      - ".github/workflows/poc-book-ingestion.yml"
+  push:
+    branches:
+      - "poc/issue-3-book-ingestion"
+    paths:
+      - "poc/book-ingestion/**"
+      - ".github/workflows/poc-book-ingestion.yml"
+
+jobs:
+  browser-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: poc/book-ingestion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm test
