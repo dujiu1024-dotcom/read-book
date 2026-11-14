@@ -73,8 +73,8 @@ export async function createRecoveryBundle(datasetId, recoveryCredential = toBas
   if (!Number.isSafeInteger(iterations) || iterations < 100_000) throw new RangeError("PBKDF2 iterations must be >= 100000");
   const credentialBytes = fromBase64(recoveryCredential);
   if (credentialBytes.length < 32) throw new TypeError("Recovery credential must contain at least 256 bits");
-  const dataKey = randomBytes(32);
-  const rawDataKey = dataKey;
+  const rawDataKey = randomBytes(32);
+  const dataKey = await crypto.subtle.importKey("raw", rawDataKey, "HKDF", false, ["deriveKey"]);
   const salt = randomBytes(16);
   const wrappingMaterial = await crypto.subtle.importKey("raw", credentialBytes, "PBKDF2", false, ["deriveKey"]);
   const wrappingKey = await crypto.subtle.deriveKey(
@@ -87,6 +87,7 @@ export async function createRecoveryBundle(datasetId, recoveryCredential = toBas
   const nonce = randomBytes(12);
   const aad = encoder.encode(canonicalJson({ formatVersion: FORMAT_VERSION, datasetId, purpose: "wrap-dataset-key" }));
   const wrappedKey = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: aad, tagLength: 128 }, wrappingKey, rawDataKey);
+  rawDataKey.fill(0);
   return {
     dataKey,
     recoveryCredential,
@@ -120,7 +121,7 @@ async function unwrapDataKey(datasetId, keyEnvelope, recoveryCredential) {
     wrappingKey,
     fromBase64(keyEnvelope.wrappedKey),
   );
-  return new Uint8Array(raw);
+  return crypto.subtle.importKey("raw", raw, "HKDF", false, ["deriveKey"]);
 }
 
 export function createBackupPayload(snapshot, previousSnapshot = null) {
@@ -152,7 +153,9 @@ export function createBackupPayload(snapshot, previousSnapshot = null) {
 }
 
 async function deriveBackupChunkKey(masterKey, datasetId, backupId) {
-  const material = await crypto.subtle.importKey("raw", masterKey, "HKDF", false, ["deriveKey"]);
+  const material = masterKey?.algorithm?.name === "HKDF"
+    ? masterKey
+    : await crypto.subtle.importKey("raw", masterKey, "HKDF", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
     { name: "HKDF", hash: "SHA-256", salt: encoder.encode(datasetId + ":" + backupId), info: encoder.encode("read-book-backup-chunk-key-v1") },
     material,
