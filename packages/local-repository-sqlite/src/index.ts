@@ -12,6 +12,7 @@ import {
   type NewUserMessage,
   type NewAssistantMessage,
   type AccountDataSetBinding,
+  type GenerationDeliveryRecord,
 } from "../../local-repository-contract/src/index.ts";
 import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, MemoryRelation } from "../../domain-core/src/index.ts";
 
@@ -38,7 +39,7 @@ export function mapWorkerError(payload: { message: string; code?: string }): Err
 
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
-  readonly schemaVersion = 2;
+  readonly schemaVersion = 3;
   private worker: Worker;
   private nextId = 0;
   private pending = new Map<number, Pending>();
@@ -106,6 +107,7 @@ export class SqliteOpfsRepository implements LocalRepository {
         createConsistentSnapshot: () => call("createConsistentSnapshot"),
         acknowledgeBackup: (snapshotSequence: number, backupId: string, backedUpAt: string) =>
           call("acknowledgeBackup", { snapshotSequence, backupId, backedUpAt }),
+        saveGenerationDelivery: (delivery: GenerationDeliveryRecord) => call("saveGenerationDelivery", { delivery }),
       } as LocalRepositoryTransaction;
       try {
         const result = await operation(tx);
@@ -118,6 +120,14 @@ export class SqliteOpfsRepository implements LocalRepository {
     });
   }
 
+  async createConsistentSnapshot(datasetId: string): Promise<RepositorySnapshot> {
+    return this.transaction(datasetId, (tx) => tx.createConsistentSnapshot());
+  }
+
+  async acknowledgeBackup(datasetId: string, snapshotSequence: number, backupId: string, backedUpAt: string): Promise<void> {
+    await this.transaction(datasetId, (tx) => tx.acknowledgeBackup(snapshotSequence, backupId, backedUpAt));
+  }
+
   async getDataSet(datasetId: string): Promise<LocalDataSet | null> {
     await this.ensureReady();
     return this.request("getDataSet", { datasetId });
@@ -125,6 +135,14 @@ export class SqliteOpfsRepository implements LocalRepository {
   async getMessages(datasetId: string, threadId: string, afterSequence = 0): Promise<PersistedMessage[]> {
     await this.ensureReady();
     return this.request("getMessages", { datasetId, threadId, afterSequence });
+  }
+  async getGenerationDelivery(datasetId: string, clientGenerationId: string): Promise<GenerationDeliveryRecord | null> {
+    await this.ensureReady();
+    return this.request("getGenerationDelivery", { datasetId, clientGenerationId });
+  }
+  async listPendingGenerationDeliveries(datasetId: string): Promise<GenerationDeliveryRecord[]> {
+    await this.ensureReady();
+    return this.request("listPendingGenerationDeliveries", { datasetId });
   }
   async getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]> {
     await this.ensureReady();

@@ -4,6 +4,7 @@ import {
   RepositoryError,
   assertDataSetSequenceInvariant,
   createAgentUserMessageRepository,
+  createRepositoryBackupPort,
   type LocalRepositoryTransaction,
 } from "../src/index.ts";
 
@@ -94,4 +95,31 @@ test("binding revocation contract is soft-delete only and cannot imply dataset d
   await repository.transaction("dataset-1", (transaction) =>
     transaction.softRevokeAccountDataSetBinding("binding-1", "2026-11-14T00:00:00.000Z"));
   assert.deepEqual(calls, ["revoke:binding-1:2026-11-14T00:00:00.000Z"]);
+});
+
+test("backup port acknowledges only the sequence from its own consistent snapshot", async () => {
+  const calls: unknown[][] = [];
+  const snapshot = {
+    datasetId: "dataset-1",
+    schemaVersion: 3,
+    dirtySequence: 12,
+    threads: [], messages: [], readingRounds: [], readingPositions: [],
+    citations: [], notes: [], memories: [], memoryVersions: [], memoryRelations: [], generationDeliveries: [],
+  };
+  const port = createRepositoryBackupPort({
+    async createConsistentSnapshot(datasetId: string) {
+      calls.push(["snapshot", datasetId]);
+      return snapshot;
+    },
+    async acknowledgeBackup(datasetId: string, sequence: number, backupId: string, backedUpAt: string) {
+      calls.push(["ack", datasetId, sequence, backupId, backedUpAt]);
+    },
+  }, "dataset-1");
+  const created = await port.createSnapshot();
+  await port.acknowledgeUploadedSnapshot(created, "backup-12", "2026-11-14T00:00:00.000Z");
+  assert.deepEqual(calls, [
+    ["snapshot", "dataset-1"],
+    ["ack", "dataset-1", 12, "backup-12", "2026-11-14T00:00:00.000Z"],
+  ]);
+  await assert.rejects(() => port.acknowledgeUploadedSnapshot({ ...snapshot, datasetId: "dataset-2" }, "backup-12", "2026-11-14T00:00:00.000Z"), RepositoryError);
 });

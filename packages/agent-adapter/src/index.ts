@@ -336,3 +336,182 @@ export async function persistUserMessageBeforeGeneration(
   await repository.saveUserMessage(message);
   return client.create(request, idempotencyKey);
 }
+
+export interface GenerationTurnRepository {
+  transaction<T>(datasetId: string, operation: (tx: {
+    appendUserMessage(message: { id: string; threadId: string; content: string; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
+    appendAssistantMessage(message: { id: string; threadId: string; content: string; status: "generating"; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
+    transitionAssistantMessage(messageId: string, status: "completed" | "failed" | "cancelled", content?: string): Promise<unknown>;
+    saveGenerationDelivery(delivery: { clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }): Promise<unknown>;
+  }) => Promise<T>): Promise<T>;
+  getGenerationDelivery(clientGenerationId: string): Promise<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string } | null>;
+  listPendingGenerationDeliveries(): Promise<Array<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }>>;
+}
+
+export interface GenerationTurnInput {
+  datasetId: string;
+  userMessage: PersistedUserMessage;
+  assistantMessageId: string;
+  request: GenerationRequest;
+  idempotencyKey: string;
+  sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }>;
+  now?: () => string;
+  signal: AbortSignal;
+  onDelta?: (text: string) => void;
+  onStatus?: (status: GenerationStatus) => void;
+}
+
+export interface GenerationTurnResult {
+  accepted: GenerationAccepted;
+  snapshot: GenerationSnapshot;
+  assistantMessageId: string;
+  lastCursor: GenerationEventCursor;
+}
+
+/** Persists both sides of a conversation turn before network work; only GET completed results become durable assistant content. */
+export async function runGenerationTurn(
+  repository: GenerationTurnRepository,
+  client: ReturnType<typeof createGenerationClient>,
+  input: GenerationTurnInput,
+): Promise<GenerationTurnResult> {
+  const now = input.now ?? (() => new Date().toISOString());
+  if (input.userMessage.threadId !== input.request.thread_id || input.userMessage.id !== input.request.user_message.local_message_id) {
+    throw new GenerationProtocolError("Conversation turn message does not match generation request.");
+  }
+  // Repeated submit must reuse the durable delivery instead of appending a second pair of messages.
+  const existing = await repository.getGenerationDelivery(input.request.client_generation_id);
+  if (existing) {
+    if (existing.idempotencyKey !== input.idempotencyKey || existing.userMessageId !== input.userMessage.id || existing.assistantMessageId !== input.assistantMessageId || existing.threadId !== input.userMessage.threadId) {
+      throw new GenerationProtocolError("A generation delivery already exists with different message or idempotency identity.");
+    }
+    if (existing.status === "queued" || existing.status === "running") {
+      return recoverGenerationTurn(repository, client, { datasetId: input.datasetId, clientGenerationId: input.request.client_generation_id, request: input.request, signal: input.signal, now: input.now, onDelta: input.onDelta, onStatus: input.onStatus });
+    }
+    if (!existing.generationId) throw new GenerationProtocolError("Terminal generation delivery has no server generation identity.");
+    const snapshot = await client.get(existing.generationId);
+    const accepted: GenerationAccepted = { generation_id: existing.generationId, status: "running", expires_at: existing.expiresAt ?? snapshot.expires_at };
+    return { accepted, snapshot, assistantMessageId: existing.assistantMessageId, lastCursor: { generationId: existing.generationId, lastSequence: existing.lastSequence, lastEventId: existing.lastEventId } };
+  }
+  await repository.transaction(input.datasetId, async (tx) => {
+    await tx.appendUserMessage({ ...input.userMessage, createdAt: now(), sourceReferences: input.sourceReferences, idempotencyKey: input.idempotencyKey });
+    await tx.appendAssistantMessage({ id: input.assistantMessageId, threadId: input.userMessage.threadId, content: "", status: "generating", createdAt: now(), sourceReferences: [], idempotencyKey: input.idempotencyKey + ":assistant" });
+    await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: null, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "queued", lastSequence: 0, lastEventId: null, expiresAt: null, updatedAt: now() });
+  });
+  let accepted: GenerationAccepted;
+  try {
+    accepted = await client.create(input.request, input.idempotencyKey);
+  } catch (error) {
+    // The request may have reached the server even if the response was lost. Keep the queued receipt
+    // and retry create with the same idempotency key during recovery; do not mark an ambiguous outcome failed.
+    throw error;
+  }
+  // If this local write fails, leave the queued receipt intact. Recovery retries create with the same idempotency key.
+  await repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "running", lastSequence: 0, lastEventId: null, expiresAt: accepted.expires_at, updatedAt: now() }));
+  let cursor: GenerationEventCursor = { generationId: accepted.generation_id, lastSequence: 0, lastEventId: null };
+  let streamError: unknown = null;
+  let persistEvents = Promise.resolve();
+  try {
+    cursor = await client.stream(accepted.generation_id, cursor, input.signal, (event) => {
+      cursor = advanceGenerationEventCursor(cursor, event).cursor;
+      const eventCursor = { ...cursor };
+      const status = event.type === "started" ? "running" : event.type === "failed" ? "failed" : event.type === "cancelled" ? "cancelled" : "running";
+      persistEvents = persistEvents.then(() => repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status, lastSequence: eventCursor.lastSequence, lastEventId: eventCursor.lastEventId, expiresAt: accepted.expires_at, updatedAt: now() })));
+      if (event.type === "delta") input.onDelta?.(event.text);
+      if (event.type === "started") input.onStatus?.("running");
+      if (event.type === "failed") input.onStatus?.("failed");
+      if (event.type === "cancelled") input.onStatus?.("cancelled");
+    });
+    await persistEvents;
+  } catch (error) {
+    streamError = error;
+  }
+  try {
+    await persistEvents;
+  } catch (error) {
+    streamError ??= error;
+  }
+  if (input.signal.aborted) {
+    await client.cancel(accepted.generation_id, input.idempotencyKey + ":cancel").catch(() => undefined);
+  }
+  let snapshot: GenerationSnapshot;
+  try {
+    snapshot = await client.get(accepted.generation_id);
+  } catch (error) {
+    if (input.signal.aborted) {
+      await client.cancel(accepted.generation_id, input.idempotencyKey + ":cancel").catch(() => undefined);
+      await repository.transaction(input.datasetId, async (tx) => {
+        await tx.transitionAssistantMessage(input.assistantMessageId, "cancelled");
+        await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "cancelled", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: accepted.expires_at, updatedAt: now() });
+      });
+    }
+    throw streamError ?? error;
+  }
+  if (snapshot.status === "completed" && snapshot.result) {
+    await repository.transaction(input.datasetId, async (tx) => {
+      await tx.transitionAssistantMessage(input.assistantMessageId, "completed", snapshot.result!.content);
+      await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "completed", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
+    });
+  } else if (snapshot.status === "failed" || snapshot.status === "expired") {
+    await repository.transaction(input.datasetId, async (tx) => {
+      await tx.transitionAssistantMessage(input.assistantMessageId, "failed");
+      await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: snapshot.status, lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
+    });
+  } else if (snapshot.status === "cancelled") {
+    await repository.transaction(input.datasetId, async (tx) => {
+      await tx.transitionAssistantMessage(input.assistantMessageId, "cancelled");
+      await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "cancelled", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
+    });
+  }
+  input.onStatus?.(snapshot.status);
+  return { accepted, snapshot, assistantMessageId: input.assistantMessageId, lastCursor: cursor };
+}
+
+/** Resume a queued/running delivery after reload using its durable generation identity and SSE cursor. */
+export async function recoverGenerationTurn(
+  repository: GenerationTurnRepository,
+  client: ReturnType<typeof createGenerationClient>,
+  input: { datasetId: string; clientGenerationId: string; request: GenerationRequest; signal: AbortSignal; now?: () => string; onDelta?: (text: string) => void; onStatus?: (status: GenerationStatus) => void },
+): Promise<GenerationTurnResult> {
+  const now = input.now ?? (() => new Date().toISOString());
+  const delivery = await repository.getGenerationDelivery(input.clientGenerationId);
+  if (!delivery) throw new GenerationProtocolError("Generation delivery was not found locally.");
+  if (delivery.status !== "queued" && delivery.status !== "running") throw new GenerationProtocolError("Only queued or running generation deliveries can be resumed.");
+  if (delivery.clientGenerationId !== input.request.client_generation_id) throw new GenerationProtocolError("Recovery request does not match the persisted delivery.");
+  const accepted = delivery.generationId
+    ? { generation_id: delivery.generationId, status: "running" as const, expires_at: delivery.expiresAt ?? now() }
+    : await client.create(input.request, delivery.idempotencyKey);
+  let cursor: GenerationEventCursor = { generationId: accepted.generation_id, lastSequence: delivery.lastSequence, lastEventId: delivery.lastEventId };
+  const persist = async (status: "running" | "failed" | "cancelled", sequence: number, eventId: string | null) =>
+    repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ ...delivery, generationId: accepted.generation_id, status, lastSequence: sequence, lastEventId: eventId, expiresAt: accepted.expires_at, updatedAt: now() }));
+  await persist("running", cursor.lastSequence, cursor.lastEventId);
+  let pendingWrites = Promise.resolve();
+  try {
+    await client.stream(accepted.generation_id, cursor, input.signal, (event) => {
+      cursor = advanceGenerationEventCursor(cursor, event).cursor;
+      const status = event.type === "failed" ? "failed" : event.type === "cancelled" ? "cancelled" : "running";
+      const eventCursor = { ...cursor };
+      pendingWrites = pendingWrites.then(() => persist(status, eventCursor.lastSequence, eventCursor.lastEventId));
+      if (event.type === "delta") input.onDelta?.(event.text);
+    });
+    await pendingWrites;
+  } catch (error) {
+    await pendingWrites;
+    if (!input.signal.aborted) throw error;
+    await client.cancel(accepted.generation_id, delivery.idempotencyKey + ":cancel").catch(() => undefined);
+  }
+  const snapshot = await client.get(accepted.generation_id);
+  if (snapshot.status === "completed" && snapshot.result) {
+    await repository.transaction(input.datasetId, async (tx) => {
+      await tx.transitionAssistantMessage(delivery.assistantMessageId, "completed", snapshot.result!.content);
+      await tx.saveGenerationDelivery({ ...delivery, generationId: accepted.generation_id, status: "completed", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
+    });
+  } else if (snapshot.status === "failed" || snapshot.status === "expired" || snapshot.status === "cancelled") {
+    const messageStatus = snapshot.status === "cancelled" ? "cancelled" : "failed";
+    await repository.transaction(input.datasetId, async (tx) => {
+      await tx.transitionAssistantMessage(delivery.assistantMessageId, messageStatus);
+      await tx.saveGenerationDelivery({ ...delivery, generationId: accepted.generation_id, status: snapshot.status, lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
+    });
+  }
+  input.onStatus?.(snapshot.status);
+  return { accepted, snapshot, assistantMessageId: delivery.assistantMessageId, lastCursor: cursor };
+}

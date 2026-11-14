@@ -131,6 +131,22 @@ export interface MemoryRecord {
   updatedAt: string;
 }
 
+export type GenerationDeliveryStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "expired";
+
+export interface GenerationDeliveryRecord {
+  clientGenerationId: string;
+  generationId: string | null;
+  threadId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  idempotencyKey: string;
+  status: GenerationDeliveryStatus;
+  lastSequence: number;
+  lastEventId: string | null;
+  expiresAt: string | null;
+  updatedAt: string;
+}
+
 export interface RepositorySnapshot {
   datasetId: string;
   schemaVersion: number;
@@ -144,6 +160,7 @@ export interface RepositorySnapshot {
   memories: MemoryRecord[];
   memoryVersions: MemoryVersion[];
   memoryRelations: MemoryRelation[];
+  generationDeliveries: GenerationDeliveryRecord[];
 }
 
 /**
@@ -181,6 +198,7 @@ export interface LocalRepositoryTransaction {
   createConsistentSnapshot(): Promise<RepositorySnapshot>;
   /** Acknowledge only the exact snapshot sequence accepted by remote backup; later writes remain dirty. */
   acknowledgeBackup(snapshotSequence: number, backupId: string, backedUpAt: string): Promise<void>;
+  saveGenerationDelivery(delivery: GenerationDeliveryRecord): Promise<GenerationDeliveryRecord>;
 }
 
 /**
@@ -191,8 +209,14 @@ export interface LocalRepository {
   readonly adapterName: string;
   readonly schemaVersion: number;
   transaction<T>(datasetId: string, operation: (tx: LocalRepositoryTransaction) => Promise<T>): Promise<T>;
+  /** Read a transactionally consistent export snapshot without acknowledging it as backed up. */
+  createConsistentSnapshot(datasetId: string): Promise<RepositorySnapshot>;
+  /** Acknowledge only after the remote encrypted backup has durably accepted this snapshot. */
+  acknowledgeBackup(datasetId: string, snapshotSequence: number, backupId: string, backedUpAt: string): Promise<void>;
   getDataSet(datasetId: string): Promise<LocalDataSet | null>;
   getMessages(datasetId: string, threadId: string, afterSequence?: number): Promise<PersistedMessage[]>;
+  getGenerationDelivery(datasetId: string, clientGenerationId: string): Promise<GenerationDeliveryRecord | null>;
+  listPendingGenerationDeliveries(datasetId: string): Promise<GenerationDeliveryRecord[]>;
   getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]>;
   getMemoryRelations(datasetId: string, versionId: string): Promise<MemoryRelation[]>;
   close(): Promise<void>;
@@ -218,6 +242,32 @@ export function createAgentUserMessageRepository(
   };
 }
 
+/** Narrow backup port: upload the returned immutable snapshot, then acknowledge that exact sequence only after remote success. */
+export interface RepositoryBackupPort {
+  createSnapshot(): Promise<RepositorySnapshot>;
+  acknowledgeUploadedSnapshot(snapshot: RepositorySnapshot, backupId: string, backedUpAt: string): Promise<void>;
+}
+
+export function createRepositoryBackupPort(
+  repository: Pick<LocalRepository, "createConsistentSnapshot" | "acknowledgeBackup">,
+  datasetId: string,
+): RepositoryBackupPort {
+  return {
+    createSnapshot() {
+      return repository.createConsistentSnapshot(datasetId);
+    },
+    acknowledgeUploadedSnapshot(snapshot, backupId, backedUpAt) {
+      if (snapshot.datasetId !== datasetId) {
+        throw new RepositoryError("DATASET_NOT_FOUND", "Backup snapshot does not belong to the bound local dataset.");
+      }
+      if (!Number.isSafeInteger(snapshot.dirtySequence) || snapshot.dirtySequence < 0) {
+        throw new RepositoryError("INTEGRITY_FAILED", "Backup snapshot sequence is invalid.");
+      }
+      return repository.acknowledgeBackup(datasetId, snapshot.dirtySequence, backupId, backedUpAt);
+    },
+  };
+}
+
 /** Validate persisted dataset sequence metadata before exposing a dataset as writable. */
 export function assertDataSetSequenceInvariant(dataSet: LocalDataSet): void {
   if (!Number.isSafeInteger(dataSet.schemaVersion) || dataSet.schemaVersion < 1) {
@@ -234,4 +284,28 @@ export function assertDataSetSequenceInvariant(dataSet: LocalDataSet): void {
       "Local dataset must satisfy dirtySequence >= lastAckedSequence >= 0.",
     );
   }
+}
+
+/** Structural adapter for the Agent turn orchestrator; both messages commit atomically before network work. */
+export function createAgentGenerationTurnRepository(
+  repository: Pick<LocalRepository, "transaction" | "getGenerationDelivery" | "listPendingGenerationDeliveries">,
+  datasetId: string,
+) {
+  return {
+    transaction<T>(id: string, operation: (tx: {
+      appendUserMessage(message: NewUserMessage): Promise<PersistedMessage>;
+      appendAssistantMessage(message: NewAssistantMessage): Promise<PersistedMessage>;
+      transitionAssistantMessage(messageId: string, status: AssistantMessageStatus, content?: string): Promise<AssistantMessage>;
+      saveGenerationDelivery(delivery: GenerationDeliveryRecord): Promise<GenerationDeliveryRecord>;
+    }) => Promise<T>): Promise<T> {
+      if (id !== datasetId) throw new RepositoryError("DATASET_NOT_FOUND", "Agent turn dataset does not match the bound local dataset.");
+      return repository.transaction(datasetId, (tx) => operation(tx));
+    },
+    getGenerationDelivery(clientGenerationId: string) {
+      return repository.getGenerationDelivery(datasetId, clientGenerationId);
+    },
+    listPendingGenerationDeliveries() {
+      return repository.listPendingGenerationDeliveries(datasetId);
+    },
+  };
 }

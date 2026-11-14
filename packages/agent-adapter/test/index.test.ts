@@ -6,6 +6,7 @@ import {
   authoritativeFinalResult,
   createGenerationClient,
   persistUserMessageBeforeGeneration,
+  runGenerationTurn,
   validateGenerationAccepted,
   validateGenerationRequest,
   validateGenerationSnapshot,
@@ -194,4 +195,95 @@ test("rejects malformed result payloads and non-object relevant memory", () => {
     ...request,
     context: { ...request.context, relevant_memory: ["not-an-object"] as unknown as Array<Record<string, unknown>> },
   }), GenerationProtocolError);
+});
+
+function memoryTurnRepository() {
+  const messages = new Map<string, { status: string; content: string }>();
+  const deliveries = new Map<string, any>();
+  let appendUserCount = 0;
+  let appendAssistantCount = 0;
+  const repository = {
+    async transaction(_datasetId: string, operation: (tx: any) => Promise<unknown>) {
+      return operation({
+        async appendUserMessage(message: { id: string }) { appendUserCount += 1; return { message }; },
+        async appendAssistantMessage(message: { id: string; content: string; status: string }) {
+          appendAssistantCount += 1;
+          messages.set(message.id, { status: message.status, content: message.content });
+          return { message };
+        },
+        async transitionAssistantMessage(id: string, status: string, content = "") {
+          messages.set(id, { status, content });
+          return { id, status, content };
+        },
+        async saveGenerationDelivery(delivery: any) {
+          deliveries.set(delivery.clientGenerationId, { ...delivery });
+          return delivery;
+        },
+      });
+    },
+    async getGenerationDelivery(id: string) { return deliveries.get(id) ?? null; },
+    async listPendingGenerationDeliveries() { return [...deliveries.values()].filter((d) => d.status === "queued" || d.status === "running"); },
+    get counts() { return { appendUserCount, appendAssistantCount }; },
+    messages,
+    deliveries,
+  };
+  return repository;
+}
+
+test("generation turn persists authoritative result and repeated submit reuses the same delivery", async () => {
+  const repository = memoryTurnRepository();
+  const calls = { create: 0, get: 0, stream: 0 };
+  const client = createGenerationClient({
+    async createGeneration() { calls.create += 1; return accepted; },
+    async getGeneration() {
+      calls.get += 1;
+      return { generation_id: accepted.generation_id, status: "completed", expires_at: accepted.expires_at, result: { content: "权威最终内容" } };
+    },
+    async cancelGeneration() { return { ...accepted, status: "cancel_requested" }; },
+    async streamEvents(_id, _after, _signal, onEvent) {
+      calls.stream += 1;
+      onEvent({ event_id: accepted.generation_id + ":1", generation_id: accepted.generation_id, sequence: 1, type: "started" });
+      onEvent({ event_id: accepted.generation_id + ":2", generation_id: accepted.generation_id, sequence: 2, type: "delta", text: "临时流" });
+    },
+  });
+  const input = {
+    datasetId: "dataset-01",
+    userMessage: { id: request.user_message.local_message_id, threadId: request.thread_id, content: request.user_message.content },
+    assistantMessageId: "assistant-message-0001",
+    request,
+    idempotencyKey: "idempotency-key-0001",
+    sourceReferences: [],
+    signal: new AbortController().signal,
+  };
+  const first = await runGenerationTurn(repository as any, client, input);
+  assert.equal(first.snapshot.result?.content, "权威最终内容");
+  assert.deepEqual(repository.messages.get(input.assistantMessageId), { status: "completed", content: "权威最终内容" });
+  assert.equal(repository.deliveries.get(request.client_generation_id).lastSequence, 2);
+  const second = await runGenerationTurn(repository as any, client, input);
+  assert.equal(second.snapshot.result?.content, "权威最终内容");
+  assert.deepEqual(repository.counts, { appendUserCount: 1, appendAssistantCount: 1 });
+  assert.deepEqual(calls, { create: 1, get: 2, stream: 1 });
+});
+
+test("ambiguous create failure leaves a queued receipt for idempotent recovery", async () => {
+  const repository = memoryTurnRepository();
+  const client = createGenerationClient({
+    async createGeneration() { throw new Error("connection lost after request"); },
+    async getGeneration() { throw new Error("not reached"); },
+    async cancelGeneration() { return { ...accepted, status: "cancel_requested" }; },
+    async streamEvents() {},
+  });
+  const input = {
+    datasetId: "dataset-01",
+    userMessage: { id: request.user_message.local_message_id, threadId: request.thread_id, content: request.user_message.content },
+    assistantMessageId: "assistant-message-0002",
+    request,
+    idempotencyKey: "idempotency-key-0002",
+    sourceReferences: [],
+    signal: new AbortController().signal,
+  };
+  await assert.rejects(() => runGenerationTurn(repository as any, client, input), /connection lost/);
+  assert.equal(repository.deliveries.get(request.client_generation_id).status, "queued");
+  assert.equal(repository.messages.get(input.assistantMessageId).status, "generating");
+  assert.deepEqual(repository.counts, { appendUserCount: 1, appendAssistantCount: 1 });
 });
