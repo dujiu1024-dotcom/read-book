@@ -828,61 +828,7 @@ components:
         schemaVersion: { type: integer, minimum: 1 }
         cipherSuite: { type: string, const: AES-256-GCM }
         keyVersion: { type: integer, minimum: 1 }
-        ciphertextHash: { type: string, pattern: '^[a-fA-F0-9]{64}      type: object
-      required: [dataset_id, backup_id, backup_sequence, backup_type, schema_version, cipher_suite, key_version, ciphertext_size, ciphertext_hash, part_count, client_manifest]
-      properties:
-        dataset_id: { type: string, format: uuid }
-        backup_id: { type: string, format: uuid }
-        backup_sequence: { type: integer, minimum: 1 }
-        parent_backup_id: { type: [string, 'null'], format: uuid }
-        backup_type: { type: string, enum: [full, incremental] }
-        schema_version: { type: integer, minimum: 1 }
-        cipher_suite: { type: string, const: AES-256-GCM }
-        key_version: { type: integer, minimum: 1 }
-        ciphertext_size: { type: integer, minimum: 1 }
-        ciphertext_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
-        part_count: { type: integer, minimum: 1, maximum: 10000 }
-        client_manifest: { $ref: '#/components/schemas/BackupClientManifest' }
-    BackupUploadSession:
-      type: object
-      required: [backup_id, status, upload_expires_at, part_size_limit, received_parts]
-      properties:
-        backup_id: { type: string, format: uuid }
-        status: { type: string, enum: [open, completing, completed, expired, rejected] }
-        upload_expires_at: { type: string, format: date-time }
-        part_size_limit: { type: integer, minimum: 1 }
-        received_parts:
-          type: array
-          items: { type: integer, minimum: 0 }
-    BackupRecord:
-      type: object
-      required: [backup_id, dataset_id, backup_sequence, backup_type, schema_version, ciphertext_hash, ciphertext_size, created_at, status, client_manifest]
-      properties:
-        backup_id: { type: string, format: uuid }
-        dataset_id: { type: string, format: uuid }
-        backup_sequence: { type: integer }
-        parent_backup_id: { type: [string, 'null'], format: uuid }
-        backup_type: { type: string, enum: [full, incremental] }
-        schema_version: { type: integer }
-        ciphertext_hash: { type: string }
-        ciphertext_size: { type: integer }
-        created_at: { type: string, format: date-time }
-        status: { type: string, const: committed }
-        client_manifest: { $ref: '#/components/schemas/BackupClientManifest' }
-    ApiError:
-      type: object
-      required: [error, request_id]
-      properties:
-        error:
-          type: object
-          required: [code, message, retryable]
-          properties:
-            code: { type: string }
-            message: { type: string }
-            retryable: { type: boolean }
-            details: { type: [object, 'null'], additionalProperties: true }
-        request_id: { type: string, format: uuid }
- }
+        ciphertextHash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
         ciphertextSize: { type: integer, minimum: 1 }
         plaintextBytes: { type: integer, minimum: 1 }
         partCount: { type: integer, minimum: 1, maximum: 10000 }
@@ -896,61 +842,7 @@ components:
             properties:
               index: { type: integer, minimum: 0 }
               nonce: { type: string, minLength: 1 }
-              sha256: { type: string, pattern: '^[a-fA-F0-9]{64}      type: object
-      required: [dataset_id, backup_id, backup_sequence, backup_type, schema_version, cipher_suite, key_version, ciphertext_size, ciphertext_hash, part_count, client_manifest]
-      properties:
-        dataset_id: { type: string, format: uuid }
-        backup_id: { type: string, format: uuid }
-        backup_sequence: { type: integer, minimum: 1 }
-        parent_backup_id: { type: [string, 'null'], format: uuid }
-        backup_type: { type: string, enum: [full, incremental] }
-        schema_version: { type: integer, minimum: 1 }
-        cipher_suite: { type: string, const: AES-256-GCM }
-        key_version: { type: integer, minimum: 1 }
-        ciphertext_size: { type: integer, minimum: 1 }
-        ciphertext_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
-        part_count: { type: integer, minimum: 1, maximum: 10000 }
-        client_manifest: { $ref: '#/components/schemas/BackupClientManifest' }
-    BackupUploadSession:
-      type: object
-      required: [backup_id, status, upload_expires_at, part_size_limit, received_parts]
-      properties:
-        backup_id: { type: string, format: uuid }
-        status: { type: string, enum: [open, completing, completed, expired, rejected] }
-        upload_expires_at: { type: string, format: date-time }
-        part_size_limit: { type: integer, minimum: 1 }
-        received_parts:
-          type: array
-          items: { type: integer, minimum: 0 }
-    BackupRecord:
-      type: object
-      required: [backup_id, dataset_id, backup_sequence, backup_type, schema_version, ciphertext_hash, ciphertext_size, created_at, status, client_manifest]
-      properties:
-        backup_id: { type: string, format: uuid }
-        dataset_id: { type: string, format: uuid }
-        backup_sequence: { type: integer }
-        parent_backup_id: { type: [string, 'null'], format: uuid }
-        backup_type: { type: string, enum: [full, incremental] }
-        schema_version: { type: integer }
-        ciphertext_hash: { type: string }
-        ciphertext_size: { type: integer }
-        created_at: { type: string, format: date-time }
-        status: { type: string, const: committed }
-        client_manifest: { $ref: '#/components/schemas/BackupClientManifest' }
-    ApiError:
-      type: object
-      required: [error, request_id]
-      properties:
-        error:
-          type: object
-          required: [code, message, retryable]
-          properties:
-            code: { type: string }
-            message: { type: string }
-            retryable: { type: boolean }
-            details: { type: [object, 'null'], additionalProperties: true }
-        request_id: { type: string, format: uuid }
- }
+              sha256: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
               byteLength: { type: integer, minimum: 1 }
         keyEnvelope:
           type: object
