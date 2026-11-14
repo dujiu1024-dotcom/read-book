@@ -12,12 +12,14 @@ import {
 function snapshot(sequence, text) {
   return {
     datasetId: "dataset-1",
-    schemaVersion: 4,
+    schemaVersion: 6,
     dirtySequence: sequence,
     threads: [{ id: "thread-1", datasetId: "dataset-1", bookRevisionId: "book-1", createdAt: "2026-11-14T00:00:00.000Z" }],
     messages: [{ message: { id: "message-1", threadId: "thread-1", role: "user", content: text, status: "saved", createdAt: "2026-11-14T00:00:00.000Z", sourceReferences: [] }, sequence: sequence, idempotencyKey: null }],
     readingRounds: [],
     readingPositions: [{ threadId: "thread-1", mainlineNodeId: "node-1", displayedNodeId: "node-1", viewMode: "mainline", currentUnitDiscussed: true, updatedAt: "2026-11-14T00:00:00.000Z" }],
+    presentedSources: [],
+    readingUnitProgress: [],
     citations: [], notes: [], memories: [], memoryVersions: [], memoryRelations: [], memoryCandidates: [], generationDeliveries: [],
   };
 }
