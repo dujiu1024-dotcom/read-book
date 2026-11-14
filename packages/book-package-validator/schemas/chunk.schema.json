@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://read-book.local/schemas/chunk.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["chunk_id", "chapter_id", "chapter_title", "order_index", "content", "content_sha256", "locator_type", "start_locator", "end_locator", "parser_version", "chunker_version"],
+  "properties": {
+    "chunk_id": { "type": "string", "minLength": 1 },
+    "chapter_id": { "type": "string", "minLength": 1 },
+    "chapter_title": { "type": "string", "minLength": 1 },
+    "order_index": { "type": "integer", "minimum": 0 },
+    "content": { "type": "string", "minLength": 1 },
+    "content_sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+    "locator_type": { "enum": ["epub_cfi", "text_anchor", "pdf_page_text", "txt_offset", "paragraph_offset", "custom"] },
+    "start_locator": { "type": "string", "minLength": 1 },
+    "end_locator": { "type": "string", "minLength": 1 },
+    "page_number": { "type": ["integer", "null"], "minimum": 1 },
+    "paragraph_start": { "type": ["integer", "null"], "minimum": 0 },
+    "paragraph_end": { "type": ["integer", "null"], "minimum": 0 },
+    "parser_version": { "type": "string", "minLength": 1 },
+    "chunker_version": { "type": "string", "minLength": 1 }
+  }
+}

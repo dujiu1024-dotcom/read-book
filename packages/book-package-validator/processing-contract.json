@@ -1,0 +1,368 @@
+{
+  "contract_version": "1.0.0",
+  "revision_states": [
+    "uploaded",
+    "validating_package",
+    "queued",
+    "processing",
+    "quality_check",
+    "accepted",
+    "pending_rights_review",
+    "publishable",
+    "published",
+    "rejected",
+    "retryable_failed",
+    "failed",
+    "needs_rework"
+  ],
+  "attempt_states": [
+    "queued",
+    "running",
+    "succeeded",
+    "retryable_failed",
+    "failed",
+    "cancelled"
+  ],
+  "stages": [
+    {
+      "stage": "package_inspection",
+      "depends_on": [],
+      "retry_scope": [
+        "package_inspection"
+      ]
+    },
+    {
+      "stage": "source_verification",
+      "depends_on": [
+        "package_inspection"
+      ],
+      "retry_scope": [
+        "source_verification"
+      ]
+    },
+    {
+      "stage": "metadata_normalization",
+      "depends_on": [
+        "source_verification"
+      ],
+      "retry_scope": [
+        "metadata_normalization",
+        "parse",
+        "normalize",
+        "structure",
+        "chunk",
+        "embedding",
+        "index_build",
+        "quality_check"
+      ]
+    },
+    {
+      "stage": "parse",
+      "depends_on": [
+        "source_verification"
+      ],
+      "retry_scope": [
+        "parse",
+        "normalize",
+        "structure",
+        "chunk",
+        "embedding",
+        "index_build",
+        "quality_check"
+      ]
+    },
+    {
+      "stage": "normalize",
+      "depends_on": [
+        "parse"
+      ],
+      "retry_scope": [
+        "normalize",
+        "structure",
+        "chunk",
+        "embedding",
+        "index_build",
+        "quality_check"
+      ]
+    },
+    {
+      "stage": "structure",
+      "depends_on": [
+        "normalize"
+      ],
+      "retry_scope": [
+        "structure",
+        "chunk",
+        "embedding",
+        "index_build",
+        "quality_check"
+      ]
+    },
+    {
+      "stage": "chunk",
+      "depends_on": [
+        "structure"
+      ],
+      "retry_scope": [
+        "chunk",
+        "embedding",
+        "index_build",
+        "quality_check"
+      ]
+    },
+    {
+      "stage": "embedding",
+      "depends_on": [
+        "chunk"
+      ],
+      "retry_scope": [
+        "embedding",
+        "index_build",
+        "quality_check"
+      ]
+    },
+    {
+      "stage": "index_build",
+      "depends_on": [
+        "embedding"
+      ],
+      "retry_scope": [
+        "index_build",
+        "quality_check"
+      ]
+    },
+    {
+      "stage": "quality_check",
+      "depends_on": [
+        "index_build"
+      ],
+      "retry_scope": [
+        "quality_check"
+      ]
+    },
+    {
+      "stage": "rights_review",
+      "depends_on": [
+        "quality_check"
+      ],
+      "retry_scope": [
+        "rights_review"
+      ]
+    },
+    {
+      "stage": "publish",
+      "depends_on": [
+        "rights_review"
+      ],
+      "retry_scope": [
+        "publish"
+      ]
+    }
+  ],
+  "revision_transitions": [
+    {
+      "from": "uploaded",
+      "to": "validating_package"
+    },
+    {
+      "from": "validating_package",
+      "to": "queued"
+    },
+    {
+      "from": "validating_package",
+      "to": "rejected"
+    },
+    {
+      "from": "validating_package",
+      "to": "retryable_failed"
+    },
+    {
+      "from": "queued",
+      "to": "processing"
+    },
+    {
+      "from": "processing",
+      "to": "quality_check"
+    },
+    {
+      "from": "processing",
+      "to": "retryable_failed"
+    },
+    {
+      "from": "processing",
+      "to": "failed"
+    },
+    {
+      "from": "processing",
+      "to": "needs_rework"
+    },
+    {
+      "from": "quality_check",
+      "to": "accepted"
+    },
+    {
+      "from": "quality_check",
+      "to": "needs_rework"
+    },
+    {
+      "from": "quality_check",
+      "to": "rejected"
+    },
+    {
+      "from": "quality_check",
+      "to": "retryable_failed"
+    },
+    {
+      "from": "accepted",
+      "to": "pending_rights_review"
+    },
+    {
+      "from": "pending_rights_review",
+      "to": "publishable"
+    },
+    {
+      "from": "pending_rights_review",
+      "to": "rejected"
+    },
+    {
+      "from": "pending_rights_review",
+      "to": "needs_rework"
+    },
+    {
+      "from": "publishable",
+      "to": "published"
+    },
+    {
+      "from": "needs_rework",
+      "to": "queued"
+    },
+    {
+      "from": "needs_rework",
+      "to": "retryable_failed"
+    },
+    {
+      "from": "retryable_failed",
+      "to": "queued"
+    },
+    {
+      "from": "retryable_failed",
+      "to": "failed"
+    }
+  ],
+  "attempt_transitions": [
+    {
+      "from": "queued",
+      "to": "running"
+    },
+    {
+      "from": "queued",
+      "to": "cancelled"
+    },
+    {
+      "from": "running",
+      "to": "succeeded"
+    },
+    {
+      "from": "running",
+      "to": "retryable_failed"
+    },
+    {
+      "from": "running",
+      "to": "failed"
+    },
+    {
+      "from": "running",
+      "to": "cancelled"
+    },
+    {
+      "from": "retryable_failed",
+      "to": "queued"
+    },
+    {
+      "from": "retryable_failed",
+      "to": "failed"
+    },
+    {
+      "from": "retryable_failed",
+      "to": "cancelled"
+    }
+  ],
+  "idempotency": {
+    "package_identity": "package_id + source.sha256",
+    "attempt_identity": "revision_id + stage + input_hash + stage_config_hash",
+    "retry_behavior": "Reuse a succeeded stage output only when both input_hash and stage_config_hash are unchanged; otherwise create a new attempt and invalidate downstream stages."
+  },
+  "acceptance_gates": [
+    {
+      "gate_id": "package_schema_valid",
+      "required": true,
+      "applies_to": [
+        "accept",
+        "publish"
+      ],
+      "criteria": "Manifest and every referenced artifact pass the package schema validator."
+    },
+    {
+      "gate_id": "source_integrity_verified",
+      "required": true,
+      "applies_to": [
+        "accept",
+        "publish"
+      ],
+      "criteria": "Original source size and SHA-256 match the manifest."
+    },
+    {
+      "gate_id": "chapter_tree_valid",
+      "required": true,
+      "applies_to": [
+        "accept",
+        "publish"
+      ],
+      "criteria": "Chapter IDs, parent references, sibling order and parent graph are valid."
+    },
+    {
+      "gate_id": "chunk_references_valid",
+      "required": true,
+      "applies_to": [
+        "accept",
+        "publish"
+      ],
+      "criteria": "Every chunk references an existing chapter and has a stable source locator."
+    },
+    {
+      "gate_id": "content_hashes_valid",
+      "required": true,
+      "applies_to": [
+        "accept",
+        "publish"
+      ],
+      "criteria": "Chunk and asset content hashes match their bytes."
+    },
+    {
+      "gate_id": "quality_policy_passed",
+      "required": true,
+      "applies_to": [
+        "accept",
+        "publish"
+      ],
+      "criteria": "Deployment-owned OCR, parsing, structure and retrieval policy passes; numeric thresholds are versioned by the deployment and are not invented by package schema."
+    },
+    {
+      "gate_id": "rights_review_approved",
+      "required": true,
+      "applies_to": [
+        "publish"
+      ],
+      "criteria": "Authorized rights review explicitly approves publication."
+    },
+    {
+      "gate_id": "embeddings_ready",
+      "required": false,
+      "applies_to": [
+        "accept",
+        "publish"
+      ],
+      "criteria": "When an embedding artifact is supplied, its model metadata, vector hash and chunk references are valid."
+    }
+  ]
+}

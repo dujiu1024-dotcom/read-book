@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://read-book.local/schemas/embedding-manifest.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["embedding_model", "embedding_model_version", "embedding_dimension", "normalization", "distance_metric", "preprocessing_version", "chunk_ids", "vector_file", "sha256"],
+  "properties": {
+    "embedding_model": { "type": "string", "minLength": 1 },
+    "embedding_model_version": { "type": "string", "minLength": 1 },
+    "embedding_dimension": { "type": "integer", "minimum": 1 },
+    "normalization": { "enum": ["none", "l2"] },
+    "distance_metric": { "enum": ["cosine", "dot", "euclidean"] },
+    "preprocessing_version": { "type": "string", "minLength": 1 },
+    "chunk_ids": { "type": "array", "uniqueItems": true, "minItems": 1, "items": { "type": "string" } },
+    "vector_file": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+  }
+}
