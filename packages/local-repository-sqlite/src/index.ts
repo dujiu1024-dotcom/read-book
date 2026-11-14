@@ -15,7 +15,7 @@ import {
   type GenerationDeliveryRecord,
   type MemoryCandidateRecord,
 } from "../../local-repository-contract/src/index.ts";
-import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, MemoryRelation } from "../../domain-core/src/index.ts";
+import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, MemoryRelation, SourceReference } from "../../domain-core/src/index.ts";
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
@@ -92,8 +92,8 @@ export class SqliteOpfsRepository implements LocalRepository {
         createThread: (thread) => call("createThread", { thread }),
         appendUserMessage: (message: NewUserMessage) => call("appendUserMessage", { message }),
         appendAssistantMessage: (message: NewAssistantMessage) => call("appendAssistantMessage", { message }),
-        transitionAssistantMessage: (messageId: string, status: AssistantMessageStatus, content?: string) =>
-          call("transitionAssistantMessage", { messageId, status, content }),
+        transitionAssistantMessage: (messageId: string, status: AssistantMessageStatus, content?: string, sourceReferences?: SourceReference[]) =>
+          call("transitionAssistantMessage", { messageId, status, content, sourceReferences }),
         createReadingRound: (round: ReadingRoundRecord) => call("createReadingRound", { round }),
         saveReadingPosition: (position: ReadingPositionRecord) => call("saveReadingPosition", { position }),
         saveCitation: (citation: CitationRecord) => call("saveCitation", { citation }),

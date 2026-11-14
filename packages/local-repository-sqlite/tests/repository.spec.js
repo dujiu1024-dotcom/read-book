@@ -448,3 +448,33 @@ test("restores a verified snapshot only into an empty dataset and preserves the 
   expect(result.overwriteRejected).toBe(true);
   expect(result.afterRejectedRestore.messages).toHaveLength(1);
 });
+
+
+test("SQLite OPFS persists verified Assistant source references on completion", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    const assistantId = "99999999-9999-4999-8999-999999999999";
+    const nodeId = "88888888-8888-4888-8888-888888888888";
+    const references = [{ bookRevisionId: ids.revision, structureNodeId: nodeId, locator: "epubcfi(/6/4!/4/2)" }];
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({ id: ids.threadId, datasetId: ids.datasetA, bookRevisionId: ids.revision, createdAt: "2026-11-14T00:00:00.000Z" });
+      await tx.appendAssistantMessage({
+        id: assistantId, threadId: ids.threadId, content: "", status: "generating",
+        createdAt: "2026-11-14T00:00:01.000Z", sourceReferences: []
+      });
+      await tx.transitionAssistantMessage(assistantId, "completed", "有来源的最终回答", references);
+    });
+    const messages = await repository.getMessages(ids.datasetA, ids.threadId);
+    await repository.close();
+    return messages[0].message;
+  }, { datasetA, revision, threadId });
+  expect(result.status).toBe("completed");
+  expect(result.content).toBe("有来源的最终回答");
+  expect(result.sourceReferences).toEqual([{
+    bookRevisionId: revision,
+    structureNodeId: "88888888-8888-4888-8888-888888888888",
+    locator: "epubcfi(/6/4!/4/2)"
+  }]);
+});

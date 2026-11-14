@@ -27,9 +27,17 @@ export interface GenerationAccepted {
   expires_at: string;
 }
 
+export interface GenerationCitation {
+  book_revision_id: string;
+  structure_node_id: string;
+  locator: string;
+  excerpt?: string;
+}
+
 export interface GenerationResult {
   content: string;
   content_hash?: string;
+  citations?: GenerationCitation[];
   usage?: Record<string, unknown> | null;
 }
 
@@ -193,9 +201,29 @@ export function validateGenerationSnapshot(value: unknown): GenerationSnapshot {
     if (typeof raw.content !== "string") {
       throw new GenerationProtocolError("Generation result content must be a string.");
     }
+    let citations: GenerationCitation[] | undefined;
+    if (raw.citations !== undefined) {
+      if (!Array.isArray(raw.citations) || raw.citations.length > 20) {
+        throw new GenerationProtocolError("Generation result citations must be an array with at most 20 items.");
+      }
+      citations = raw.citations.map((value, index) => {
+        const citation = record(value);
+        const excerpt = citation.excerpt;
+        if (excerpt !== undefined && (typeof excerpt !== "string" || excerpt.length > 2000)) {
+          throw new GenerationProtocolError("Generation citation excerpt must be a string up to 2000 characters.");
+        }
+        return {
+          book_revision_id: requiredUuid(citation.book_revision_id, "result.citations[" + index + "].book_revision_id"),
+          structure_node_id: requiredUuid(citation.structure_node_id, "result.citations[" + index + "].structure_node_id"),
+          locator: boundedString(citation.locator, "result.citations[" + index + "].locator", 1, 512),
+          ...(typeof excerpt === "string" ? { excerpt } : {}),
+        };
+      });
+    }
     result = {
       content: raw.content,
       ...(typeof raw.content_hash === "string" ? { content_hash: raw.content_hash } : {}),
+      ...(citations ? { citations } : {}),
       ...(raw.usage === undefined ? {} : { usage: raw.usage as Record<string, unknown> | null }),
     };
   }
@@ -341,7 +369,7 @@ export interface GenerationTurnRepository {
   transaction<T>(datasetId: string, operation: (tx: {
     appendUserMessage(message: { id: string; threadId: string; content: string; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
     appendAssistantMessage(message: { id: string; threadId: string; content: string; status: "generating"; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
-    transitionAssistantMessage(messageId: string, status: "completed" | "failed" | "cancelled", content?: string): Promise<unknown>;
+    transitionAssistantMessage(messageId: string, status: "completed" | "failed" | "cancelled", content?: string, sourceReferences?: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }>): Promise<unknown>;
     saveGenerationDelivery(delivery: { clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }): Promise<unknown>;
   }) => Promise<T>): Promise<T>;
   getGenerationDelivery(clientGenerationId: string): Promise<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string } | null>;
@@ -455,7 +483,7 @@ export async function runGenerationTurn(
   }
   if (snapshot.status === "completed" && snapshot.result) {
     await repository.transaction(input.datasetId, async (tx) => {
-      await tx.transitionAssistantMessage(input.assistantMessageId, "completed", snapshot.result!.content);
+      await tx.transitionAssistantMessage(input.assistantMessageId, "completed", snapshot.result!.content, verifiedGenerationSourceReferences(snapshot.result!, input.request));
       await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: accepted.generation_id, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "completed", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
     });
   } else if (snapshot.status === "failed" || snapshot.status === "expired") {
@@ -509,7 +537,7 @@ export async function recoverGenerationTurn(
   const snapshot = await client.get(accepted.generation_id);
   if (snapshot.status === "completed" && snapshot.result) {
     await repository.transaction(input.datasetId, async (tx) => {
-      await tx.transitionAssistantMessage(delivery.assistantMessageId, "completed", snapshot.result!.content);
+      await tx.transitionAssistantMessage(delivery.assistantMessageId, "completed", snapshot.result!.content, verifiedGenerationSourceReferences(snapshot.result!, input.request));
       await tx.saveGenerationDelivery({ ...delivery, generationId: accepted.generation_id, status: "completed", lastSequence: cursor.lastSequence, lastEventId: cursor.lastEventId, expiresAt: snapshot.expires_at, updatedAt: now() });
     });
   } else if (snapshot.status === "failed" || snapshot.status === "expired" || snapshot.status === "cancelled") {

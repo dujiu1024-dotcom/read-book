@@ -233,6 +233,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
           onMemoryError(error) { setGenerationStatus("回复已保存，但自动认知抽取失败：" + error.message); },
         });
         assistantText.textContent = result.snapshot.result?.content || assistantText.textContent;
+        await refreshPersistedMessages();
         // Do not infer an Assistant citation from the user's current reading position.
         // Only persisted, service-verified sourceReferences may render a citation card.
         state.discussed = true;
