@@ -1,0 +1,48 @@
+name: Agent RAG evaluation harness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-rag-evaluation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate-harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run dataset and evaluator tests
+        run: |
+          mkdir -p artifacts
+          python -m unittest discover -s eval/agent-rag -p 'test_*.py' -v 2>&1 | tee artifacts/agent-rag-tests.txt
+      - name: Run deterministic mock retrieval smoke baseline
+        run: |
+          python eval/agent-rag/mock_adapter.py \
+            --corpus eval/agent-rag/fixtures/corpus.jsonl \
+            --questions eval/agent-rag/fixtures/questions.jsonl \
+            --output artifacts/mock-predictions.jsonl \
+            --top-k 3
+          python eval/agent-rag/evaluator.py evaluate \
+            --corpus eval/agent-rag/fixtures/corpus.jsonl \
+            --questions eval/agent-rag/fixtures/questions.jsonl \
+            --predictions artifacts/mock-predictions.jsonl \
+            --output artifacts/mock-evaluation-report.json \
+            -k 3
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-rag-evaluation-harness-report
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
