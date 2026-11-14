@@ -124,7 +124,7 @@ item_type：key_point / concept / author_claim / argument / evidence / case / cr
 
 ### 3.2 AccountDataSetBinding（本地绑定上下文）
 
-字段：id UUID PK；account_id TEXT NOT NULL；local_dataset_id UUID NOT NULL FK；binding_status TEXT NOT NULL（active / inactive / revoked）；bound_at TIMESTAMP NOT NULL；last_selected_at TIMESTAMP NULL。
+字段：id UUID PK；account_id TEXT NOT NULL；local_dataset_id UUID NOT NULL FK；binding_status TEXT NOT NULL（active / inactive / revoked）；bound_at TIMESTAMP NOT NULL；last_selected_at TIMESTAMP NULL。\n\naccount_id 使用 TEXT 保存外部身份映射键，不直接假设各登录 Provider 的 subject 都是 UUID；服务端 Account 主键仍为 UUID，两者通过 ExternalIdentity 关联。
 
 约束：同一数据集最多一个 active account binding；同一账号可有多个历史绑定，但用户必须显式选择。切换账号不得自动选择其他账号的数据集。该表只表达当前设备上的显式关联，不授予跨账号云端恢复权。
 
@@ -256,11 +256,17 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 
 约束：cleared 为不可逆状态；普通账号登录、数据修复、备份上传或授权流程不得恢复 active。所有下载、恢复、重新关联、上传完成和授权签发路径都必须先检查该状态。
 
-### 4.6 GenerationJob
+### 4.6 RecoveryChallenge
 
-字段：id UUID PK；client_generation_id TEXT NOT NULL；request_id TEXT NOT NULL；account_id UUID NOT NULL FK；status TEXT NOT NULL（queued / running / completed / failed / cancelled / expired）；created_at TIMESTAMP NOT NULL；expires_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL；result_payload_ciphertext TEXT NULL；result_hash TEXT NULL；error_code TEXT NULL。
+字段：id UUID PK；recovery_key_id_hash TEXT NOT NULL；challenge_nonce_hash TEXT NOT NULL；status TEXT NOT NULL（issued / consumed / expired）；created_at TIMESTAMP NOT NULL；expires_at TIMESTAMP NOT NULL；consumed_at TIMESTAMP NULL；failed_attempts INTEGER NOT NULL DEFAULT 0。
 
-约束：(account_id, client_generation_id) UNIQUE；短 TTL；服务端只暂存生成任务必需的输入输出，不成为 Thread/Message 历史主库。不得在通用日志中记录正文。
+约束：挑战一次性消费；同一 challenge_id 不得重复签发 BackupAuthorization；过期或已消费挑战为终态。recovery_key_id_hash 与 challenge_nonce_hash 的具体算法、是否使用带密钥摘要、失败次数阈值和保留期限由安全设计冻结；不得存储恢复凭证明文或可直接重放的 challenge proof。API 的 recovery_key_id 是外部标识，不等同恢复凭证秘密。
+
+### 4.7 GenerationJob
+
+字段：id UUID PK；client_generation_id TEXT NOT NULL；request_id TEXT NOT NULL；account_id UUID NOT NULL FK；status TEXT NOT NULL（queued / running / cancel_requested / completed / failed / cancelled / expired）；created_at TIMESTAMP NOT NULL；expires_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL；result_payload_ciphertext TEXT NULL；result_hash TEXT NULL；error_code TEXT NULL。
+
+约束：(account_id, client_generation_id) UNIQUE；短 TTL；cancel_requested 为非终态；取消与自然完成/失败竞态由服务端原子提交唯一终态。服务端只暂存生成任务必需的输入输出，不成为 Thread/Message 历史主库。不得在通用日志中记录正文。
 
 ## 5. 关键唯一约束与索引
 
