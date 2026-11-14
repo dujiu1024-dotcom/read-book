@@ -273,7 +273,7 @@ function generationSourceMap(request: GenerationRequest): Map<string, { bookRevi
       bookRevisionId: request.book_revision_id,
       structureNodeId: source.structure_node_id,
       locator: source.locator,
-      excerpt: source.excerpt.replace(/\\s+/g, " ").trim(),
+      excerpt: source.excerpt.replace(/\s+/g, " ").trim(),
     },
   ]));
 }
@@ -285,7 +285,7 @@ function citationMatchesSource(
   if (!source || citation.book_revision_id !== source.bookRevisionId ||
       citation.structure_node_id !== source.structureNodeId || citation.locator !== source.locator ||
       !citation.excerpt?.trim()) return false;
-  return source.excerpt.includes(citation.excerpt.replace(/\\s+/g, " ").trim());
+  return source.excerpt.includes(citation.excerpt.replace(/\s+/g, " ").trim());
 }
 
 export function verifiedGenerationSourceReferences(
