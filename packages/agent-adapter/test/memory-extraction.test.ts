@@ -148,3 +148,33 @@ test("persists accepted candidates only when an explicit immutable version plan 
     /Every accepted candidate needs exactly one plan/,
   );
 });
+
+
+test("memory persistence revalidates the evolution relation before writing", async () => {
+  const { persistAcceptedMemoryCandidates, MemoryExtractionError } = await import("../src/memory-extraction.ts");
+  const accepted = await runMemoryExtraction({
+    async extractStructured() { return { candidates: [candidate] }; },
+  }, { context, messages, policy, modelVersion: "mock-v1" });
+  let writes = 0;
+  const repository = {
+    async transaction(_datasetId: string, operation: (tx: any) => Promise<unknown>) {
+      return operation({
+        async appendMemoryVersion() { writes += 1; },
+        async appendMemoryRelation() { writes += 1; },
+      });
+    },
+  };
+  const previousVersion = {
+    id: "version-1", memoryId: "memory-1", version: 1, previousVersionId: null,
+    changeKind: "new" as const, content: "旧认知", sourceMessageIds: ["user-1"],
+    sourceReferences: [], createdAt: "2026-11-13T00:00:00.000Z",
+  };
+  await assert.rejects(
+    persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, [{
+      candidateId: "candidate-1", memoryId: "memory-1", version: 2,
+      previousVersionId: "version-1", previousVersion, changeKind: "conflict",
+    }]),
+    /requires a "contradicts" relation/,
+  );
+  assert.equal(writes, 0);
+});
