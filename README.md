@@ -8,20 +8,20 @@
 
 用户决定何时阅读、何时发言、何时继续。原文呈现后，Agent 等待用户表达，不主动推送问题、提醒或下一段内容。
 
-## 当前阶段（2026-11-13）
+## 当前阶段（2026-11-14）
 
 **MVP 0.1 正式开发已启动，目标是跑通“阅读原文 → 用户表达 → Agent 基于原文回应 → 自动认知沉淀 → 认知演变追溯”的完整闭环。**
 
 - PR #24 领域模型与纯规则内核已合并到 main。
 - PR #20 PC 窄屏阅读原型的 Chromium/Playwright 自动化 CI 已通过；后续以自动化视口矩阵和桌面浏览器兼容性检查验收，不要求实体手机/平板测试。
 - PR #22 Playwright iPhone/Pixel 设备配置模拟测试已通过，用于验证响应式布局与触控目标；不要求实体设备复测。
-- #1 本地存储 PoC 已有 IndexedDB 与 SQLite WASM + OPFS 对照测试；最终选型依据性能、事务/并发/故障测试及标准 Chrome/Edge 浏览器兼容性证据，不要求实体设备样本。
+- PR #13 已合并：IndexedDB 与 SQLite WASM + OPFS 对照 PoC 完成，ADR-0001 有条件首选 SQLite WASM + OPFS 单写入 Worker；#1 仍待 lockfile 级依赖可重复性验收。
 - #2 加密备份 PoC 已有自动化证据，但生产密钥持久化、生产服务端架构和安全评审未完成。
-- #3 EPUB/PDF/TXT 导入 PoC 已有固定样本测试；复杂版式、真实阅读器精确回跳及性能验证仍未完成。
+- PR #16 已合并：EPUB/PDF/TXT 首版导入 PoC，Chromium 12/12 自动化测试通过；样本为自建夹具，#3 仍待真实出版物抽样、复杂版式和精确回跳验收。
 - #4 生成任务 PoC 使用 Mock Server，已验证消息先落本地、幂等、流式事件和断线恢复；不代表生产队列或真实模型服务完成。
 - #5 书籍包 Schema/校验器与 #9 质量门禁已有 CI 证据，仍需最终审查。
 - #6 当前为合成语料和 Mock 检索评测，不构成真实中文书籍或生产 Agent 质量基线。
-- #7 身份、数据集与状态机契约仍需完成一致性验收。\n- #28 已合并 PR #29：完成可配置的认知候选价值评估、观点来源区分、置信度/歧义度与 Citation 来源门禁；抽取、版本演变和持久化仍在开发。\n- #27 已合并 PR #31：完成 GenerationTransport 协议、事件序号校验和本地先保存后请求的编排边界；真实 HTTP/SSE 服务仍未接入。
+- #7 身份、数据集与状态机契约仍需完成一致性验收。\n- PR #32 已合并：LocalRepository 事务契约、数据集边界和 Agent 消息持久化端口已建立。PR #33 正在推进 SQLite OPFS Repository 首版适配器，完整迁移/备份/损坏恢复尚未完成。\n- #28 已合并 PR #29：完成可配置的认知候选价值评估、观点来源区分、置信度/歧义度与 Citation 来源门禁；抽取、版本演变和持久化仍在开发。\n- #27 已合并 PR #31：完成 GenerationTransport 协议、事件序号校验和本地先保存后请求的编排边界；真实 HTTP/SSE 服务仍未接入。
 
 PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不等于生产安全或完整产品验收通过。项目不安排实体手机/平板真机测试，以自动化浏览器测试、响应式视口矩阵和标准桌面浏览器兼容性检查作为验收方式。
 
@@ -34,11 +34,11 @@ PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不�
 - [x] [#22 移动触控适配模拟视口自动化验收](https://github.com/dujiu1024-dotcom/read-book/pull/22)（已合并，不要求实体设备测试）
 - [x] [#8 PC 阅读交互原型](https://github.com/dujiu1024-dotcom/read-book/issues/8)（PR #20/#22 已合并；原型验收完成）
 - [ ] [#25 正式阅读客户端](https://github.com/dujiu1024-dotcom/read-book/issues/25)（PR #30 已合并：BookContentProvider 解耦；真实书籍 Provider 待接入）
-- [ ] [#26 本地个人数据 Repository](https://github.com/dujiu1024-dotcom/read-book/issues/26)
+- [ ] [#26 本地个人数据 Repository](https://github.com/dujiu1024-dotcom/read-book/issues/26)（PR #32 已合并 Repository 契约；PR #33 SQLite OPFS 适配器开发中）
 - [ ] [#27 Agent 生成适配器与可靠消息交付](https://github.com/dujiu1024-dotcom/read-book/issues/27)（PR #31 已合并：协议适配与先保存后请求；真实 Transport 待接入）
 - [ ] [#28 自动认知沉淀、版本演变与来源追溯](https://github.com/dujiu1024-dotcom/read-book/issues/28)（PR #29 已合并：认知候选评估规则）
 
-推进原则：#25 可先通过 Provider 契约独立开发，不等待所有 PoC 完成；#26 的正式存储实现须依据 #1 的充分验证结论；#27 可先用 Mock/契约测试开发适配层；#28 可先用测试夹具完成认知规则和版本模型。
+推进原则：#25 继续接入真实书籍 Provider；#26 按 ADR-0001 推进 SQLite OPFS 适配器，但生产放行仍受 lockfile、迁移、恢复和备份验收约束；#27 已完成协议边界，继续接真实 HTTP/SSE Transport；#28 继续完成认知抽取和版本演变。
 
 ## 技术验证与质量保障
 
@@ -78,7 +78,7 @@ PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不�
 - [PC Web 详细技术设计](docs/pc-web-detailed-design.md)
 - [PC Web 技术 PoC 验证计划](docs/pc-web-poc-plan.md)
 - [PC Web 窄屏阅读交互规范](docs/pc-web-interaction-spec.md)
-- [文档验收报告](docs/document-acceptance-report.md)
+- [文档验收报告](docs/document-acceptance-report.md)\n- [ADR-0001：PC Web 私人数据主存储路线](docs/adr/0001-local-storage-engine.md)
 
 ## 核心产品形态
 
