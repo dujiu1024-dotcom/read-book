@@ -21,6 +21,8 @@ button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px sol
 .brand { color: var(--accent); text-decoration: none; font-weight: 800; letter-spacing: .08em; font-size: 19px; }
 .topbar-book { display: flex; flex-direction: column; line-height: 1.25; flex: 1; }
 .topbar-book strong { font-size: 14px; font-weight: 650; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.topbar-actions .text-button { white-space: nowrap; padding: 6px 9px; }
 .eyebrow { color: var(--muted); font-size: 11px; letter-spacing: .08em; }
 .icon-button { border: 0; background: transparent; color: #606970; border-radius: 8px; min-width: 44px; min-height: 44px; font-size: 23px; }
 .icon-button:hover { background: var(--soft); }
