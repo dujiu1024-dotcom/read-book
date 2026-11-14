@@ -25,7 +25,7 @@ const request: GenerationRequest = {
 };
 
 const accepted = {
-  generation_id: "generation-1",
+  generation_id: "generation-1234567890",
   status: "queued",
   expires_at: "2026-11-14T00:00:00.000Z",
 };
@@ -39,7 +39,7 @@ function fakeTransport(events: unknown[] = []) {
       async getGeneration() {
         calls.push("get");
         return {
-          generation_id: "generation-1",
+          generation_id: "generation-1234567890",
           status: "completed",
           expires_at: "2026-11-14T00:00:00.000Z",
           result: { content: "最终回答" },
@@ -67,35 +67,38 @@ test("validates the GenerationRequest contract and rejects oversized context", (
 });
 
 test("validates accepted and final task snapshots", () => {
-  assert.equal(validateGenerationAccepted(accepted).generation_id, "generation-1");
+  assert.equal(validateGenerationAccepted(accepted).generation_id, "generation-1234567890");
   assert.throws(() => validateGenerationAccepted({ ...accepted, status: "completed" }), GenerationProtocolError);
   assert.throws(() => validateGenerationSnapshot({
-    generation_id: "generation-1", status: "completed", expires_at: "2026-11-14T00:00:00.000Z", result: null,
+    generation_id: "generation-1234567890", status: "completed", expires_at: "2026-11-14T00:00:00.000Z", result: null,
+  }), GenerationProtocolError);
+  assert.throws(() => validateGenerationSnapshot({
+    generation_id: "generation-1234567890", status: "cancel_requested", expires_at: "2026-11-14T00:00:00.000Z", result: null,
   }), GenerationProtocolError);
 });
 
 test("only a completed GET snapshot supplies the authoritative final result", () => {
   const running = validateGenerationSnapshot({
-    generation_id: "generation-1", status: "running", expires_at: "2026-11-14T00:00:00.000Z", result: null,
+    generation_id: "generation-1234567890", status: "running", expires_at: "2026-11-14T00:00:00.000Z", result: null,
   });
   assert.equal(authoritativeFinalResult(running), null);
   const completed = validateGenerationSnapshot({
-    generation_id: "generation-1", status: "completed", expires_at: "2026-11-14T00:00:00.000Z",
+    generation_id: "generation-1234567890", status: "completed", expires_at: "2026-11-14T00:00:00.000Z",
     result: { content: "最终回答" },
   });
   assert.equal(authoritativeFinalResult(completed)?.content, "最终回答");
 });
 
 test("event cursor accepts contiguous events and ignores replayed duplicates", () => {
-  const first = { event_id: "generation-1:1", generation_id: "generation-1", sequence: 1, type: "started" };
-  const second = { event_id: "generation-1:2", generation_id: "generation-1", sequence: 2, type: "delta", text: "答" };
-  const cursor = { generationId: "generation-1", lastSequence: 0, lastEventId: null };
+  const first = { event_id: "generation-1234567890:1", generation_id: "generation-1234567890", sequence: 1, type: "started" };
+  const second = { event_id: "generation-1234567890:2", generation_id: "generation-1234567890", sequence: 2, type: "delta", text: "答" };
+  const cursor = { generationId: "generation-1234567890", lastSequence: 0, lastEventId: null };
   const advanced = advanceGenerationEventCursor(cursor, first);
   assert.equal(advanced.cursor.lastSequence, 1);
   assert.equal(advanceGenerationEventCursor(advanced.cursor, first).duplicate, true);
   assert.equal(advanceGenerationEventCursor(advanced.cursor, second).cursor.lastSequence, 2);
   assert.throws(() => advanceGenerationEventCursor(advanced.cursor, {
-    ...second, event_id: "generation-1:4", sequence: 4,
+    ...second, event_id: "generation-1234567890:4", sequence: 4,
   }), /sequence gap/);
   assert.throws(() => advanceGenerationEventCursor(cursor, {
     ...first, generation_id: "another-generation",
@@ -120,7 +123,7 @@ test("persists the user message before creating a generation task", async () => 
     "idempotency-key-0001",
   );
   assert.deepEqual(calls, ["persist", "network"]);
-  assert.equal(result.generation_id, "generation-1");
+  assert.equal(result.generation_id, "generation-1234567890");
 });
 
 test("does not call the network when local persistence fails or message ids mismatch", async () => {
@@ -144,15 +147,15 @@ test("does not call the network when local persistence fails or message ids mism
 });
 
 test("client delegates create, get, cancel and resumes events after the saved sequence", async () => {
-  const event = { event_id: "generation-1:1", generation_id: "generation-1", sequence: 1, type: "started" };
+  const event = { event_id: "generation-1234567890:1", generation_id: "generation-1234567890", sequence: 1, type: "started" };
   const fake = fakeTransport([event]);
   const client = createGenerationClient(fake.transport);
   await client.create(request, "idempotency-key-0001");
-  await client.get("generation-1");
-  await client.cancel("generation-1", "cancel-key-0001");
-  const cursor = { generationId: "generation-1", lastSequence: 0, lastEventId: null };
+  await client.get("generation-1234567890");
+  await client.cancel("generation-1234567890", "cancel-idempotency-key-0001");
+  const cursor = { generationId: "generation-1234567890", lastSequence: 0, lastEventId: null };
   const seen: unknown[] = [];
-  const nextCursor = await client.stream("generation-1", cursor, new AbortController().signal, (item) => seen.push(item));
+  const nextCursor = await client.stream("generation-1234567890", cursor, new AbortController().signal, (item) => seen.push(item));
   assert.deepEqual(fake.calls, ["create", "get", "cancel", "stream:0"]);
   assert.equal(seen.length, 1);
   assert.equal(nextCursor.lastSequence, 1);
@@ -160,29 +163,29 @@ test("client delegates create, get, cancel and resumes events after the saved se
 
 test("stream cursor advances across multiple events and rejects unknown event types", async () => {
   const events = [
-    { event_id: "generation-1:1", generation_id: "generation-1", sequence: 1, type: "started" },
-    { event_id: "generation-1:2", generation_id: "generation-1", sequence: 2, type: "delta", text: "答" },
+    { event_id: "generation-1234567890:1", generation_id: "generation-1234567890", sequence: 1, type: "started" },
+    { event_id: "generation-1234567890:2", generation_id: "generation-1234567890", sequence: 2, type: "delta", text: "答" },
   ];
   const fake = fakeTransport(events);
   const client = createGenerationClient(fake.transport);
   const seen: unknown[] = [];
   const next = await client.stream(
-    "generation-1",
-    { generationId: "generation-1", lastSequence: 0, lastEventId: null },
+    "generation-1234567890",
+    { generationId: "generation-1234567890", lastSequence: 0, lastEventId: null },
     new AbortController().signal,
     (event) => seen.push(event),
   );
   assert.equal(next.lastSequence, 2);
   assert.equal(seen.length, 2);
   assert.throws(() => advanceGenerationEventCursor(
-    { generationId: "generation-1", lastSequence: 0, lastEventId: null },
-    { event_id: "e1", generation_id: "generation-1", sequence: 1, type: "unknown" },
+    { generationId: "generation-1234567890", lastSequence: 0, lastEventId: null },
+    { event_id: "e1", generation_id: "generation-1234567890", sequence: 1, type: "unknown" },
   ), /Unknown generation event type/);
 });
 
 test("rejects malformed result payloads and non-object relevant memory", () => {
   assert.throws(() => validateGenerationSnapshot({
-    generation_id: "generation-1",
+    generation_id: "generation-1234567890",
     status: "completed",
     expires_at: "2026-11-14T00:00:00.000Z",
     result: { content: 42 },

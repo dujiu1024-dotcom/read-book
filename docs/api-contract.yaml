@@ -247,7 +247,12 @@ paths:
           schema: { type: integer, minimum: 0, default: 0 }
       responses:
         '200':
-          description: Server-sent events
+          description: >
+            Server-sent events. Each frame MUST set id to event_id, event to type,
+            and data to the JSON-serialized GenerationEvent. sequence is contiguous
+            per generation and starts at 1. Reconnect with after equal to the last
+            fully processed sequence. Event frames are provisional; GET GenerationStatus
+            is the only authoritative final result.
           content:
             text/event-stream:
               schema: { type: string }
@@ -739,6 +744,46 @@ components:
               type: [object, 'null']
               additionalProperties: true
         error_code: { type: [string, 'null'] }
+    GenerationEvent:
+      oneOf:
+        - type: object
+          required: [event_id, sequence, generation_id, type]
+          properties:
+            event_id: { type: string, minLength: 1, maxLength: 128 }
+            sequence: { type: integer, minimum: 1 }
+            generation_id: { type: string, minLength: 16, maxLength: 128 }
+            type: { type: string, const: started }
+        - type: object
+          required: [event_id, sequence, generation_id, type, text]
+          properties:
+            event_id: { type: string, minLength: 1, maxLength: 128 }
+            sequence: { type: integer, minimum: 1 }
+            generation_id: { type: string, minLength: 16, maxLength: 128 }
+            type: { type: string, const: delta }
+            text: { type: string }
+        - type: object
+          required: [event_id, sequence, generation_id, type, result_available]
+          properties:
+            event_id: { type: string, minLength: 1, maxLength: 128 }
+            sequence: { type: integer, minimum: 1 }
+            generation_id: { type: string, minLength: 16, maxLength: 128 }
+            type: { type: string, const: completed }
+            result_available: { type: boolean, const: true }
+        - type: object
+          required: [event_id, sequence, generation_id, type, code]
+          properties:
+            event_id: { type: string, minLength: 1, maxLength: 128 }
+            sequence: { type: integer, minimum: 1 }
+            generation_id: { type: string, minLength: 16, maxLength: 128 }
+            type: { type: string, const: failed }
+            code: { type: string, minLength: 1 }
+        - type: object
+          required: [event_id, sequence, generation_id, type]
+          properties:
+            event_id: { type: string, minLength: 1, maxLength: 128 }
+            sequence: { type: integer, minimum: 1 }
+            generation_id: { type: string, minLength: 16, maxLength: 128 }
+            type: { type: string, const: cancelled }
     BackupInitRequest:
       type: object
       required: [dataset_id, backup_id, backup_sequence, backup_type, schema_version, cipher_suite, key_version, ciphertext_size, ciphertext_hash, part_count]
