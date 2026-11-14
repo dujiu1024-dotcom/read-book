@@ -10,23 +10,21 @@
 
 ## 当前阶段（2026-11-14）
 
-**MVP 0.1 正式开发已启动，目标是跑通“阅读原文 → 用户表达 → Agent 基于原文回应 → 自动认知沉淀 → 认知演变追溯”的完整闭环。**
+**MVP 0.1 的主要产品代码链路已进入 main，当前重点转为收尾缺口、配置边界和最终整合。**
 
-- PR #24 领域模型与纯规则内核已合并到 main。
-- PR #20 PC 窄屏阅读原型的 Chromium/Playwright 自动化 CI 已通过；后续以自动化视口矩阵和桌面浏览器兼容性检查验收，不要求实体手机/平板测试。
-- PR #22 Playwright iPhone/Pixel 设备配置模拟测试已通过，用于验证响应式布局与触控目标；不要求实体设备复测。
-- PR #13 已合并：IndexedDB 与 SQLite WASM + OPFS 对照 PoC 完成，ADR-0001 有条件首选 SQLite WASM + OPFS 单写入 Worker；#1 仍待 lockfile 级依赖可重复性验收。
-- #2 加密备份 PoC 已有自动化证据，但生产密钥持久化、生产服务端架构和安全评审未完成。
-- PR #16 已合并：EPUB/PDF/TXT 首版导入 PoC，Chromium 12/12 自动化测试通过；样本为自建夹具，#3 仍待真实出版物抽样、复杂版式和精确回跳验收。
-- #4 生成任务 PoC 使用 Mock Server，已验证消息先落本地、幂等、流式事件和断线恢复；不代表生产队列或真实模型服务完成。
-- #5 书籍包 Schema/校验器与 #9 质量门禁已有 CI 证据，仍需最终审查。
-- #6 当前为合成语料和 Mock 检索评测，不构成真实中文书籍或生产 Agent 质量基线。
-- #7 身份、数据集与状态机契约仍需完成一致性验收。
-- PR #32 已合并：LocalRepository 事务契约、数据集边界和 Agent 消息持久化端口已建立。PR #33 正在推进 SQLite OPFS Repository 首版适配器，完整迁移/备份/损坏恢复尚未完成。
-- #28 已合并 PR #29：完成可配置的认知候选价值评估、观点来源区分、置信度/歧义度与 Citation 来源门禁；抽取、版本演变和持久化仍在开发。
-- #27 已合并 PR #31：完成 GenerationTransport 协议、事件序号校验和本地先保存后请求的编排边界；真实 HTTP/SSE 服务仍未接入。
+- #1：IndexedDB 与 SQLite WASM + OPFS 对照 PoC、ADR-0001 和自动化证据已进入仓库；仍缺依赖 lockfile 的可重复安装基线。
+- #2：端侧加密备份 PoC 已实现全量/增量、分块加密、续传和清除墓碑；仍需生产威胁模型、密码学评审、生产服务端及密钥轮换策略。
+- #3：EPUB/PDF/TXT 导入 PoC 已实现；真实授权出版物、复杂版式、OCR 和定位人工抽样仍未完成。
+- #4：Mock Generation Server 的幂等、SSE、断线恢复和取消验证已完成；正式 HTTP/SSE Transport 已在产品运行时实现，但生产服务端仍需部署。
+- #5：PR #52 已合并书籍包 v1 Schema、目录/ZIP 校验器 CLI 和处理契约校验；不代表云端加工服务已实现。
+- #6：当前评测语料仍为合成样本；真实中文书籍、授权记录、人工标注和模型实测仍未完成。
+- #7：状态机、数据字典和 OpenAPI 已有一致性修订；Message.pending、账号 ID 类型、恢复挑战证明等语义仍需产品/安全决策。
+- #9：PR #53 已合并 Markdown、JSON/JSONL、OpenAPI 和书籍包契约质量门禁；当前仅手动触发，最终验收后再启用 PR/main 自动触发。
+- MVP 主链路：PR #40、#43–#45、#48–#49、#51 已合并，覆盖本地消息与认知持久化、PC 阅读运行时、Agent 会话控制、备份上传和空数据集恢复。
+- PR #54 已修复生成服务地址配置；PR #55 已合并失败任务重试，复用原始用户消息并保留历史 Assistant 尝试。
+- 真实书籍 API、Generation API、模型 Provider、备份服务地址和认证模块均由部署环境注入；仓库未包含生产凭据或生产服务实现。
 
-PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不等于生产安全或完整产品验收通过。项目不安排实体手机/平板真机测试，以自动化浏览器测试、响应式视口矩阵和标准桌面浏览器兼容性检查作为验收方式。
+PoC、自动化和代码合并只证明对应代码范围已交付，不等于真实服务、真实书籍质量或生产安全验收完成。项目不安排实体手机/平板真机测试，以自动化浏览器测试、响应式视口矩阵和标准桌面浏览器兼容性检查作为验收方式。
 
 ## 当前 MVP 工作主线
 
@@ -36,10 +34,10 @@ PoC、设备配置模拟和 CI 通过仅代表对应自动化范围通过，不�
 - [x] [#20 PC 窄屏阅读原型自动化与浏览器兼容性验收](https://github.com/dujiu1024-dotcom/read-book/pull/20)（已合并）
 - [x] [#22 移动触控适配模拟视口自动化验收](https://github.com/dujiu1024-dotcom/read-book/pull/22)（已合并，不要求实体设备测试）
 - [x] [#8 PC 阅读交互原型](https://github.com/dujiu1024-dotcom/read-book/issues/8)（PR #20/#22 已合并；原型验收完成）
-- [ ] [#25 正式阅读客户端](https://github.com/dujiu1024-dotcom/read-book/issues/25)（PR #30 已合并：BookContentProvider 解耦；真实书籍 Provider 待接入）
-- [ ] [#26 本地个人数据 Repository](https://github.com/dujiu1024-dotcom/read-book/issues/26)（PR #32 Repository 契约与 PR #33 SQLite OPFS 首版适配器均已合并；迁移/恢复/备份验收仍待完成）
-- [ ] [#27 Agent 生成适配器与可靠消息交付](https://github.com/dujiu1024-dotcom/read-book/issues/27)（PR #31 已合并：协议适配与先保存后请求；真实 Transport 待接入）
-- [ ] [#28 自动认知沉淀、版本演变与来源追溯](https://github.com/dujiu1024-dotcom/read-book/issues/28)（PR #29 已合并：认知候选评估规则）
+- [x] [#25 正式阅读客户端代码主线](https://github.com/dujiu1024-dotcom/read-book/issues/25)（PR #30/#34/#45 已合并；真实 API 环境与真实书籍验收仍待部署）
+- [x] [#26 本地个人数据 Repository 代码主线](https://github.com/dujiu1024-dotcom/read-book/issues/26)（PR #32/#33/#37–#40/#43/#48/#49/#51 已合并；生产备份服务与安全评审仍待完成）
+- [x] [#27 Agent 生成适配器与可靠消息交付代码主线](https://github.com/dujiu1024-dotcom/read-book/issues/27)（PR #31/#35/#40/#44/#45/#55 已合并；真实服务端/认证由部署环境提供）
+- [x] [#28 自动认知沉淀、版本演变与来源追溯代码主线](https://github.com/dujiu1024-dotcom/read-book/issues/28)（PR #29/#36/#37/#42/#43/#48 已合并；模型 Provider 与真实样本质量评测仍待配置）
 
 推进原则：#25 继续接入真实书籍 Provider；#26 按 ADR-0001 推进 SQLite OPFS 适配器，但生产放行仍受 lockfile、迁移、恢复和备份验收约束；#27 已完成协议边界，继续接真实 HTTP/SSE Transport；#28 继续完成认知抽取和版本演变。
 
