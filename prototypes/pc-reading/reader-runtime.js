@@ -148,13 +148,17 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   };
   const snapshot = await repository.createConsistentSnapshot(datasetId);
   if (config.encryptedBackupPort && typeof config.encryptedBackupPort.uploadSnapshot === "function") {
-    const receipt = await config.encryptedBackupPort.uploadSnapshot(snapshot);
-    if (!receipt || typeof receipt.backupId !== "string" || !receipt.backupId.trim()) {
-      throw new Error("加密备份服务未返回有效 backupId，不能确认备份成功。");
+    try {
+      const receipt = await config.encryptedBackupPort.uploadSnapshot(snapshot);
+      if (!receipt || typeof receipt.backupId !== "string" || !receipt.backupId.trim()) {
+        throw new Error("加密备份服务未返回有效 backupId，不能确认备份成功。");
+      }
+      const backedUpAt = new Date().toISOString();
+      await repository.acknowledgeBackup(datasetId, snapshot.dirtySequence, receipt.backupId, backedUpAt);
+      backupStatus = { label: "备份：已完成", detail: "启动前快照已由外部加密备份端确认。" };
+    } catch (error) {
+      backupStatus = { label: "备份：失败", detail: "启动前加密备份失败，数据仍保留在本地，未确认备份序号：" + error.message };
     }
-    const backedUpAt = new Date().toISOString();
-    await repository.acknowledgeBackup(datasetId, snapshot.dirtySequence, receipt.backupId, backedUpAt);
-    backupStatus = { label: "备份：已完成", detail: "启动前快照已由外部加密备份端确认。" };
   }
 
   return {
