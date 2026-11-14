@@ -50,6 +50,14 @@ test("creates a local Thread and restores its saved mainline position", async ()
   }, [{ id: "unit-1" }, { id: "unit-2" }]);
   assert.equal(repository.positions.get(runtime.thread.id).displayedNodeId, "unit-2");
   assert.equal(repository.positions.get(runtime.thread.id).viewMode, "temporary");
+  const reopened = await createLocalCorpusRuntime(bookRevision, {
+    datasetId: "test-dataset",
+    repositoryFactory: () => repository,
+    now: () => "2026-11-14T00:01:00.000Z"
+  });
+  assert.equal(reopened.thread.id, runtime.thread.id);
+  assert.equal(reopened.readingPosition.displayedNodeId, "unit-2");
+  assert.equal(reopened.readingPosition.viewMode, "temporary");
 });
 
 test("uses a separate local Thread for each immutable BookRevision", async () => {
