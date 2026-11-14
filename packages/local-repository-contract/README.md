@@ -4,7 +4,7 @@ Issue #26 的 Repository 边界与事务契约。当前不绑定 IndexedDB 或 S
 
 ## 契约范围
 
-- 私人阅读数据以本地数据集为权威；所有读写必须显式携带 datasetId/dataSetId 或由事务上下文绑定数据集。
+- 私人阅读数据以本地数据集为权威；所有读写必须显式携带 datasetId/datasetId 或由事务上下文绑定数据集。
 - 同一数据集、同一不可变 BookRevision 只允许一条长期 Thread。
 - Message 采用追加写；同一 Thread 的 sequence 由 Repository 在事务内原子分配，并由唯一约束保证。
 - 用户消息写入接口只在数据库事务成功提交后 resolve；失败必须 reject，不得返回“已保存”。
@@ -16,7 +16,7 @@ Issue #26 的 Repository 边界与事务契约。当前不绑定 IndexedDB 或 S
 
 ## 当前实现状态
 
-已交付 Repository 接口、事务边界、错误码、数据集备份序号不变量和 Agent UserMessageRepository 结构适配器。尚未交付真实持久化适配器、迁移、并发锁、数据集隔离的数据库级约束和浏览器端恢复。
+已交付 Repository 接口、按 datasetId 绑定的事务边界、错误码、数据集备份序号不变量和 Agent UserMessageRepository 结构适配器。尚未交付真实持久化适配器、迁移、并发锁、数据集隔离的数据库级约束和浏览器端恢复。
 
 ## 运行测试
 
