@@ -339,8 +339,8 @@ export async function persistUserMessageBeforeGeneration(
 
 export interface GenerationTurnRepository {
   transaction<T>(datasetId: string, operation: (tx: {
-    appendUserMessage(message: { id: string; threadId: string; content: string; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
-    appendAssistantMessage(message: { id: string; threadId: string; content: string; status: "generating"; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
+    appendUserMessage(message: { id: string; threadId: string; content: string; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string; presentationType?: "mainline" | "review" | "temporary" | "citation" }> ; idempotencyKey: string }): Promise<unknown>;
+    appendAssistantMessage(message: { id: string; threadId: string; content: string; status: "generating"; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string; presentationType?: "mainline" | "review" | "temporary" | "citation" }> ; idempotencyKey: string }): Promise<unknown>;
     transitionAssistantMessage(messageId: string, status: "completed" | "failed" | "cancelled", content?: string): Promise<unknown>;
     saveGenerationDelivery(delivery: { clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }): Promise<unknown>;
   }) => Promise<T>): Promise<T>;
@@ -354,7 +354,7 @@ export interface GenerationTurnInput {
   assistantMessageId: string;
   request: GenerationRequest;
   idempotencyKey: string;
-  sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }>;
+  sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string; presentationType?: "mainline" | "review" | "temporary" | "citation" }>;
   now?: () => string;
   signal: AbortSignal;
   onDelta?: (text: string) => void;
