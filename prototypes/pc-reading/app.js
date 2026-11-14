@@ -5,6 +5,7 @@ import { createLocalCorpusRuntime } from "./local-corpus-runtime.js";
 import { createProductionReaderRuntime } from "./reader-runtime.js";
 import { createLocalBookPackageProvider, importBookPackageFile } from "./local-book-package-provider.js";
 import { createSourceRetriever } from "./source-retriever.js";
+import { hasGenerationService } from "./reader-capabilities.js";
 
 (() => {
   let units = [];
@@ -646,24 +647,11 @@ import { createSourceRetriever } from "./source-retriever.js";
         $("simulateFailure").hidden = true;
         try {
           const getAccessToken = readerConfig.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken;
-          const customBackup = readerConfig.encryptedBackupPort;
-          const hasBackupService = Boolean(
-            typeof readerConfig.createEncryptedBackupPort === "function" ||
-            (customBackup &&
-              typeof customBackup.uploadSnapshot === "function" &&
-              typeof customBackup.listBackups === "function" &&
-              typeof customBackup.restoreToRepository === "function") ||
-            readerConfig.apiBaseUrl
-          );
-          const hasFullServices = Boolean(
-            readerConfig.localDataSetId &&
-            typeof getAccessToken === "function" &&
-            (readerConfig.generationApiBaseUrl || readerConfig.apiBaseUrl) &&
-            hasBackupService
-          );
+          const hasAgentService = hasGenerationService(readerConfig, getAccessToken);
           productionRuntime = await createProductionReaderRuntime({
             ...readerConfig,
-            localOnly: readerConfig.localOnly === true || !hasFullServices,
+            getAccessToken,
+            localOnly: readerConfig.localOnly === true || !hasAgentService,
           }, bookRevision);
           const position = productionRuntime.readingPosition;
           if (position) {
