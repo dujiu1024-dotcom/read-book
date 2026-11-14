@@ -2,21 +2,22 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>知行 · 阅读</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <div class="page-shell">
+  <div class="app-shell">
     <header class="topbar">
       <a class="brand" href="#" aria-label="知行首页">知行</a>
       <div class="topbar-book">
         <span class="eyebrow">正在阅读</span>
-        <strong id="topbarBookTitle">协同系统设计</strong>
+        <strong id="topbarBookTitle">正在打开书籍…</strong>
         <select id="bookSelector" class="book-selector" aria-label="选择阅读书籍">
           <option value="demo">演示内容</option>
           <option value="chuanxilu">传习录</option>
+          <option value="bundled">传习录（内置节选）· 离线可用</option>
           <option value="maoxuan-1">毛泽东选集 第一卷</option>
           <option value="maoxuan-2">毛泽东选集 第二卷</option>
           <option value="maoxuan-3">毛泽东选集 第三卷</option>
@@ -25,109 +26,146 @@
           <option value="service">已配置的正式书籍服务</option>
           <option value="local" hidden>本地导入书籍</option>
         </select>
+        <span class="topbar-locator" id="topbarLocator">正在定位…</span>
       </div>
       <div class="topbar-actions">
-        <button class="text-button" id="importBookButton" type="button">导入书籍</button>
-        <button class="icon-button" id="menuButton" type="button" aria-label="演示：切换当前单元讨论状态" title="演示状态切换">···</button>
+        <button class="soft-button topbar-library" id="libraryButton" type="button">书库</button>
+        <button class="soft-button topbar-import" id="importBookButton" type="button">导入书籍</button>
+        <button class="icon-button" id="menuButton" type="button" aria-label="切换当前单元讨论状态" title="演示状态切换">···</button>
       </div>
     </header>
 
-    <main class="reader" id="reader">
-      <section class="book-meta" aria-labelledby="bookTitle">
-        <div class="book-cover" aria-hidden="true">知</div>
-        <div class="book-details">
-          <h1 id="bookTitle">协同系统设计</h1>
-          <p id="bookAuthor">正在加载作者信息…</p>
-          <div class="meta-line"><span class="status-dot"></span><span>第一轮阅读</span><span class="meta-separator">·</span><span id="chapterPath">第一章 / 协同的基础</span></div>
-        </div>
-      </section>
+    <div class="workspace">
+      <aside class="rail" aria-label="书籍信息与阅读进度">
+        <section class="book-meta" aria-labelledby="bookTitle">
+          <div class="book-cover" aria-hidden="true">知</div>
+          <div class="book-details">
+            <h1 id="bookTitle">正在打开书籍…</h1>
+            <p id="bookAuthor">正在加载作者信息…</p>
+            <div class="meta-line"><span class="status-dot"></span><span>第一轮阅读</span><span class="meta-separator">·</span><span id="chapterPath">—</span></div>
+          </div>
+        </section>
 
-      <section class="source-card" id="sourceCard" aria-labelledby="sourceHeading">
-        <div class="source-head">
+        <section class="progress-block" aria-label="阅读进度">
+          <div class="progress-head"><span>阅读进度</span><span id="progressText">—</span></div>
+          <div class="progress-track"><div class="progress-fill" id="progressBar"></div></div>
+          <p class="rail-locator" id="railLocator">正在定位当前原文…</p>
+        </section>
+
+        <div class="rail-actions">
+          <button class="soft-button" id="railNoteButton" type="button">记笔记</button>
+          <button class="soft-button" id="railMemoryButton" type="button">整理认知</button>
+        </div>
+
+        <nav class="rail-toc" aria-label="章节导航">
+          <div class="rail-toc-head"><h2>章节</h2><span id="railChapterCount"></span></div>
+          <div class="rail-chapters" id="railChapters"></div>
+        </nav>
+
+        <div class="rail-foot">
+          <p class="rail-mode" id="readerModeLabel">正在连接本地数据…</p>
+          <button class="text-button" id="backupButton" type="button">备份：待检查</button>
+        </div>
+      </aside>
+
+      <main class="reading-pane" id="readingPane">
+        <div class="reading-head">
           <div>
             <div class="eyebrow" id="sourceMode">当前主线原文</div>
-            <h2 id="sourceHeading">协同效率与沟通</h2>
+            <div class="reading-locator" id="sourceLocator">—</div>
           </div>
-          <button class="text-button" id="toggleSource" type="button" aria-expanded="true">收起原文</button>
-        </div>
-        <div id="sourceBody" class="source-body">
-          <p id="sourceText">协同效率并不等于沟通次数增加。它取决于参与者是否围绕同一目标行动，以及关键交接是否清楚。沟通频繁但目标不一致，只会更快放大分歧。</p>
-          <div class="source-foot"><span id="sourceLocator">第一章 · 论述单元 01</span><a id="sourceSourceLink" class="source-link" target="_blank" rel="noopener noreferrer" hidden>查看来源</a><span class="source-tag" id="sourceTag">原书内容</span></div>
-        </div>
-      </section>
-
-      <section class="context-tools" aria-label="阅读上下文操作">
-        <button class="soft-button" id="reviewButton" type="button">复习上一单元</button>
-        <button class="soft-button" id="temporaryButton" type="button">临时查看其他章节</button>
-        <button class="soft-button primary-soft" id="continueButton" type="button">继续下一单元 <span aria-hidden="true">→</span></button>
-      </section>
-      <div id="viewNotice" class="view-notice" hidden>
-        <span id="viewNoticeText"></span>
-        <button class="text-button" id="returnMainline" type="button">回到当前主线</button>
-      </div>
-
-      <section class="conversation" id="conversationSection" aria-labelledby="conversationHeading">
-        <div class="conversation-heading">
-          <div>
-            <div class="eyebrow">持续讨论</div>
-            <h2 id="conversationHeading">和 Agent 讨论</h2>
+          <div class="reading-actions">
+            <button class="text-button" id="noteButton" type="button">+ 记笔记</button>
+            <button class="text-button" id="toggleSource" type="button" aria-expanded="true">收起原文</button>
           </div>
-          <span class="conversation-count" id="messageCount">2 条消息</span>
         </div>
-        <div class="message-list" id="messageList" aria-live="polite" aria-relevant="additions">
-          <article class="message user-message">
-            <div class="message-avatar">我</div>
-            <div class="message-content">
-              <div class="message-meta"><strong>我</strong><time>09:32</time><span class="saved-label">本地已保存</span></div>
-              <p>我觉得沟通频率高不一定代表协同好，关键还是目标是不是一致。</p>
+
+        <article class="source-card" id="sourceCard" aria-labelledby="sourceHeading">
+          <h2 id="sourceHeading">正在加载原文…</h2>
+          <div id="sourceBody" class="source-body">
+            <p id="sourceText">正在从书籍来源读取正文。</p>
+            <div class="source-foot">
+              <span class="source-tag" id="sourceTag">原书内容</span>
+              <a id="sourceSourceLink" class="source-link" target="_blank" rel="noopener noreferrer" hidden>查看来源</a>
             </div>
-          </article>
-          <article class="message agent-message">
-            <div class="message-avatar agent-avatar">知</div>
-            <div class="message-content">
-              <div class="message-meta"><strong>知行</strong><time>09:33</time></div>
-              <p>你的判断和作者这里的区分是一致的：沟通只是动作，协同结果取决于共同目标和交接是否清楚。可以进一步区分“信息同步充分”和“行动方向一致”，两者并不等同。</p>
-              <div class="citation-card">
-                <div class="citation-label">引用 · 第一章 / 协同的基础</div>
-                <p>“协同效率并不等于沟通次数增加。它取决于参与者是否围绕同一目标行动……”</p>
-                <button class="text-button citation-link" type="button" data-citation="unit-1">查看原文位置 ↗</button>
+          </div>
+        </article>
+
+        <div id="viewNotice" class="view-notice" hidden>
+          <span id="viewNoticeText"></span>
+          <button class="text-button" id="returnMainline" type="button">回到当前主线</button>
+        </div>
+
+        <nav class="context-tools" aria-label="阅读上下文操作">
+          <button class="soft-button" id="reviewButton" type="button">复习上一单元</button>
+          <button class="soft-button" id="temporaryButton" type="button">临时查看其他章节</button>
+          <button class="soft-button primary-soft" id="continueButton" type="button">继续下一单元 <span aria-hidden="true">→</span></button>
+        </nav>
+
+        <p class="reading-hint">按主线顺序阅读；引用回跳、临时查看和复习都不会移动你的主线位置。</p>
+      </main>
+
+      <aside class="side-pane" aria-label="讨论、笔记与认知">
+        <div class="pane-tabs" role="tablist" aria-label="侧栏面板">
+          <button class="pane-tab active" type="button" role="tab" aria-selected="true" data-panel="discussion">讨论</button>
+          <button class="pane-tab" type="button" role="tab" aria-selected="false" data-panel="notes">笔记 <span class="tab-count" id="noteCount" hidden>0</span></button>
+          <button class="pane-tab" type="button" role="tab" aria-selected="false" data-panel="memory">认知</button>
+        </div>
+
+        <div class="panel-stack">
+          <section class="panel active" id="conversationSection" data-panel="discussion" aria-labelledby="conversationHeading">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">持续讨论</div>
+                <h2 id="conversationHeading">和 Agent 讨论这一段</h2>
               </div>
+              <span class="conversation-count" id="messageCount">0 条消息</span>
             </div>
-          </article>
-        </div>
-      </section>
+            <p class="panel-empty" id="conversationEmpty">还没有讨论。读到哪里有想法，直接在下面提问。</p>
+            <div class="message-list" id="messageList" aria-live="polite" aria-relevant="additions"></div>
+          </section>
 
-      <section class="memory-panel" id="memoryPanel" aria-labelledby="memoryHeading" hidden>
-        <div class="conversation-heading">
-          <div>
-            <div class="eyebrow">自动认知沉淀</div>
-            <h2 id="memoryHeading">正在形成的认知</h2>
+          <section class="panel" id="notesPanel" data-panel="notes" aria-labelledby="notesHeading">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">只属于你的记录</div>
+                <h2 id="notesHeading">读书笔记</h2>
+              </div>
+              <button class="soft-button primary-soft" id="addNoteButton" type="button">+ 记一条</button>
+            </div>
+            <p class="panel-empty" id="notesEmpty">还没有笔记。读到有感觉的句子，点“记一条”写下来。</p>
+            <div class="notes-list" id="notesList"></div>
+          </section>
+
+          <section class="panel" id="memoryPanel" data-panel="memory" aria-labelledby="memoryHeading">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">自动认知沉淀</div>
+                <h2 id="memoryHeading">正在形成的认知</h2>
+              </div>
+              <button class="soft-button" id="extractMemoryButton" type="button">整理这次讨论</button>
+            </div>
+            <p class="memory-status" id="memoryStatus" role="status">认知状态加载中…</p>
+            <div class="memory-list" id="memoryList"></div>
+            <div class="pending-memory-list" id="pendingMemoryList" hidden></div>
+          </section>
+        </div>
+
+        <section class="composer" id="composerSection" aria-label="发送讨论">
+          <label class="sr-only" for="messageInput">输入你的想法</label>
+          <textarea id="messageInput" rows="2" placeholder="就这一段提问、写下理解或反驳…"></textarea>
+          <div class="composer-footer">
+            <span id="composerHint">Enter 换行 · ⌘/Ctrl + Enter 发送</span>
+            <div class="composer-actions">
+              <button class="soft-button danger-soft" id="simulateFailure" type="button">模拟失败</button>
+              <button class="send-button" id="sendButton" type="button">发送</button>
+              <button class="stop-button" id="stopButton" type="button" hidden>停止生成</button>
+            </div>
           </div>
-        </div>
-        <p class="memory-status" id="memoryStatus" role="status">认知状态加载中…</p>
-        <div class="memory-list" id="memoryList"></div>
-        <div class="pending-memory-list" id="pendingMemoryList" hidden></div>
-      </section>
-
-      <section class="composer" id="composerSection" aria-label="发送讨论">
-        <label class="sr-only" for="messageInput">输入你的想法</label>
-        <textarea id="messageInput" rows="3" placeholder="写下你的理解、疑问或反驳……"></textarea>
-        <div class="composer-footer">
-          <span id="composerHint">Enter 换行 · Ctrl / ⌘ + Enter 发送</span>
-          <div class="composer-actions">
-            <button class="soft-button danger-soft" id="simulateFailure" type="button">模拟失败</button>
-            <button class="send-button" id="sendButton" type="button">发送</button>
-            <button class="stop-button" id="stopButton" type="button" hidden>停止生成</button>
-          </div>
-        </div>
-        <div id="generationStatus" class="generation-status" role="status" aria-live="polite"></div>
-      </section>
-
-      <footer class="reader-footer">
-        <span><span class="status-dot"></span><span id="readerModeLabel">本地数据 · 演示状态</span></span>
-        <button class="text-button" id="backupButton" type="button" title="查看备份状态">备份：已检查</button>
-      </footer>
-    </main>
+          <div id="generationStatus" class="generation-status" role="status" aria-live="polite"></div>
+        </section>
+      </aside>
+    </div>
   </div>
 
   <dialog id="temporaryDialog" class="dialog">
@@ -137,6 +175,36 @@
       <div class="chapter-options" id="chapterOptions"></div>
     </form>
   </dialog>
+
+  <dialog id="noteDialog" class="dialog note-dialog">
+    <form method="dialog" id="noteForm">
+      <div class="dialog-head">
+        <div><div class="eyebrow" id="noteDialogEyebrow">读书笔记</div><h2 id="noteDialogTitle">记一条笔记</h2></div>
+        <button class="icon-button" value="cancel" aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-description" id="noteDialogSource">—</p>
+      <label class="sr-only" for="noteInput">笔记内容</label>
+      <textarea id="noteInput" rows="6" placeholder="写下你的理解、疑问或反对意见。笔记只由你编辑，Agent 不会自动改写。"></textarea>
+      <p class="note-dialog-status" id="noteDialogStatus" role="status"></p>
+      <div class="dialog-actions">
+        <button class="soft-button" id="noteCancelButton" type="button">取消</button>
+        <button class="send-button" id="noteSaveButton" type="button">保存笔记</button>
+      </div>
+      <input type="hidden" id="noteId" value="">
+      <input type="hidden" id="noteBaseRevision" value="">
+    </form>
+  </dialog>
+
+  <dialog id="libraryDialog" class="dialog library-dialog">
+    <div class="dialog-head">
+      <div><div class="eyebrow">本地书籍</div><h2>本地书库</h2></div>
+      <button class="icon-button" type="button" id="libraryCloseButton" aria-label="关闭">×</button>
+    </div>
+    <p class="dialog-description">已导入到当前浏览器的书籍包。选择一本即可切换阅读，讨论与笔记会跟着书籍身份保留。</p>
+    <div class="library-list" id="libraryList"></div>
+    <p class="panel-empty" id="libraryListEmpty" hidden>还没有导入任何本地书籍包。可以先用右上角“导入书籍”添加。</p>
+  </dialog>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <input id="bookPackageFile" type="file" accept=".zip,application/zip" hidden>
   <script type="module" src="./app.js"></script>

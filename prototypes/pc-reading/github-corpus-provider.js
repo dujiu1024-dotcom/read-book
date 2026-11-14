@@ -57,9 +57,31 @@ function paragraphsFromText(raw) {
   const sourceBlocks = blocks.length > 1 ? blocks : normalized.split(/\n+/).map((item) => item.trim()).filter(Boolean);
   return sourceBlocks.flatMap((item) => splitLongParagraph(item)).filter(Boolean);
 }
-async function request(fetchImpl, url, label) {
-  const response = await fetchImpl(url, { headers: { Accept: "application/vnd.github+json" } });
-  if (!response.ok) throw new Error(label + "读取失败（HTTP " + response.status + "）。");
+function httpSourceError(label, response) {
+  const remaining = typeof response.headers?.get === "function"
+    ? response.headers.get("x-ratelimit-remaining")
+    : null;
+  const rateLimited = (response.status === 403 || response.status === 429) &&
+    (remaining === "0" || response.status === 429);
+  const error = new Error(rateLimited
+    ? label + " 读取失败（HTTP " + response.status + "，GitHub 未认证配额已用尽）。请稍后重试，或在右上角切换到内置读物。"
+    : label + " 读取失败（HTTP " + response.status + "）。");
+  error.code = rateLimited ? "RATE_LIMITED" : "HTTP_" + response.status;
+  error.status = response.status;
+  return error;
+}
+async function request(fetchImpl, url, label, options = {}) {
+  let response;
+  try {
+    response = await fetchImpl(url, { headers: { Accept: "application/vnd.github+json" }, ...options });
+  } catch (error) {
+    const reason = error?.name === "TimeoutError" || error?.name === "AbortError" ? "请求超时" : "无法连接";
+    const wrapped = new Error(label + " 网络请求失败（" + reason + "）。");
+    wrapped.code = "NETWORK_ERROR";
+    wrapped.cause = error;
+    throw wrapped;
+  }
+  if (!response.ok) throw httpSourceError(label, response);
   return response;
 }
 
@@ -73,8 +95,17 @@ async function gitBlobSha(bytes) {
 }
 
 async function fetchVerifiedText(fetchImpl, url, label, expectedSha) {
-  const response = await request(fetchImpl, url, label);
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  let bytes;
+  try {
+    const response = await request(fetchImpl, url, label, { signal: AbortSignal.timeout(8000) });
+    bytes = new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    // raw.githubusercontent.com may be unreachable on some networks; the Git Blob
+    // API returns the same bytes addressed by the verified SHA.
+    const fallbackBytes = await fetchVerifiedBlobViaApi(fetchImpl, url, expectedSha, label);
+    if (!fallbackBytes) throw error;
+    bytes = fallbackBytes;
+  }
   const actualSha = await gitBlobSha(bytes);
   if (actualSha.toLowerCase() !== expectedSha.toLowerCase()) {
     throw new Error(label + " Git Blob SHA 校验失败；拒绝混用不同来源版本的缓存内容。");
@@ -84,6 +115,26 @@ async function fetchVerifiedText(fetchImpl, url, label, expectedSha) {
   } catch {
     throw new Error(label + " 不是有效 UTF-8 文本，拒绝导入。");
   }
+}
+async function fetchVerifiedBlobViaApi(fetchImpl, url, expectedSha, label) {
+  if (typeof url !== "string" || !url.startsWith(RAW_GITHUB + "/")) return null;
+  if (!/^[a-f0-9]{40}$/i.test(expectedSha || "")) return null;
+  const [owner, repository] = url.slice(RAW_GITHUB.length + 1).split("/");
+  if (!owner || !repository) return null;
+  const response = await fetchImpl(
+    GITHUB_API + "/repos/" + owner + "/" + repository + "/git/blobs/" + expectedSha,
+    { headers: { Accept: "application/vnd.github+json" } },
+  );
+  if (!response.ok) throw httpSourceError(label + "备用通道", response);
+  const blob = await response.json();
+  if (!blob || typeof blob.content !== "string" || (blob.encoding !== "base64" && blob.encoding !== "utf-8")) {
+    throw new Error(label + " 备用通道返回格式错误。");
+  }
+  if (blob.encoding === "utf-8") return new TextEncoder().encode(blob.content);
+  const binary = atob(blob.content.replace(/\s+/g, ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 async function mapConcurrent(items, limit, mapper) {
   const results = new Array(items.length);
@@ -249,16 +300,16 @@ export function createGithubCorpusProvider({ fetchImpl = globalThis.fetch, cache
       if (!book) throw new Error("不支持的 GitHub 语料书目：" + key);
       const units = key === "chuanxilu" ? await loadChuanxiLu(sourceFetch.fetch.bind(sourceFetch)) : await loadMaoXuanVolume(sourceFetch.fetch.bind(sourceFetch), VOLUMES.find((item) => item.key === key));
       const sourceSnapshotSha256 = await sourceFingerprint(units);
-      const bookRevisionId = uuidFromHash(sourceSnapshotSha256);
+      const revisionId = uuidFromHash(sourceSnapshotSha256);
       await Promise.all(units.map(async (unit) => {
         const unitIdentity = [
-          bookRevisionId, unit.source.repository, unit.source.path,
+          revisionId, unit.source.repository, unit.source.path,
           unit.source.revision, unit.locator, String(unit.order),
         ].join("\n");
         unit.id = uuidFromHash(await sha256Hex(unitIdentity));
       }));
       return {
-        bookRevisionId,
+        bookRevisionId: revisionId,
         title: book.title, author: book.author,
         initialMainlineUnitId: units[0].id, units,
         sourceMetadata: {

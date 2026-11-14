@@ -3,9 +3,11 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
 import { createGithubCorpusProvider } from "./github-corpus-provider.js";
 import { createLocalCorpusRuntime } from "./local-corpus-runtime.js";
 import { createProductionReaderRuntime } from "./reader-runtime.js";
-import { createLocalBookPackageProvider, importBookPackageFile } from "./local-book-package-provider.js";
+import { createLocalBookPackageProvider, importBookPackageFile, listImportedBookPackages } from "./local-book-package-provider.js";
+import { createBundledBookContentProvider, BUNDLED_BOOK_REVISION_ID } from "./bundled-book-content-provider.js";
 import { createSourceRetriever } from "./source-retriever.js";
 import { hasGenerationService } from "./reader-capabilities.js";
+import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./memory-proxy-provider.js";
 
 (() => {
   let units = [];
@@ -23,15 +25,20 @@ import { hasGenerationService } from "./reader-capabilities.js";
   })();
   const useLocalBookPackage = Boolean(activeLocalBookPackageId && !explicitBookId && (preferLocalBookPackage || !readerConfig.bookRevisionId));
   const queryBookId = explicitBookId || (!useLocalBookPackage && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId ? "chuanxilu" : null);
-  const isGithubCorpusMode = Boolean(queryBookId && queryBookId !== "demo");
-  const isDemoProvider = queryBookId === "demo" || (!isGithubCorpusMode && !useLocalBookPackage && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId);
+  const isBundledMode = queryBookId === "bundled";
+  const isGithubCorpusMode = Boolean(queryBookId && queryBookId !== "demo" && !isBundledMode);
+  const isDemoProvider = queryBookId === "demo" || (!isGithubCorpusMode && !isBundledMode && !useLocalBookPackage && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId);
+  let activeSource = isBundledMode ? "bundled" : isGithubCorpusMode ? "github" : useLocalBookPackage ? "local" : isDemoProvider ? "demo" : "service";
+  const isCorpusSourceActive = () => activeSource === "github" || activeSource === "bundled";
   let bookContentProvider = null;
   let productionRuntime = null;
-  const requestedBookRevisionId = isGithubCorpusMode
-    ? "github-corpus-" + queryBookId
-    : isDemoProvider ? "demo-book-revision-1"
-      : useLocalBookPackage ? activeLocalBookPackageId
-        : (readerConfig.bookRevisionId || "");
+  const requestedBookRevisionId = isBundledMode
+    ? BUNDLED_BOOK_REVISION_ID
+    : isGithubCorpusMode
+      ? "github-corpus-" + queryBookId
+      : isDemoProvider ? "demo-book-revision-1"
+        : useLocalBookPackage ? activeLocalBookPackageId
+          : (readerConfig.bookRevisionId || "");
 
   const state = {
     mainlineIndex: 1,
@@ -50,8 +57,66 @@ import { hasGenerationService } from "./reader-capabilities.js";
 
   const $ = (id) => document.getElementById(id);
   const messageList = $("messageList");
+  const panelStack = document.querySelector(".panel-stack");
   let nearBottom = true;
   let toastTimer = null;
+  let notes = [];
+  let lastSendAt = 0;
+  let stopArmedAt = 0;
+  let stopRequested = false;
+
+  /** 把底层错误转成可读中文，并去掉重复句号。 */
+  function errorText(error) {
+    const raw = String(error?.message || error || "未知错误").trim();
+    if (/failed to fetch|networkerror|load failed|fetch failed|network request failed/i.test(raw)) {
+      return "网络连接失败，请检查网络后重试";
+    }
+    return raw.replace(/[。．.!！]+$/, "");
+  }
+
+  /**
+   * 桌面端真正的滚动容器是 .panel-stack（#messageList 本身不滚动）；
+   * 窄屏下 .panel-stack 改为 overflow:visible，由窗口滚动。
+   */
+  function scrollContainer() {
+    if (!panelStack) return null;
+    if (panelStack.scrollHeight <= panelStack.clientHeight + 2) return null;
+    const overflowY = getComputedStyle(panelStack).overflowY;
+    return overflowY === "visible" ? null : panelStack;
+  }
+
+  function scrollToLatest(behavior = "auto") {
+    const scroller = scrollContainer();
+    if (scroller) {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior });
+      return;
+    }
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior });
+  }
+
+  function followingLatest() {
+    const scroller = scrollContainer();
+    if (scroller) return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 64;
+    return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 96;
+  }
+
+  function accessTokenProvider(config = readerConfig) {
+    return config.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken;
+  }
+
+  function runtimeConfigFor(baseConfig) {
+    const config = { ...baseConfig };
+    const getAccessToken = accessTokenProvider(baseConfig);
+    if (typeof getAccessToken === "function" && !config.getAccessToken) config.getAccessToken = getAccessToken;
+    if (readerConfig.memoryProxyUrl && typeof getAccessToken === "function") {
+      const provider = createMemoryProxyProvider({ baseUrl: readerConfig.memoryProxyUrl, getAccessToken });
+      config.memoryExtractionProvider = provider;
+      config.planMemoryEvolution = (input) => provider.propose(input);
+      config.memoryCandidatePolicy = readerConfig.memoryCandidatePolicy || DEFAULT_MEMORY_CANDIDATE_POLICY;
+      config.memoryModelVersion = readerConfig.memoryModelVersion || "sensenova-proxy";
+    }
+    return config;
+  }
 
   function toast(message) {
     const el = $("toast");
@@ -67,7 +132,7 @@ import { hasGenerationService } from "./reader-capabilities.js";
     $("bookTitle").textContent = bookRevision.title;
     $("topbarBookTitle").textContent = bookRevision.title;
     $("bookAuthor").textContent = bookRevision.author;
-    $("sourceTag").textContent = isGithubCorpusMode ? "GitHub 公开语料" : useLocalBookPackage ? "本地书籍包" : "原书内容";
+    $("sourceTag").textContent = activeSource === "github" ? "GitHub 公开语料" : activeSource === "bundled" ? "内置读物 · 离线可用" : useLocalBookPackage ? "本地书籍包" : "原书内容";
     const sourceLink = $("sourceSourceLink");
     if (sourceLink && unit.source?.url) {
       sourceLink.href = unit.source.url;
@@ -78,7 +143,7 @@ import { hasGenerationService } from "./reader-capabilities.js";
     }
     $("sourceHeading").textContent = unit.title;
     $("sourceText").textContent = unit.text;
-    $("sourceLocator").textContent = unit.locator;
+    $("sourceLocator").textContent = unit.chapter + " · 第 " + (units.indexOf(unit) + 1) + " / " + units.length + " 段";
     $("chapterPath").textContent = unit.chapter;
     const labels = {
       mainline: "当前主线原文",
@@ -96,17 +161,61 @@ import { hasGenerationService } from "./reader-capabilities.js";
       };
       $("viewNoticeText").textContent = descriptions[state.viewMode];
     }
-    if (productionRuntime) productionRuntime.savePosition(state, units).catch((error) => setGenerationStatus("阅读位置保存失败：" + error.message));
+    if (productionRuntime) productionRuntime.savePosition(state, units).catch((error) => setGenerationStatus("阅读位置保存失败：" + errorText(error) + "。"));
+    refreshReadingChrome();
+  }
+
+  function refreshReadingChrome() {
+    const unit = state.displayedUnit;
+    if (!unit) return;
+    const total = units.length || 1;
+    const current = state.mainlineIndex + 1;
+    $("progressText").textContent = "第 " + current + " / " + total + " 段";
+    $("progressBar").style.width = Math.max(2, Math.round((current / total) * 100)) + "%";
+    $("railLocator").textContent = unit.locator;
+    $("topbarLocator").textContent = "第 " + current + " / " + total + " 段 · " + (unit.chapter || "");
+    $("railChapterCount").textContent = new Set(units.map((item) => item.chapter)).size + " 章";
+    for (const button of document.querySelectorAll(".rail-chapter")) {
+      button.classList.toggle("active", button.dataset.chapter === unit.chapter);
+    }
+    $("conversationHeading").textContent = "和 Agent 讨论「" + (unit.chapter || "当前单元") + "」";
+  }
+
+  function renderRailChapters() {
+    const container = $("railChapters");
+    if (!container) return;
+    container.replaceChildren();
+    const firstUnitByChapter = new Map();
+    for (const unit of units) {
+      if (!firstUnitByChapter.has(unit.chapter)) firstUnitByChapter.set(unit.chapter, unit);
+    }
+    for (const [chapter, unit] of firstUnitByChapter) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "rail-chapter";
+      button.dataset.chapter = chapter;
+      button.textContent = chapter;
+      button.title = chapter;
+      button.addEventListener("click", () => {
+        state.displayedUnit = unit;
+        state.viewMode = "temporary";
+        renderSource();
+        toast("已临时查看该章节，主线位置保持不变。");
+      });
+      container.append(button);
+    }
+    const toc = container.closest(".rail-toc");
+    if (toc) toc.hidden = firstUnitByChapter.size < 2;
   }
 
   function updateCount() {
     $("messageCount").textContent = state.messages.length + " 条消息";
+    const empty = $("conversationEmpty");
+    if (empty) empty.hidden = state.messages.length > 0;
   }
 
-  function scrollIfFollowing() {
-    if (nearBottom) {
-      messageList.scrollTop = messageList.scrollHeight;
-    }
+  function scrollIfFollowing(force = false) {
+    if (force || nearBottom) requestAnimationFrame(() => scrollToLatest("auto"));
   }
 
   function appendMessage(message) {
@@ -143,7 +252,7 @@ import { hasGenerationService } from "./reader-capabilities.js";
       const label = document.createElement("div");
       label.className = "citation-label";
       const citedUnit = units.find(item => item.id === record.structureNodeId);
-      label.textContent = "引用 · " + (citedUnit?.chapter || "原文来源") + (record.locator ? " · " + record.locator : "");
+      label.textContent = "引用 · " + (citedUnit ? unitLabel(citedUnit) : (record.locator || "原文来源"));
       const quote = document.createElement("p");
       const excerpt = record.excerpt || citedUnit?.text || "";
       quote.textContent = excerpt ? "“" + excerpt.slice(0, 120) + (excerpt.length > 120 ? "……”" : "”") : "引用来源暂不可用。";
@@ -160,7 +269,7 @@ import { hasGenerationService } from "./reader-capabilities.js";
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "text-button";
-      retry.textContent = "重试";
+      retry.textContent = message.interrupted ? "重新生成" : "重试";
       retry.addEventListener("click", async () => {
         retry.disabled = true;
         if (productionRuntime) {
@@ -168,10 +277,10 @@ import { hasGenerationService } from "./reader-capabilities.js";
           setGenerationStatus("正在使用原始输入重新发起生成…");
           try {
             await productionRuntime.retryFailedGeneration(message.id);
-            await refreshPersistedMessages();
+            await refreshPersistedMessages({ forceScroll: true });
             setGenerationStatus("重试完成，原始用户消息未重复写入。");
           } catch (error) {
-            setGenerationStatus("重试失败：" + error.message);
+            setGenerationStatus("重试失败：" + errorText(error) + "。原始输入仍保留在本地。");
             retry.disabled = false;
           } finally {
             setGenerating(false);
@@ -208,11 +317,15 @@ import { hasGenerationService } from "./reader-capabilities.js";
   }
 
   function setGenerationStatus(message) {
-    $("generationStatus").textContent = message;
+    const el = $("generationStatus");
+    el.textContent = message;
+    el.classList.toggle("is-error", /失败|未完成|错误|不可用|无法/.test(message));
+    el.classList.toggle("is-ok", /已完成|已保存|已导入|已配置/.test(message) && !/失败|未完成/.test(message));
   }
 
   function setGenerating(value) {
     state.generating = value;
+    if (value) stopArmedAt = performance.now();
     $("sendButton").hidden = value;
     $("stopButton").hidden = !value;
     $("simulateFailure").disabled = value;
@@ -240,6 +353,9 @@ import { hasGenerationService } from "./reader-capabilities.js";
 
   async function sendMessage() {
     if (state.generating) return;
+    // 发送后按钮会在原位变成“停止生成”，双击的第二次点击很容易误取消回答。
+    // 这里对连续发送做防抖，停止按钮另有独立的最小可用时间。
+    if (Date.now() - lastSendAt < 600) return;
     const input = $("messageInput");
     const value = input.value.trim();
     if (!value) {
@@ -248,6 +364,9 @@ import { hasGenerationService } from "./reader-capabilities.js";
       return;
     }
     input.value = "";
+    lastSendAt = Date.now();
+    stopRequested = false;
+    const sentWhileNearBottom = nearBottom;
     if (productionRuntime) {
       const userBubble = { role: "user", text: value, time: "刚刚", saving: true };
       appendMessage(userBubble);
@@ -255,6 +374,10 @@ import { hasGenerationService } from "./reader-capabilities.js";
       const assistantBubble = { role: "agent", text: "", time: "刚刚" };
       appendMessage(assistantBubble);
       const assistantArticle = messageList.lastElementChild;
+      if (window.matchMedia("(max-width: 900px)").matches) {
+        activatePanel("discussion");
+        setTimeout(() => scrollToLatest("auto"), 80);
+      }
       const assistantText = assistantArticle.querySelector(".message-content > p");
       setGenerating(true);
       setGenerationStatus("正在将消息保存到本地…");
@@ -271,22 +394,35 @@ import { hasGenerationService } from "./reader-capabilities.js";
           },
           onDelta(text) {
             assistantText.textContent += text;
+            scrollIfFollowing();
           },
           onMemoryUpdate(memoryState) { renderMemoryState(memoryState); },
-          onMemoryError(error) { setGenerationStatus("回复已保存，但自动认知抽取失败：" + error.message); },
+          onMemoryError(error) { setGenerationStatus("回复已保存，但自动认知抽取失败：" + errorText(error) + "。"); },
         });
         assistantText.textContent = result.snapshot.result?.content || assistantText.textContent;
-        await refreshPersistedMessages();
+        await refreshPersistedMessages({ forceScroll: sentWhileNearBottom });
         // Do not infer an Assistant citation from the user's current reading position.
         // Only persisted, service-verified sourceReferences may render a citation card.
         state.discussed = true;
-        setGenerationStatus("回复已完成并保存。");
-        productionRuntime.savePosition(state, units).catch(() => {});
+        const terminalStatus = result.snapshot?.status;
+        if (stopRequested || terminalStatus === "cancelled" || terminalStatus === "cancel_requested") {
+          setGenerationStatus("已取消，可重试：原始输入已保存，可对这条回复点“重试”重新生成。");
+        } else {
+          setGenerationStatus("回复已完成并保存。");
+        }
+        productionRuntime.savePosition(state, units).catch((error) => setGenerationStatus("阅读位置保存失败：" + errorText(error) + "。"));
       } catch (error) {
-        setGenerationStatus("生成未完成：" + error.message + "。原始输入保留在本地，可稍后恢复。");
-        await refreshPersistedMessages();
+        if (stopRequested) {
+          setGenerationStatus("已取消，可重试：原始输入已保留在本地，可对这条回复点“重试”重新生成。");
+        } else {
+          setGenerationStatus("生成未完成：" + errorText(error) + "。原始输入保留在本地，可稍后重试。");
+        }
+        await refreshPersistedMessages({ forceScroll: sentWhileNearBottom });
       } finally {
         setGenerating(false);
+        if (window.matchMedia("(max-width: 900px)").matches && sentWhileNearBottom) {
+          setTimeout(() => scrollToLatest("auto"), 60);
+        }
       }
       return;
     }
@@ -359,18 +495,18 @@ import { hasGenerationService } from "./reader-capabilities.js";
       toast("先回到当前主线，再继续阅读。");
       return;
     }
-    if (!state.discussed && !isGithubCorpusMode) {
+    if (!state.discussed && !isCorpusSourceActive()) {
       const confirmed = window.confirm("当前论述单元还没有讨论。是否略读当前单元并继续？");
       if (!confirmed) return;
     }
     if (state.mainlineIndex >= units.length - 1) {
-      toast(isGithubCorpusMode ? "当前书籍已到最后一个阅读单元。" : "演示主线已到最后一个单元。");
+      toast(isCorpusSourceActive() ? "当前书籍已到最后一个阅读单元。" : "演示主线已到最后一个单元。");
       return;
     }
     state.mainlineIndex += 1;
     state.displayedUnit = units[state.mainlineIndex];
     state.viewMode = "mainline";
-    state.discussed = isGithubCorpusMode;
+    state.discussed = isCorpusSourceActive();
     renderSource();
     toast("已按主线顺序展示下一单元。");
   });
@@ -384,9 +520,16 @@ import { hasGenerationService } from "./reader-capabilities.js";
   $("sendButton").addEventListener("click", sendMessage);
   $("stopButton").addEventListener("click", () => {
     if (!state.generating) return;
+    // 发送按钮与停止按钮占用同一位置：刚发出后的极短窗口内忽略停止，
+    // 避免双击发送的第二次点击把回答直接取消。
+    if (performance.now() - stopArmedAt < 700) {
+      toast("刚发送，请稍候再停止生成，避免误触取消回答。");
+      return;
+    }
+    stopRequested = true;
     if (productionRuntime) {
       productionRuntime.stop();
-      setGenerationStatus("已请求停止生成；最终状态以服务端确认为准。");
+      setGenerationStatus("已取消，可重试：原始输入已保留在本地。");
       return;
     }
     clearTimeout(state.timer);
@@ -427,15 +570,14 @@ import { hasGenerationService } from "./reader-capabilities.js";
       window.history.replaceState({}, "", window.location.pathname + (query ? "?" + query : ""));
       window.location.reload();
     } catch (error) {
-      setGenerationStatus("书籍导入失败：" + error.message);
+      setGenerationStatus("书籍导入失败：" + errorText(error) + "。");
       button.disabled = false;
       event.target.value = "";
     }
   });
 
-  messageList.addEventListener("scroll", () => {
-    nearBottom = messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 48;
-  });
+  panelStack?.addEventListener("scroll", () => { nearBottom = followingLatest(); }, { passive: true });
+  window.addEventListener("scroll", () => { nearBottom = followingLatest(); }, { passive: true });
   document.querySelectorAll("[data-citation]").forEach(button => {
     button.addEventListener("click", () => showCitation(button.dataset.citation));
   });
@@ -610,7 +752,7 @@ import { hasGenerationService } from "./reader-capabilities.js";
           toast("已确认，认知版本已追加。");
         } catch (error) {
           confirm.disabled = false;
-          setGenerationStatus("认知确认失败：" + error.message);
+          setGenerationStatus("认知确认失败：" + errorText(error) + "。");
         }
       });
       const reject = document.createElement("button");
@@ -623,7 +765,7 @@ import { hasGenerationService } from "./reader-capabilities.js";
           renderMemoryState(await productionRuntime.resolveMemoryCandidate(record.id, "rejected"));
         } catch (error) {
           reject.disabled = false;
-          setGenerationStatus("处理待确认认知失败：" + error.message);
+          setGenerationStatus("处理待确认认知失败：" + errorText(error) + "。");
         }
       });
       actions.append(confirm, reject);
@@ -642,7 +784,7 @@ import { hasGenerationService } from "./reader-capabilities.js";
     else pending.hidden = false;
   }
 
-  async function refreshPersistedMessages() {
+  async function refreshPersistedMessages({ forceScroll = false } = {}) {
     if (!productionRuntime) return;
     const [persisted, citationRecords] = await Promise.all([
       productionRuntime.loadMessages(),
@@ -653,13 +795,25 @@ import { hasGenerationService } from "./reader-capabilities.js";
     messageList.replaceChildren();
     for (const item of persisted) {
       const message = item.message;
+      // 持久化里的 generating 只可能来自上次被刷新/断网/限流打断的会话。
+      // 它不能继续显示成“正在生成”，否则会永久挂起；这里标记为已中断并给出重试入口。
+      const interrupted = message.status === "generating";
+      const cancelled = message.status === "cancelled";
+      const emptyText = interrupted
+        ? "上次生成被中断，尚未完成。可点“重试”重新生成。"
+        : cancelled
+          ? "已取消，可重试。"
+          : message.status === "failed"
+            ? "生成失败，可重试。"
+            : "本次生成未返回内容。";
       appendMessage({
         id: message.id,
         role: message.role === "user" ? "user" : "agent",
-        text: message.content || (message.status === "generating" ? "正在生成…" : "本次生成未返回内容。"),
+        text: message.content || emptyText,
         time: message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "刚刚",
         saved: message.role === "user",
-        failed: message.status === "failed" || message.status === "cancelled",
+        failed: message.status === "failed" || cancelled || interrupted,
+        interrupted,
         citations: citations.filter((item) => item.messageId === message.id).map((item) => ({
           structureNodeId: item.structureNodeId,
           locator: item.locator,
@@ -667,7 +821,184 @@ import { hasGenerationService } from "./reader-capabilities.js";
         })),
       });
     }
+    scrollIfFollowing(forceScroll);
   }
+
+  function activatePanel(name) {
+    for (const tab of document.querySelectorAll(".pane-tab")) {
+      const active = tab.dataset.panel === name;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+    }
+    for (const panel of document.querySelectorAll(".panel")) {
+      panel.classList.toggle("active", panel.dataset.panel === name);
+    }
+    if (window.matchMedia("(max-width: 900px)").matches) {
+      const active = document.querySelector('.panel[data-panel="' + name + '"]');
+      active?.scrollIntoView({ block: "start", behavior: "auto" });
+    }
+    if (name === "notes") refreshNotes();
+  }
+
+  for (const tab of document.querySelectorAll(".pane-tab")) {
+    tab.addEventListener("click", () => activatePanel(tab.dataset.panel));
+  }
+
+  function formatNoteTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+
+  function unitLabel(unit) {
+    if (!unit) return "原文来源";
+    return unit.title?.startsWith(unit.chapter) ? unit.title : unit.chapter + " · " + unit.title;
+  }
+
+  function friendlyUnitLabel(nodeId, fallback) {
+    const unit = units.find((item) => item.id === nodeId);
+    return unit ? unitLabel(unit) : fallback;
+  }
+
+  function renderNotes() {
+    const list = $("notesList");
+    const empty = $("notesEmpty");
+    const count = $("noteCount");
+    list.replaceChildren();
+    if (count) {
+      count.textContent = String(notes.length);
+      count.hidden = notes.length === 0;
+    }
+    if (empty) {
+      empty.hidden = notes.length > 0;
+      empty.textContent = productionRuntime
+        ? "还没有笔记。读到有感觉的句子，点“记一条”写下来。"
+        : "当前是只读阅读模式，笔记需要本地 Repository 可用。";
+    }
+    for (const note of notes) {
+      const reference = note.sourceReferences?.[0];
+      const card = document.createElement("article");
+      card.className = "note-card";
+      const head = document.createElement("div");
+      head.className = "note-card-head";
+      const locator = document.createElement("span");
+      locator.className = "note-locator";
+      locator.textContent = reference ? friendlyUnitLabel(reference.structureNodeId, reference.locator) : "未关联原文";
+      const time = document.createElement("span");
+      time.className = "note-time";
+      time.textContent = formatNoteTime(note.updatedAt);
+      head.append(locator, time);
+      const content = document.createElement("p");
+      content.className = "note-content";
+      content.textContent = note.content;
+      const actions = document.createElement("div");
+      actions.className = "note-actions";
+      if (reference) {
+        const jump = document.createElement("button");
+        jump.type = "button";
+        jump.className = "text-button";
+        jump.textContent = "回到原文 ↗";
+        jump.addEventListener("click", () => showCitation(reference.structureNodeId));
+        actions.append(jump);
+      }
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "text-button";
+      edit.textContent = "编辑";
+      edit.addEventListener("click", () => openNoteEditor(note));
+      actions.append(edit);
+      card.append(head, content, actions);
+      list.append(card);
+    }
+  }
+
+  async function refreshNotes() {
+    if (!productionRuntime) { notes = []; renderNotes(); return; }
+    try {
+      notes = await productionRuntime.loadNotes();
+      renderNotes();
+    } catch (error) {
+      setGenerationStatus("笔记读取失败：" + errorText(error) + "。");
+    }
+  }
+
+  function openNoteEditor(note = null) {
+    if (!productionRuntime) {
+      toast("当前是只读阅读模式，暂时不能记录笔记。");
+      return;
+    }
+    const unit = state.displayedUnit;
+    $("noteId").value = note?.id || "";
+    $("noteBaseRevision").value = note ? String(note.revision) : "";
+    $("noteInput").value = note?.content || "";
+    $("noteDialogEyebrow").textContent = note ? "编辑笔记" : "读书笔记";
+    $("noteDialogTitle").textContent = note ? "修改这条笔记" : "记一条笔记";
+    const reference = note?.sourceReferences?.[0];
+    $("noteDialogSource").textContent = reference
+      ? "关联原文：" + friendlyUnitLabel(reference.structureNodeId, reference.locator)
+      : unit ? "关联原文：" + unitLabel(unit) : "未关联原文位置";
+    $("noteDialogStatus").textContent = note ? "笔记只由你修改，Agent 不会覆盖你的内容。" : "";
+    $("noteSaveButton").disabled = false;
+    $("noteDialog").showModal();
+    setTimeout(() => $("noteInput").focus(), 30);
+  }
+
+  async function saveNoteFromDialog() {
+    if (!productionRuntime) return;
+    const button = $("noteSaveButton");
+    const content = $("noteInput").value.trim();
+    if (!content) {
+      $("noteDialogStatus").textContent = "写点内容再保存。";
+      return;
+    }
+    const id = $("noteId").value;
+    const baseRevision = Number($("noteBaseRevision").value || 0);
+    button.disabled = true;
+    $("noteDialogStatus").textContent = "正在保存…";
+    try {
+      if (id) {
+        await productionRuntime.updateNote({ id, content, baseRevision });
+      } else {
+        const unit = state.displayedUnit;
+        await productionRuntime.createNote({ content, unitId: unit?.id, unitLocator: unit?.locator });
+      }
+      $("noteDialog").close();
+      await refreshNotes();
+      activatePanel("notes");
+      toast(id ? "笔记已更新，只保存了你写的内容。" : "笔记已保存，并关联到当前原文。");
+    } catch (error) {
+      $("noteDialogStatus").textContent = errorText(error) + "。";
+      button.disabled = false;
+    }
+  }
+
+  $("noteButton").addEventListener("click", () => openNoteEditor());
+  $("railNoteButton").addEventListener("click", () => openNoteEditor());
+  $("addNoteButton").addEventListener("click", () => openNoteEditor());
+  $("noteCancelButton").addEventListener("click", () => $("noteDialog").close());
+  $("noteSaveButton").addEventListener("click", saveNoteFromDialog);
+  $("noteInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      saveNoteFromDialog();
+    }
+  });
+  $("railMemoryButton").addEventListener("click", () => activatePanel("memory"));
+  $("extractMemoryButton").addEventListener("click", async () => {
+    if (!productionRuntime) { toast("当前是只读阅读模式，暂时不能整理认知。"); return; }
+    const button = $("extractMemoryButton");
+    button.disabled = true;
+    $("memoryStatus").textContent = "正在整理这次讨论…";
+    try {
+      renderMemoryState(await productionRuntime.extractMemories());
+      toast("认知整理完成，候选记录已写入本地。");
+    } catch (error) {
+      $("memoryStatus").textContent = "认知整理失败：" + errorText(error) + "。可再点“整理这次讨论”重试。";
+    } finally {
+      button.disabled = false;
+    }
+  });
+
 
   const bookSelector = $("bookSelector");
   if (bookSelector) {
@@ -678,7 +1009,7 @@ import { hasGenerationService } from "./reader-capabilities.js";
       localOption.hidden = !activeLocalBookPackageId;
       localOption.disabled = !activeLocalBookPackageId;
     }
-    bookSelector.value = useLocalBookPackage ? "local" : isGithubCorpusMode ? queryBookId : (queryBookId === "demo" || isDemoProvider ? "demo" : "service");
+    bookSelector.value = activeSource === "github" ? queryBookId : activeSource;
     bookSelector.addEventListener("change", () => {
       const next = bookSelector.value;
       const params = new URLSearchParams(window.location.search);
@@ -698,14 +1029,59 @@ import { hasGenerationService } from "./reader-capabilities.js";
     });
   }
 
+  const libraryButton = $("libraryButton");
+  const libraryDialog = $("libraryDialog");
+  if (libraryButton && libraryDialog) {
+    $("libraryCloseButton")?.addEventListener("click", () => libraryDialog.close());
+    libraryButton.addEventListener("click", async () => {
+      const list = $("libraryList");
+      const empty = $("libraryListEmpty");
+      list.replaceChildren();
+      empty.hidden = true;
+      libraryButton.disabled = true;
+      try {
+        const packages = await listImportedBookPackages();
+        for (const item of packages) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "library-item" + (item.bookRevisionId === activeLocalBookPackageId ? " active" : "");
+          const title = document.createElement("strong");
+          title.textContent = item.title || "未命名书籍";
+          const meta = document.createElement("span");
+          const importedAt = item.importedAt ? new Date(item.importedAt) : null;
+          meta.textContent = [
+            item.author || "",
+            importedAt && !Number.isNaN(importedAt.getTime())
+              ? "导入于 " + importedAt.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+              : "",
+          ].filter(Boolean).join(" · ");
+          button.append(title, meta);
+          button.addEventListener("click", () => {
+            const params = new URLSearchParams(window.location.search);
+            params.delete("book");
+            params.set("localBookRevision", item.bookRevisionId);
+            window.location.search = params.toString();
+          });
+          list.append(button);
+        }
+        if (!packages.length) empty.hidden = false;
+        libraryDialog.showModal();
+      } catch (error) {
+        setGenerationStatus("读取本地书库失败：" + errorText(error) + "。");
+      } finally {
+        libraryButton.disabled = false;
+      }
+    });
+  }
+
   async function initializeReader() {
     try {
       if (isDemoProvider) {
         bookContentProvider = createDemoBookContentProvider();
-      } else if (isGithubCorpusMode) {
+      } else if (isGithubCorpusMode || isBundledMode) {
         state.messages = [];
         messageList.replaceChildren();
-        bookContentProvider = createGithubCorpusProvider();
+        bookContentProvider = isBundledMode ? createBundledBookContentProvider() : createGithubCorpusProvider();
       } else if (useLocalBookPackage) {
         state.messages = [];
         messageList.replaceChildren();
@@ -726,25 +1102,48 @@ import { hasGenerationService } from "./reader-capabilities.js";
         });
       }
       if (!requestedBookRevisionId) throw new Error("真实书籍模式必须提供 READ_BOOK_CONFIG.bookRevisionId。");
-      bookRevision = await bookContentProvider.loadBookRevision(requestedBookRevisionId);
+      let sourceFallbackNotice = "";
+      if (isGithubCorpusMode) {
+        try {
+          bookRevision = await bookContentProvider.loadBookRevision(requestedBookRevisionId);
+        } catch (sourceError) {
+          // 外部语料不可用（配额耗尽 / 断网 / 来源异常）时，页面不能整页失效：
+          // 自动切到随仓库分发的内置读物，并保留可操作的说明与书籍切换入口。
+          activeSource = "bundled";
+          bookContentProvider = createBundledBookContentProvider();
+          bookRevision = await bookContentProvider.loadBookRevision(BUNDLED_BOOK_REVISION_ID);
+          if (bookSelector) bookSelector.value = "bundled";
+          // URL 必须反映实际加载的内容：否则刷新时会再次请求已经失败的 GitHub 来源。
+          const fallbackParams = new URLSearchParams(window.location.search);
+          fallbackParams.delete("localBookRevision");
+          fallbackParams.set("book", "bundled");
+          window.history.replaceState({}, "", window.location.pathname + "?" + fallbackParams.toString());
+          sourceFallbackNotice = sourceError?.code === "RATE_LIMITED"
+            ? "GitHub 未认证配额已用尽（HTTP " + (sourceError.status || 403) + "），已自动切换到内置《传习录（节选）》。稍后可重试，或在右上角“选择阅读书籍”中切回 GitHub 书目。"
+            : "GitHub 来源加载失败：" + errorText(sourceError) + "。已自动切换到内置《传习录（节选）》，可在右上角“选择阅读书籍”中切换。";
+        }
+      } else {
+        bookRevision = await bookContentProvider.loadBookRevision(requestedBookRevisionId);
+      }
       units = bookRevision.units;
       sourceRetriever = createSourceRetriever(units);
       state.mainlineIndex = units.findIndex(unit => unit.id === bookRevision.initialMainlineUnitId);
       if (state.mainlineIndex < 0) throw new Error("书籍主线起始单元不存在。");
       state.displayedUnit = units[state.mainlineIndex];
       renderChapterOptions();
-      if (isGithubCorpusMode) {
+      renderRailChapters();
+      if (isCorpusSourceActive()) {
         state.discussed = true;
         $("menuButton").hidden = true;
         $("simulateFailure").hidden = true;
         try {
           const getAccessToken = readerConfig.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken;
           const hasAgentService = hasGenerationService(readerConfig, getAccessToken);
-          productionRuntime = await createProductionReaderRuntime({
+          productionRuntime = await createProductionReaderRuntime(runtimeConfigFor({
             ...readerConfig,
             getAccessToken,
             localOnly: readerConfig.localOnly === true || !hasAgentService,
-          }, bookRevision);
+          }), bookRevision);
           const position = productionRuntime.readingPosition;
           if (position) {
             const index = units.findIndex((unit) => unit.id === position.mainlineNodeId);
@@ -759,20 +1158,27 @@ import { hasGenerationService } from "./reader-capabilities.js";
           $("backupButton").disabled = false;
           $("backupButton").textContent = productionRuntime.backupStatus.label;
           $("readerModeLabel").textContent = productionRuntime.generationConfigured
-            ? "GitHub 原文 · Agent 接口已配置"
-            : "GitHub 原文 · 本地阅读";
-          await refreshPersistedMessages();
+            ? (activeSource === "github" ? "GitHub 原文" : "内置读物") + " · Agent 接口已配置"
+            : (activeSource === "github" ? "GitHub 原文" : "内置读物") + " · 本地阅读";
+          await refreshPersistedMessages({ forceScroll: true });
+          await refreshNotes();
           renderMemoryState(await productionRuntime.loadMemoryState());
           renderSource();
           updateCount();
           const cachedCount = bookRevision.sourceMetadata?.cacheFallbackCount || 0;
-          const cacheMessage = cachedCount
+          const cacheMessage = activeSource === "github" && cachedCount
             ? "本次有 " + cachedCount + " 个来源资源由离线缓存提供。"
-            : "已启用在线优先的本机来源缓存。";
+            : activeSource === "github" ? "已启用在线优先的本机来源缓存。" : "";
           const agentMessage = productionRuntime.generationConfigured
-            ? "Agent 接口已配置，生成结果仍以服务端权威响应为准。"
-            : "Agent 配置不完整，当前使用本地阅读与历史查看模式。";
-          setGenerationStatus("已从 GitHub 读取 " + units.length + " 个阅读单元。" + cacheMessage + " " + agentMessage + " " + productionRuntime.backupStatus.detail);
+            ? "Agent 接口已配置，生成结果仍以服务端权威响应为准"
+            : "Agent 配置不完整，当前使用本地阅读与历史查看模式";
+          if (sourceFallbackNotice) {
+            setGenerationStatus(sourceFallbackNotice + " 已载入 " + units.length + " 个内置阅读单元，可离线阅读与讨论（" + agentMessage + "）。");
+          } else if (activeSource === "bundled") {
+            setGenerationStatus("已加载内置《传习录（节选）》" + units.length + " 个阅读单元，离线可用，不依赖网络配额。" + agentMessage + "。");
+          } else {
+            setGenerationStatus("已从 GitHub 读取 " + units.length + " 个阅读单元。" + cacheMessage + " " + agentMessage + "。" + productionRuntime.backupStatus.detail);
+          }
         } catch (runtimeError) {
           productionRuntime = null;
           try {
@@ -792,10 +1198,10 @@ import { hasGenerationService } from "./reader-capabilities.js";
             $("memoryPanel").hidden = true;
             $("backupButton").disabled = true;
             $("backupButton").textContent = "备份未配置";
-            $("readerModeLabel").textContent = "GitHub 原文 · 本地只读";
+            $("readerModeLabel").textContent = (activeSource === "github" ? "GitHub 原文" : "内置读物") + " · 本地只读";
             renderSource();
             updateCount();
-            setGenerationStatus("正式阅读运行时初始化失败，已降级为本地只读阅读。阅读位置可本地保存；Agent/云端备份未启用。原因：" + runtimeError.message);
+            setGenerationStatus("正式阅读运行时初始化失败，已降级为本地只读阅读。阅读位置可本地保存；Agent/云端备份未启用。原因：" + errorText(runtimeError) + "。");
           } catch (localError) {
             productionRuntime = null;
             $("conversationSection").hidden = true;
@@ -803,29 +1209,33 @@ import { hasGenerationService } from "./reader-capabilities.js";
             $("memoryPanel").hidden = true;
             $("backupButton").disabled = true;
             $("backupButton").textContent = "备份未配置";
-            $("readerModeLabel").textContent = "GitHub 原文 · 在线只读";
+            $("readerModeLabel").textContent = (activeSource === "github" ? "GitHub 原文" : "内置读物") + " · 在线只读";
             renderSource();
             updateCount();
-            setGenerationStatus("本地 Repository 不可用，当前仅显示在线原文。运行时错误：" + runtimeError.message + "；本地存储错误：" + localError.message);
+            setGenerationStatus("本地 Repository 不可用，当前仅显示在线原文。运行时错误：" + errorText(runtimeError) + "；本地存储错误：" + errorText(localError) + "。");
           }
         }
         return;
       }
       if (isDemoProvider) {
+        const initialMessages = state.messages;
+        state.messages = [];
+        messageList.replaceChildren();
+        for (const message of initialMessages) appendMessage(message);
         renderSource();
         updateCount();
-        messageList.scrollTop = messageList.scrollHeight;
+        scrollIfFollowing(true);
         setGenerationStatus("演示内容已通过 BookContentProvider 加载；尚未连接真实书籍服务。");
         return;
       }
 
-      productionRuntime = await createProductionReaderRuntime({
+      productionRuntime = await createProductionReaderRuntime(runtimeConfigFor({
         ...readerConfig,
-        // A locally generated BookRevision ID is not registered with the remote
-        // Generation service. Keep imported packages local until a server-side
-        // ingestion/registration handshake exists.
-        localOnly: useLocalBookPackage,
-      }, bookRevision);
+        // A locally generated BookRevision ID is not registered with a remote
+        // Generation service. Keep imported packages local unless the host
+        // explicitly declares that it can serve locally generated revisions.
+        localOnly: useLocalBookPackage && readerConfig.allowLocalBookGeneration !== true,
+      }), bookRevision);
       const position = productionRuntime.readingPosition;
       if (position) {
         const index = units.findIndex(unit => unit.id === position.mainlineNodeId);
@@ -835,7 +1245,8 @@ import { hasGenerationService } from "./reader-capabilities.js";
         state.discussed = Boolean(position.currentUnitDiscussed);
       }
       renderSource();
-      await refreshPersistedMessages();
+      await refreshPersistedMessages({ forceScroll: true });
+      await refreshNotes();
       renderMemoryState(await productionRuntime.loadMemoryState());
       $("messageInput").disabled = !productionRuntime.generationConfigured;
       $("sendButton").disabled = !productionRuntime.generationConfigured;
@@ -850,15 +1261,15 @@ import { hasGenerationService } from "./reader-capabilities.js";
         onDelta: () => {},
         onMemoryUpdate: renderMemoryState,
       }).then(async () => {
-        await refreshPersistedMessages();
+        await refreshPersistedMessages({ forceScroll: true });
         renderMemoryState(await productionRuntime.loadMemoryState());
       }).catch(error => {
-        setGenerationStatus("有未完成的生成任务，自动恢复暂不可用：" + error.message);
+        setGenerationStatus("有未完成的生成任务，自动恢复暂不可用：" + errorText(error) + "。可对下方标记为“上次生成被中断”的回复点“重新生成”。");
       });
     } catch (error) {
       $("sourceHeading").textContent = "书籍内容加载失败";
       $("sourceText").textContent = "当前无法加载此书籍版本，请检查网络、来源仓库和内容提供器配置。";
-      setGenerationStatus("内容加载失败：" + error.message);
+      setGenerationStatus("内容加载失败：" + errorText(error) + "。");
       $("messageInput").disabled = true;
       $("sendButton").disabled = true;
       $("simulateFailure").disabled = true;
