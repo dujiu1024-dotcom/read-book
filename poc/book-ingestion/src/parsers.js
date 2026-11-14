@@ -12,7 +12,7 @@ async function parseEpub(bytes) {
   for (const item of book.spine.spineItems) {
     await item.load(book.load.bind(book));
     const document = item.document;
-    const text = document?.body?.textContent?.replace(/\\s+/g, ' ').trim() || '';
+    const text = document?.body?.textContent?.replace(/\s+/g, ' ').trim() || '';
     let sampleCfi = null;
     if (document?.body && item.cfiFromRange) {
       const walker = document.createTreeWalker(document.body, 4);
@@ -29,7 +29,7 @@ async function parseEpub(bytes) {
     }));
     const footnotes = [...(document?.querySelectorAll('aside, [role="doc-footnote"]') || [])]
       .filter((node) => node.getAttribute('epub:type') === 'footnote' || node.getAttribute('role') === 'doc-footnote')
-      .map((node) => ({ id: node.id || null, text: node.textContent?.replace(/\\s+/g, ' ').trim() || '' }));
+      .map((node) => ({ id: node.id || null, text: node.textContent?.replace(/\s+/g, ' ').trim() || '' }));
     chapters.push({
       href: item.href, id: item.idref,
       title: document?.querySelector('h1,h2')?.textContent || item.href,
@@ -92,7 +92,7 @@ async function parsePdf(bytes) {
       width: item.width ?? 0, height: item.height ?? 0, fontName: item.fontName || null
     }));
     for (const item of items) {
-      const normalized = item.text.replace(/\\s+/g, ' ').trim();
+      const normalized = item.text.replace(/\s+/g, ' ').trim();
       if (normalized && (item.y > viewport.height - 50 || item.y < 50)) {
         repeatedEdgeCounts.set(normalized, (repeatedEdgeCounts.get(normalized) || 0) + 1);
       }
@@ -102,7 +102,7 @@ async function parsePdf(bytes) {
   const repeatedEdgeText = new Set([...repeatedEdgeCounts].filter(([, count]) => count > 1).map(([text]) => text));
   const pages = rawPages.map((page) => {
     const visibleItems = page.items
-      .filter((item) => !repeatedEdgeText.has(item.text.replace(/\\s+/g, ' ').trim()));
+      .filter((item) => !repeatedEdgeText.has(item.text.replace(/\s+/g, ' ').trim()));
     const ordered = orderPdfItems(visibleItems, page.width);
     const items = ordered.items;
     // PDF.js text transforms may use a bottom-origin coordinate system.
@@ -111,13 +111,13 @@ async function parsePdf(bytes) {
     const edgeThreshold = page.height * 0.12;
     const printedPageItem = items.find((item) =>
       (item.y < edgeThreshold || item.y > page.height - edgeThreshold) &&
-      /^\\d{1,4}$/.test(item.text.trim())
+      /^\d{1,4}$/.test(item.text.trim())
     );
     const bodyItems = printedPageItem ? items.filter((item) => item !== printedPageItem) : items;
     return {
       physicalPage: page.physicalPage,
       printedPage: printedPageItem ? Number(printedPageItem.text.trim()) : null,
-      text: bodyItems.map((item) => item.text).join(' ').replace(/\\s+/g, ' ').trim(),
+      text: bodyItems.map((item) => item.text).join(' ').replace(/\s+/g, ' ').trim(),
       viewport: page.viewport, items: bodyItems.length,
       columnCount: ordered.columnCount, columnSplitAt: ordered.splitAt,
       textItems: items
@@ -131,7 +131,7 @@ async function parseTxt(bytes) {
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { encoding = 'gb18030'; text = new TextDecoder('gb18030').decode(bytes); }
   const paragraphs = [];
-  const matcher = /[^\\r\\n]+(?:\\r?\\n(?!\\s*\\r?\\n)[^\\r\\n]+)*/g;
+  const matcher = /[^\\r\\n]+(?:\\r?\\n(?!\s*\\r?\\n)[^\\r\\n]+)*/g;
   for (const match of text.matchAll(matcher)) {
     const value = match[0].trim();
     if (value) {
