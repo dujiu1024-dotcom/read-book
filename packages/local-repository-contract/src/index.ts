@@ -7,6 +7,8 @@ import type {
   Message,
   ReadingPosition,
   ReadingRound,
+  PresentedSource,
+  ReadingUnitProgress,
   SourceReference,
   Thread,
 } from "../../domain-core/src/index.ts";
@@ -167,6 +169,8 @@ export interface RepositorySnapshot {
   messages: PersistedMessage[];
   readingRounds: ReadingRoundRecord[];
   readingPositions: ReadingPositionRecord[];
+  presentedSources: PresentedSource[];
+  readingUnitProgress: ReadingUnitProgress[];
   citations: CitationRecord[];
   notes: NoteRecord[];
   memories: MemoryRecord[];
@@ -196,7 +200,10 @@ export interface LocalRepositoryTransaction {
   ): Promise<AssistantMessage>;
 
   createReadingRound(round: ReadingRoundRecord): Promise<ReadingRoundRecord>;
+  updateReadingRound(roundId: string, status: "completed" | "abandoned", completedAt: string): Promise<void>;
   saveReadingPosition(position: ReadingPositionRecord): Promise<void>;
+  createPresentedSource(source: PresentedSource): Promise<PresentedSource>;
+  saveReadingUnitProgress(progress: ReadingUnitProgress): Promise<void>;
 
   saveCitation(citation: CitationRecord): Promise<void>;
   saveNote(note: NoteRecord): Promise<void>;
@@ -232,6 +239,7 @@ export interface LocalRepository {
   acknowledgeBackup(datasetId: string, snapshotSequence: number, backupId: string, backedUpAt: string): Promise<void>;
   getDataSet(datasetId: string): Promise<LocalDataSet | null>;
   getMessages(datasetId: string, threadId: string, afterSequence?: number): Promise<PersistedMessage[]>;
+  getReadingUnitProgress(datasetId: string, readingRoundId: string): Promise<ReadingUnitProgress[]>;
   getGenerationDelivery(datasetId: string, clientGenerationId: string): Promise<GenerationDeliveryRecord | null>;
   listPendingGenerationDeliveries(datasetId: string): Promise<GenerationDeliveryRecord[]>;
   getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]>;
