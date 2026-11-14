@@ -9,8 +9,7 @@ function tokenize(value) {
   const tokens = [];
   for (const segment of segments) {
     if (/^[\u3400-\u9fff]+$/.test(segment)) {
-      if (segment.length === 1) tokens.push(segment);
-      else {
+      if (segment.length > 1) {
         for (let index = 0; index < segment.length - 1; index += 1) {
           const token = segment.slice(index, index + 2);
           if (!DEFAULT_STOPWORDS.has(token)) tokens.push(token);
@@ -46,6 +45,7 @@ export function createSourceRetriever(units) {
     const queryTokens = [...new Set(tokenize(query))];
     if (!queryTokens.length || !documents.length || limit <= 0) return [];
     const count = Math.min(7, Math.floor(limit));
+    const currentChapter = documents.find((item) => item.unit.id === currentUnitId)?.unit.chapter;
     const scored = [];
     for (const document of documents) {
       if (document.unit.id === currentUnitId) continue;
@@ -58,11 +58,13 @@ export function createSourceRetriever(units) {
         const denominator = frequency + 1.2 * (0.25 + 0.75 * document.length / Math.max(averageLength, 1));
         score += inverseFrequency * (frequency * 2.2) / denominator;
       }
-      if (document.unit.chapter === documents.find((item) => item.unit.id === currentUnitId)?.unit.chapter) score *= 0.9;
+      if (currentChapter && document.unit.chapter === currentChapter) score *= 0.9;
       if (score > 0) scored.push({ unit: document.unit, score, index: document.index });
     }
     scored.sort((left, right) => right.score - left.score || left.index - right.index);
-    return scored.slice(0, count).map((item) => item.unit);
+    const strongestScore = scored[0]?.score || 0;
+    const minimumScore = Math.max(0.12, strongestScore * 0.45);
+    return scored.filter((item) => item.score >= minimumScore).slice(0, count).map((item) => item.unit);
   }
 
   return Object.freeze({
