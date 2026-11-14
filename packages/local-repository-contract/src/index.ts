@@ -193,6 +193,7 @@ export interface LocalRepositoryTransaction {
     messageId: string,
     status: AssistantMessageStatus,
     content?: string,
+    sourceReferences?: SourceReference[],
   ): Promise<AssistantMessage>;
 
   createReadingRound(round: ReadingRoundRecord): Promise<ReadingRoundRecord>;
@@ -313,7 +314,7 @@ export function createAgentGenerationTurnRepository(
     transaction<T>(id: string, operation: (tx: {
       appendUserMessage(message: NewUserMessage): Promise<PersistedMessage>;
       appendAssistantMessage(message: NewAssistantMessage): Promise<PersistedMessage>;
-      transitionAssistantMessage(messageId: string, status: AssistantMessageStatus, content?: string): Promise<AssistantMessage>;
+      transitionAssistantMessage(messageId: string, status: AssistantMessageStatus, content?: string, sourceReferences?: SourceReference[]): Promise<AssistantMessage>;
       saveGenerationDelivery(delivery: GenerationDeliveryRecord): Promise<GenerationDeliveryRecord>;
     }) => Promise<T>): Promise<T> {
       if (id !== datasetId) throw new RepositoryError("DATASET_NOT_FOUND", "Agent turn dataset does not match the bound local dataset.");
