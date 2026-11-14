@@ -137,7 +137,7 @@ test("persists accepted candidates only when an explicit immutable version plan 
     },
   };
   const ids = await persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, [{
-    candidateId: "candidate-1", memoryId: "memory-1", version: 1, previousVersionId: null, changeKind: "new",
+    candidateId: accepted.accepted[0].candidate.id, memoryId: "memory-1", version: 1, previousVersionId: null, changeKind: "new",
   }], () => "2026-11-14T00:00:00.000Z");
   assert.deepEqual(ids, ["candidate-1"]);
   assert.equal(writes.length, 1);
