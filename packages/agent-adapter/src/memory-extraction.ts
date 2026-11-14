@@ -188,3 +188,84 @@ export async function runMemoryExtraction(
     rejected: evaluated.filter((item) => item.evaluation.decision === "reject"),
   };
 }
+
+/** A caller must explicitly classify cross-batch evolution; extraction never guesses which memory to overwrite. */
+export interface MemoryVersionPlan {
+  candidateId: string;
+  memoryId: string;
+  version: number;
+  previousVersionId: string | null;
+  changeKind: "new" | "supplement" | "correction" | "conflict" | "rejection" | "extension";
+  relation?: {
+    id: string;
+    toVersionId: string;
+    relationType: "supports" | "contradicts" | "extends" | "supersedes" | "retracts";
+    createdAt: string;
+  };
+}
+
+export interface MemoryCandidatePersistenceRepository {
+  transaction<T>(datasetId: string, operation: (tx: {
+    appendMemoryVersion(version: import("../../domain-core/src/index.ts").MemoryVersion): Promise<unknown>;
+    appendMemoryRelation(relation: import("../../domain-core/src/index.ts").MemoryRelation): Promise<unknown>;
+  }) => Promise<T>): Promise<T>;
+}
+
+/**
+ * Persist only accepted candidates. Every accepted item needs an explicit version plan;
+ * needsConfirmation/rejected candidates are never written. The repository transaction
+ * appends immutable versions and their typed cross-memory relations atomically.
+ */
+export async function persistAcceptedMemoryCandidates(
+  repository: MemoryCandidatePersistenceRepository,
+  datasetId: string,
+  result: MemoryExtractionPipelineResult,
+  plans: readonly MemoryVersionPlan[],
+  now: () => string = () => new Date().toISOString(),
+): Promise<string[]> {
+  const acceptedIds = new Set(result.accepted.map(({ candidate }) => candidate.id));
+  if (new Set(plans.map((plan) => plan.candidateId)).size !== plans.length) {
+    throw new MemoryExtractionError("A candidate may have only one persistence plan.");
+  }
+  if (plans.some((plan) => !acceptedIds.has(plan.candidateId)) || plans.length !== acceptedIds.size) {
+    throw new MemoryExtractionError("Every accepted candidate needs exactly one plan; unaccepted candidates cannot be persisted.");
+  }
+  const byId = new Map(result.accepted.map((item) => [item.candidate.id, item]));
+  return repository.transaction(datasetId, async (tx) => {
+    const persisted: string[] = [];
+    for (const plan of plans) {
+      const item = byId.get(plan.candidateId)!;
+      const candidate = item.candidate;
+      const version = {
+        id: candidate.id,
+        memoryId: plan.memoryId,
+        version: plan.version,
+        previousVersionId: plan.previousVersionId,
+        changeKind: plan.changeKind,
+        content: candidate.content,
+        title: candidate.title,
+        viewpoint: candidate.viewpoint,
+        confidence: candidate.confidence,
+        ambiguity: candidate.ambiguity,
+        evaluationScore: item.evaluation.score,
+        sourceMessageIds: [...candidate.sourceMessageIds],
+        sourceReferences: structuredClone(candidate.sourceReferences),
+        createdAt: now(),
+      } as const;
+      await tx.appendMemoryVersion(version);
+      if (plan.relation) {
+        await tx.appendMemoryRelation({
+          id: plan.relation.id,
+          fromVersionId: candidate.id,
+          toVersionId: plan.relation.toVersionId,
+          relationType: plan.relation.relationType,
+          sourceMessageIds: [...candidate.sourceMessageIds],
+          sourceReferences: structuredClone(candidate.sourceReferences),
+          createdAt: plan.relation.createdAt,
+        });
+      }
+      persisted.push(candidate.id);
+    }
+    return persisted;
+  });
+}
