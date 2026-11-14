@@ -42,12 +42,18 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   }
 
   const searchBookSources = createBookSourceSearch(bookRevision.units || []);
-  const buildAdditionalSources = (query, currentUnit) => searchBookSources(query, currentUnit.id, 7)
-    .map((unit) => ({
-      structure_node_id: unit.id,
-      locator: unit.locator,
-      excerpt: unit.text.slice(0, 30_000),
-    }));
+  const buildAdditionalSources = (query, currentUnit) => {
+    let remainingCharacters = 90_000;
+    return searchBookSources(query, currentUnit.id, 7).flatMap((unit) => {
+      const excerpt = unit.text.slice(0, Math.min(30_000, remainingCharacters));
+      remainingCharacters -= excerpt.length;
+      return excerpt.trim() ? [{
+        structure_node_id: unit.id,
+        locator: unit.locator,
+        excerpt,
+      }] : [];
+    });
+  };
 
   const repository = new SqliteOpfsRepository();
   await repository.initialize();
