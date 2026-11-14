@@ -16,14 +16,14 @@ test("Agent user-message port resolves only after the repository transaction com
     },
   } as unknown as LocalRepositoryTransaction;
   const repository = {
-    async transaction<T>(operation: (transaction: LocalRepositoryTransaction) => Promise<T>) {
+    async transaction<T>(_datasetId: string, operation: (transaction: LocalRepositoryTransaction) => Promise<T>) {
       events.push("begin");
       const result = await operation(tx);
       events.push("commit");
       return result;
     },
   };
-  const port = createAgentUserMessageRepository(repository, (input) => ({
+  const port = createAgentUserMessageRepository(repository, "dataset-1", (input) => ({
     ...input,
     createdAt: "2026-11-14T00:00:00.000Z",
     sourceReferences: [],
@@ -43,7 +43,7 @@ test("Agent user-message port propagates transaction failure without reporting a
     async appendUserMessage() { throw new Error("quota exceeded"); },
   } as unknown as LocalRepositoryTransaction;
   const port = createAgentUserMessageRepository({
-    async transaction<T>(operation: (transaction: LocalRepositoryTransaction) => Promise<T>) {
+    async transaction<T>(_datasetId: string, operation: (transaction: LocalRepositoryTransaction) => Promise<T>) {
       try {
         return await operation(tx);
       } catch (error) {
@@ -52,7 +52,7 @@ test("Agent user-message port propagates transaction failure without reporting a
         if (!committed) committed = false;
       }
     },
-  }, (input) => ({
+  }, "dataset-1", (input) => ({
     ...input,
     createdAt: "2026-11-14T00:00:00.000Z",
     sourceReferences: [],
@@ -91,7 +91,7 @@ test("binding revocation contract is soft-delete only and cannot imply dataset d
     },
   } as unknown as LocalRepositoryTransaction;
   const repository = {
-    async transaction<T>(operation: (transaction: LocalRepositoryTransaction) => Promise<T>) {
+    async transaction<T>(_datasetId: string, operation: (transaction: LocalRepositoryTransaction) => Promise<T>) {
       return operation(tx);
     },
   };
