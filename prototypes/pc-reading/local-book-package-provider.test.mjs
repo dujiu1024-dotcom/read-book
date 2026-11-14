@@ -23,6 +23,7 @@ function fixture({ corruptChunk = false } = {}) {
   const chunk = {
     chunk_id: "chunk-000001", chapter_id: "chapter-1", content,
     content_sha256: corruptChunk ? "0".repeat(64) : digest(content),
+    locator_type: "txt", order_index: 0,
     start_locator: "txt:offset:0", end_locator: "txt:offset:8",
   };
   return zipSync({
@@ -36,7 +37,10 @@ function fixture({ corruptChunk = false } = {}) {
 
 test("parses a valid standard package into stable reading units", async () => {
   const book = await parseBookPackage(fixture());
-  assert.equal(book.bookRevisionId, "a9d0a34a-5e6f-4a2d-9f30-4d7e5e8c1a20");
+  assert.equal(book.packageMetadata.packageId, "a9d0a34a-5e6f-4a2d-9f30-4d7e5e8c1a20");
+  assert.match(book.bookId, /^[0-9a-f-]{36}$/i);
+  assert.match(book.bookRevisionId, /^[0-9a-f-]{36}$/i);
+  assert.notEqual(book.bookRevisionId, book.packageMetadata.packageId);
   assert.equal(book.initialMainlineUnitId, "chunk-000001");
   assert.equal(book.units[0].chapter, "第一章");
   assert.equal(book.units[0].text, "第一段正文内容。");
@@ -62,7 +66,7 @@ test("rejects a package with a tampered source file", async () => {
     "source/original.txt": strToU8("source file"),
     "content/book.json": strToU8(JSON.stringify({ title: "测试书", authors: ["测试作者"] })),
     "content/chapters.json": strToU8(JSON.stringify([{ chapter_id: "chapter-1", title: "第一章", parent_chapter_id: null }])),
-    "content/chunks.jsonl": strToU8(JSON.stringify({ chunk_id: "c1", chapter_id: "chapter-1", content: "正文" })),
+    "content/chunks.jsonl": strToU8(JSON.stringify({ chunk_id: "c1", chapter_id: "chapter-1", content: "正文", content_sha256: digest("正文"), locator_type: "txt", order_index: 0, start_locator: "txt:0", end_locator: "txt:2" })),
   };
   await assert.rejects(() => parseBookPackage(zipSync(files)), /原始文件 SHA-256/);
   assert.ok(archive.byteLength > 0);
