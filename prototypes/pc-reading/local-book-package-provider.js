@@ -187,7 +187,10 @@ export async function importBookPackageFile(file, options = {}) {
     importedAt: new Date().toISOString(),
     archive: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
   }), options.indexedDB);
-  try { globalThis.localStorage?.setItem("read-book:active-local-book", revision.bookRevisionId); } catch {}
+  try {
+    globalThis.localStorage?.setItem("read-book:active-local-book", revision.bookRevisionId);
+    globalThis.localStorage?.setItem("read-book:prefer-local-book", "true");
+  } catch {}
   return { bookRevisionId: revision.bookRevisionId, title: revision.title, author: revision.author, unitCount: revision.units.length };
 }
 
