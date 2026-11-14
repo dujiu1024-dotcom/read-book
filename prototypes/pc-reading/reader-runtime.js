@@ -521,7 +521,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     repository,
     thread,
     readingPosition,
-    readingRound,
+    get readingRound() { return readingRound; },
     backupStatus,
     loadMessages,
     loadMemoryState,
