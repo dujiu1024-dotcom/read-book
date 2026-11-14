@@ -5,7 +5,7 @@ function unique(values) {
 function validateRecord(record, index) {
   const prefix = "record[" + index + "]";
   if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error(prefix + " must be an object");
-  for (const key of ["id", "sample_id"]) {
+  for (const key of ["id", "sample_id", "run_id", "model_id", "query", "answer"]) {
     if (typeof record[key] !== "string" || !record[key].trim()) throw new Error(prefix + "." + key + " must be a non-empty string");
   }
   if (!record.source || typeof record.source !== "object") throw new Error(prefix + ".source is required");
@@ -13,16 +13,21 @@ function validateRecord(record, index) {
   if (typeof record.source.source_ref !== "string" || !record.source.source_ref.trim()) throw new Error(prefix + ".source.source_ref is required");
   if (typeof record.source.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(record.source.sha256)) throw new Error(prefix + ".source.sha256 must be a SHA-256 hex digest");
   if (!["approved", "pending", "not_required"].includes(record.source.authorization_status)) throw new Error(prefix + ".source.authorization_status is invalid");
-  if (!Array.isArray(record.expected_evidence_ids) || !Array.isArray(record.retrieved_evidence_ids)) throw new Error(prefix + " evidence ID fields must be arrays");
-  if (!Array.isArray(record.answer_point_ids) || !Array.isArray(record.citations)) throw new Error(prefix + " answer_point_ids and citations must be arrays");
+  for (const key of ["expected_evidence_ids", "retrieved_evidence_ids", "answer_point_ids"]) {
+    if (!Array.isArray(record[key]) || record[key].some((value) => typeof value !== "string" || !value.trim())) {
+      throw new Error(prefix + "." + key + " must be an array of non-empty strings");
+    }
+  }
+  if (!Array.isArray(record.citations)) throw new Error(prefix + ".citations must be an array");
   if (typeof record.should_abstain !== "boolean" || typeof record.abstained !== "boolean") throw new Error(prefix + " abstention fields must be booleans");
-  for (const key of ["latency_ms", "input_tokens", "output_tokens"]) {
-    if (!Number.isFinite(record[key]) || record[key] < 0) throw new Error(prefix + "." + key + " must be a non-negative number");
+  if (!Number.isFinite(record.latency_ms) || record.latency_ms < 0) throw new Error(prefix + ".latency_ms must be a non-negative number");
+  for (const key of ["input_tokens", "output_tokens"]) {
+    if (!Number.isSafeInteger(record[key]) || record[key] < 0) throw new Error(prefix + "." + key + " must be a non-negative integer");
   }
   for (const citation of record.citations) {
     if (!citation || typeof citation.evidence_id !== "string" || !citation.evidence_id.trim()) throw new Error(prefix + " citation evidence_id is required");
     if (typeof citation.locator_correct !== "boolean") throw new Error(prefix + " citation locator_correct must be a boolean adjudication");
-    if (!Array.isArray(citation.supports_point_ids)) throw new Error(prefix + " citation supports_point_ids must be an array");
+    if (!Array.isArray(citation.supports_point_ids) || citation.supports_point_ids.some((value) => typeof value !== "string" || !value.trim())) throw new Error(prefix + " citation supports_point_ids must be an array of non-empty strings");
   }
   if (record.behavior_violations !== undefined && (!Array.isArray(record.behavior_violations) || record.behavior_violations.some((item) => typeof item !== "string"))) {
     throw new Error(prefix + ".behavior_violations must be an array of strings");
@@ -73,6 +78,12 @@ export function evaluateRecords(records, options = {}) {
   const inputTokens = records.reduce((sum, record) => sum + record.input_tokens, 0);
   const outputTokens = records.reduce((sum, record) => sum + record.output_tokens, 0);
   const pricing = options.pricing || null;
+  const authorizationCounts = Object.fromEntries(["approved", "pending", "not_required"].map((status) => [
+    status, records.filter((record) => record.source.authorization_status === status).length
+  ]));
+  const sourceTypeCounts = Object.fromEntries(["synthetic", "licensed", "public_domain", "user_provided"].map((type) => [
+    type, records.filter((record) => record.source.source_type === type).length
+  ]));
   const tokenCost = pricing && Number.isFinite(pricing.input_per_million) && Number.isFinite(pricing.output_per_million)
     ? (inputTokens * pricing.input_per_million + outputTokens * pricing.output_per_million) / 1_000_000
     : null;
@@ -81,6 +92,13 @@ export function evaluateRecords(records, options = {}) {
     schema_version: "1.0.0",
     generated_at: (options.now || (() => new Date().toISOString()))(),
     sample_count: records.length,
+    models: unique(records.map((record) => record.model_id)),
+    runs: unique(records.map((record) => record.run_id)),
+    sample_provenance: {
+      source_type_counts: sourceTypeCounts,
+      authorization_status_counts: authorizationCounts,
+      contains_pending_authorization: authorizationCounts.pending > 0
+    },
     retrieval: {
       k,
       evaluated_cases: retrievalCases.length,
