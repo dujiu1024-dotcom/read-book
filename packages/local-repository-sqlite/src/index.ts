@@ -52,7 +52,7 @@ export class SqliteOpfsRepository implements LocalRepository {
       if (!pending) return;
       this.pending.delete(data.id);
       if (data.error) pending.reject(mapWorkerError(data.error));
-            else pending.resolve(data.result);
+      else pending.resolve(data.result);
     };
     this.worker.onerror = (event) => {
       for (const pending of this.pending.values()) pending.reject(new Error(event.message || "SQLite Worker 异常退出"));
