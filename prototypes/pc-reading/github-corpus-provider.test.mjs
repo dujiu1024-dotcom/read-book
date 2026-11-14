@@ -43,7 +43,13 @@ test("loads a Mao Xuan volume independently and preserves article order", async 
 });
 
 test("rejects unknown corpus identifiers and empty source files", async () => {
-  const provider = createGithubCorpusProvider({ fetchImpl: async () => new Response("", { status: 200 }) });
+  const provider = createGithubCorpusProvider({ fetchImpl: async (url) => {
+    if (String(url).includes("/contents/")) return new Response(JSON.stringify({
+      type: "file", sha: "0123456789abcdef0123456789abcdef01234567",
+      download_url: "https://raw.githubusercontent.com/garychowcmu/daizhigev20/master/source.txt"
+    }), { status: 200 });
+    return new Response("", { status: 200 });
+  }});
   await assert.rejects(() => provider.loadBookRevision("github-corpus-unknown"), /不支持/);
   await assert.rejects(() => provider.loadBookRevision("github-corpus-chuanxilu"), /来源文件为空/);
 });
