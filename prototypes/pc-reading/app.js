@@ -8,12 +8,14 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
   let units = [];
   let bookRevision = null;
   const readerConfig = window.READ_BOOK_CONFIG || {};
-  const queryBookId = new URLSearchParams(window.location.search).get("book");
+  const queryParams = new URLSearchParams(window.location.search);
+  const queryBookId = queryParams.get("book");
+  const queryLocalBookId = queryParams.get("localBookRevision");
   const isGithubCorpusMode = Boolean(queryBookId && queryBookId !== "demo");
-  const activeLocalBookPackageId = readerConfig.localBookPackageId || (() => {
+  const activeLocalBookPackageId = readerConfig.localBookPackageId || queryLocalBookId || (() => {
     try { return window.localStorage.getItem("read-book:active-local-book") || ""; } catch { return ""; }
   })();
-  const preferLocalBookPackage = Boolean(readerConfig.localBookPackageId) || (() => {
+  const preferLocalBookPackage = Boolean(readerConfig.localBookPackageId || queryLocalBookId) || (() => {
     try { return window.localStorage.getItem("read-book:prefer-local-book") === "true"; } catch { return false; }
   })();
   const useLocalBookPackage = Boolean(activeLocalBookPackageId && !queryBookId && (preferLocalBookPackage || !readerConfig.bookRevisionId));
@@ -60,7 +62,7 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
     $("bookTitle").textContent = bookRevision.title;
     $("topbarBookTitle").textContent = bookRevision.title;
     $("bookAuthor").textContent = bookRevision.author;
-    $("sourceTag").textContent = isGithubCorpusMode ? "GitHub 公开语料" : "原书内容";
+    $("sourceTag").textContent = isGithubCorpusMode ? "GitHub 公开语料" : useLocalBookPackage ? "本地书籍包" : "原书内容";
     const sourceLink = $("sourceSourceLink");
     if (sourceLink && unit.source?.url) {
       sourceLink.href = unit.source.url;
@@ -404,6 +406,7 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
       setGenerationStatus("已导入《" + imported.title + "》，共 " + imported.unitCount + " 个原文单元。正在打开…");
       const params = new URLSearchParams(window.location.search);
       params.delete("book");
+      params.set("localBookRevision", imported.bookRevisionId);
       const query = params.toString();
       window.history.replaceState({}, "", window.location.pathname + (query ? "?" + query : ""));
       window.location.reload();
@@ -557,15 +560,27 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
   const bookSelector = $("bookSelector");
   if (bookSelector) {
     const serviceOption = bookSelector.querySelector('option[value="service"]');
+    const localOption = bookSelector.querySelector('option[value="local"]');
     if (serviceOption) serviceOption.disabled = !(readerConfig.apiBaseUrl && readerConfig.bookRevisionId);
-    bookSelector.value = isGithubCorpusMode ? queryBookId : (queryBookId === "demo" || isDemoProvider ? "demo" : "service");
+    if (localOption) {
+      localOption.hidden = !activeLocalBookPackageId;
+      localOption.disabled = !activeLocalBookPackageId;
+    }
+    bookSelector.value = useLocalBookPackage ? "local" : isGithubCorpusMode ? queryBookId : (queryBookId === "demo" || isDemoProvider ? "demo" : "service");
     bookSelector.addEventListener("change", () => {
       const next = bookSelector.value;
       const params = new URLSearchParams(window.location.search);
       if (next === "service") {
         params.delete("book");
+        params.delete("localBookRevision");
         try { window.localStorage.removeItem("read-book:prefer-local-book"); } catch {}
-      } else params.set("book", next);
+      } else if (next === "local") {
+        params.delete("book");
+        if (activeLocalBookPackageId) params.set("localBookRevision", activeLocalBookPackageId);
+      } else {
+        params.delete("localBookRevision");
+        params.set("book", next);
+      }
       const query = params.toString();
       window.location.search = query ? "?" + query : "";
     });
