@@ -63,7 +63,7 @@ async function importFile(file) {
     anchor.href = url;
     anchor.download = (result.manifest.book.title.replace(/[\\/:*?"<>|]/g, '_') || 'book') + '.read-book.zip';
     anchor.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     $('status').textContent = '标准书籍包已生成：' + result.manifest.counts.chapters + ' 个章节、' + result.manifest.counts.chunks + ' 个正文切片。可使用 packages/book-package-validator 校验。';
     show({ manifest: result.manifest, archiveBytes: result.archive.byteLength });
   } catch (error) {
