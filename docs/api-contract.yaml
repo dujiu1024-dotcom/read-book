@@ -700,9 +700,10 @@ components:
           properties:
             current_source:
               type: object
-              required: [structure_node_id, excerpt]
+              required: [structure_node_id, locator, excerpt]
               properties:
                 structure_node_id: { type: string, format: uuid }
+                locator: { type: string, minLength: 1, maxLength: 512 }
                 excerpt: { type: string, maxLength: 30000 }
             recent_messages:
               type: array
