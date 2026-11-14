@@ -5,6 +5,7 @@ import {
   advanceGenerationEventCursor,
   authoritativeFinalResult,
   createGenerationClient,
+  createGenerationTurnController,
   persistUserMessageBeforeGeneration,
   runGenerationTurn,
   validateGenerationAccepted,
@@ -286,4 +287,69 @@ test("ambiguous create failure leaves a queued receipt for idempotent recovery",
   assert.equal(repository.deliveries.get(request.client_generation_id).status, "queued");
   assert.equal(repository.messages.get(input.assistantMessageId).status, "generating");
   assert.deepEqual(repository.counts, { appendUserCount: 1, appendAssistantCount: 1 });
+});
+
+
+test("conversation controller resumes queued deliveries in its bound dataset", async () => {
+  const repository = memoryTurnRepository();
+  repository.deliveries.set(request.client_generation_id, {
+    clientGenerationId: request.client_generation_id,
+    generationId: null,
+    threadId: request.thread_id,
+    userMessageId: request.user_message.local_message_id,
+    assistantMessageId: "assistant-message-recovery",
+    idempotencyKey: "idempotency-key-recovery",
+    status: "queued",
+    lastSequence: 0,
+    lastEventId: null,
+    expiresAt: null,
+    updatedAt: "2026-11-14T00:00:00.000Z",
+  });
+  repository.messages.set("assistant-message-recovery", { status: "generating", content: "" });
+  const client = createGenerationClient({
+    async createGeneration() { return accepted; },
+    async getGeneration() {
+      return {
+        generation_id: accepted.generation_id,
+        status: "completed",
+        expires_at: accepted.expires_at,
+        result: { content: "恢复后的权威结果" },
+      };
+    },
+    async cancelGeneration() { return { ...accepted, status: "cancel_requested" }; },
+    async streamEvents() {},
+  });
+  const controller = createGenerationTurnController(repository as any, client, "dataset-01");
+  const results = await controller.resumePending(async () => request);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].snapshot.result?.content, "恢复后的权威结果");
+  assert.deepEqual(repository.messages.get("assistant-message-recovery"), {
+    status: "completed",
+    content: "恢复后的权威结果",
+  });
+  assert.equal(controller.isBusy(), false);
+});
+
+test("conversation controller rejects sends outside its bound dataset", async () => {
+  const repository = memoryTurnRepository();
+  const client = createGenerationClient({
+    async createGeneration() { return accepted; },
+    async getGeneration() { throw new Error("not reached"); },
+    async cancelGeneration() { return { ...accepted, status: "cancel_requested" }; },
+    async streamEvents() {},
+  });
+  const controller = createGenerationTurnController(repository as any, client, "dataset-01");
+  await assert.rejects(() => controller.send({
+    datasetId: "dataset-02",
+    userMessage: {
+      id: request.user_message.local_message_id,
+      threadId: request.thread_id,
+      content: request.user_message.content,
+    },
+    assistantMessageId: "assistant-cross-dataset",
+    request,
+    idempotencyKey: "idempotency-key-cross-dataset",
+    sourceReferences: [],
+  }), GenerationProtocolError);
+  assert.deepEqual(repository.counts, { appendUserCount: 0, appendAssistantCount: 0 });
 });
