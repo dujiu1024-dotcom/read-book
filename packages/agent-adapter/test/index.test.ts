@@ -72,6 +72,9 @@ test("validates accepted and final task snapshots", () => {
   assert.throws(() => validateGenerationSnapshot({
     generation_id: "generation-1", status: "completed", expires_at: "2026-11-14T00:00:00.000Z", result: null,
   }), GenerationProtocolError);
+  assert.throws(() => validateGenerationSnapshot({
+    generation_id: "generation-1", status: "cancel_requested", expires_at: "2026-11-14T00:00:00.000Z", result: null,
+  }), GenerationProtocolError);
 });
 
 test("only a completed GET snapshot supplies the authoritative final result", () => {
