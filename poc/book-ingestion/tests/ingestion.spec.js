@@ -47,6 +47,7 @@ for (const fixture of ['epub-1', 'epub-2', 'epub-3', 'pdf-1', 'pdf-2', 'pdf-3', 
       expect(result.parsed.pages[0].textItems[0].x).toBeLessThan(result.parsed.pages[0].textItems.at(-1).x);
     }
     if (fixture === 'pdf-3') {
+      console.log('pdf-3 page diagnostics:', JSON.stringify(result.parsed.pages.map((item) => ({ height: item.viewport?.[3], printedPage: item.printedPage, textItems: item.textItems }))));
       expect(result.parsed.repeatedEdgeText).toContain('Header - Sample Book');
       expect(result.parsed.repeatedEdgeText).toContain('Footer - Sample Book');
       expect(result.parsed.pages[0].printedPage).toBe(1);
