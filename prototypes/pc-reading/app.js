@@ -1,5 +1,6 @@
 import { createDemoBookContentProvider } from "./book-content-provider.js";
 import { createPublicBookApiProvider } from "./public-book-content-provider.js";
+import { createProductionReaderRuntime } from "./reader-runtime.js";
 
 (() => {
   let units = [];
@@ -7,6 +8,7 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
   const readerConfig = window.READ_BOOK_CONFIG || {};
   const isDemoProvider = !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId;
   let bookContentProvider = null;
+  let productionRuntime = null;
   const requestedBookRevisionId = readerConfig.bookRevisionId || (isDemoProvider ? "demo-book-revision-1" : "");
 
   const state = {
@@ -90,10 +92,10 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
     const time = document.createElement("time");
     time.textContent = message.time || "刚刚";
     meta.append(name, time);
-    if (message.saved) {
+    if (message.saving || message.saved) {
       const saved = document.createElement("span");
       saved.className = "saved-label";
-      saved.textContent = "本地已保存";
+      saved.textContent = message.saved ? "本地已保存" : "正在保存";
       meta.append(saved);
     }
     const body = document.createElement("p");
@@ -175,7 +177,7 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
     }, 900);
   }
 
-  function sendMessage() {
+  async function sendMessage() {
     if (state.generating) return;
     const input = $("messageInput");
     const value = input.value.trim();
@@ -184,8 +186,44 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
       input.focus();
       return;
     }
-    appendMessage({ role: "user", text: value, saved: true });
     input.value = "";
+    if (productionRuntime) {
+      const userBubble = { role: "user", text: value, time: "刚刚", saving: true };
+      appendMessage(userBubble);
+      const userArticle = messageList.lastElementChild;
+      const assistantBubble = { role: "agent", text: "", time: "刚刚" };
+      appendMessage(assistantBubble);
+      const assistantArticle = messageList.lastElementChild;
+      const assistantText = assistantArticle.querySelector(".message-content > p");
+      setGenerating(true);
+      setGenerationStatus("正在将消息保存到本地…");
+      try {
+        const result = await productionRuntime.send(value, state.displayedUnit, {
+          onPersisted() {
+            userBubble.saving = false;
+            userBubble.saved = true;
+            const label = userArticle.querySelector(".saved-label");
+            if (label) label.textContent = "本地已保存";
+            setGenerationStatus("本地已保存 · Agent 正在生成");
+          },
+          onDelta(text) {
+            assistantText.textContent += text;
+          },
+        });
+        assistantText.textContent = result.snapshot.result?.content || assistantText.textContent;
+        assistantBubble.citation = state.displayedUnit.id;
+        state.discussed = true;
+        setGenerationStatus("回复已完成并保存。");
+        productionRuntime.savePosition(state, units).catch(() => {});
+      } catch (error) {
+        setGenerationStatus("生成未完成：" + error.message + "。原始输入保留在本地，可稍后恢复。");
+        await refreshPersistedMessages();
+      } finally {
+        setGenerating(false);
+      }
+      return;
+    }
+    appendMessage({ role: "user", text: value, saved: true });
     if (state.viewMode === "mainline") state.discussed = true;
     generateReply(value);
   }
@@ -259,6 +297,11 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
   $("sendButton").addEventListener("click", sendMessage);
   $("stopButton").addEventListener("click", () => {
     if (!state.generating) return;
+    if (productionRuntime) {
+      productionRuntime.stop();
+      setGenerationStatus("已请求停止生成；最终状态以服务端确认为准。");
+      return;
+    }
     clearTimeout(state.timer);
     setGenerating(false);
     setGenerationStatus("已停止生成 · 用户输入仍保留");
@@ -274,7 +317,7 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
     }
   });
 
-  $("backupButton").addEventListener("click", () => toast("演示状态：启动备份检查已完成，没有真实上传。"));
+  $("backupButton").addEventListener("click", () => toast(productionRuntime ? productionRuntime.backupStatus.detail : "演示状态：启动备份检查已完成，没有真实上传。"));
   $("menuButton").addEventListener("click", () => {
     state.discussed = !state.discussed;
     toast(state.discussed ? "演示状态：当前单元标记为已讨论。" : "演示状态：当前单元标记为未讨论，可测试继续前确认。");
@@ -287,6 +330,24 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
     button.addEventListener("click", () => showCitation(button.dataset.citation));
   });
 
+  async function refreshPersistedMessages() {
+    if (!productionRuntime) return;
+    const persisted = await productionRuntime.loadMessages();
+    state.messages = [];
+    messageList.replaceChildren();
+    for (const item of persisted) {
+      const message = item.message;
+      appendMessage({
+        role: message.role === "user" ? "user" : "agent",
+        text: message.content || (message.status === "generating" ? "正在生成…" : "本次生成未返回内容。"),
+        time: message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "刚刚",
+        saved: message.role === "user",
+        failed: message.status === "failed",
+        citation: message.sourceReferences?.[0]?.structureNodeId,
+      });
+    }
+  }
+
   async function initializeReader() {
     try {
       if (isDemoProvider) {
@@ -297,9 +358,13 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
         if (!readerConfig.apiBaseUrl || !readerConfig.bookRevisionId) {
           throw new Error("真实书籍模式必须同时提供 READ_BOOK_CONFIG.apiBaseUrl 和 bookRevisionId。");
         }
+        const getAccessToken = readerConfig.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken;
+        if (typeof getAccessToken !== "function") {
+          throw new Error("真实模式需要通过 READ_BOOK_CONFIG.getAccessToken 或 READ_BOOK_AUTH.getAccessToken 提供登录令牌。");
+        }
         bookContentProvider = createPublicBookApiProvider({
           baseUrl: readerConfig.apiBaseUrl,
-          getAccessToken: readerConfig.getAccessToken,
+          getAccessToken,
         });
       }
       if (!requestedBookRevisionId) throw new Error("真实书籍模式必须提供 READ_BOOK_CONFIG.bookRevisionId。");
@@ -308,23 +373,39 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
       state.mainlineIndex = units.findIndex(unit => unit.id === bookRevision.initialMainlineUnitId);
       if (state.mainlineIndex < 0) throw new Error("书籍主线起始单元不存在。");
       state.displayedUnit = units[state.mainlineIndex];
-      renderSource();
       if (isDemoProvider) {
+        renderSource();
         updateCount();
         messageList.scrollTop = messageList.scrollHeight;
         setGenerationStatus("演示内容已通过 BookContentProvider 加载；尚未连接真实书籍服务。");
-      } else {
-        state.messages = [];
-        messageList.replaceChildren();
-        state.discussed = false;
-        $("messageInput").disabled = true;
-        $("sendButton").disabled = true;
-        $("simulateFailure").disabled = true;
-        setGenerationStatus("已从公共书籍 API 加载真实书籍内容；讨论功能待接入本地 Repository 与 Agent 服务。");
+        return;
       }
+
+      productionRuntime = await createProductionReaderRuntime(readerConfig, bookRevision);
+      const position = productionRuntime.readingPosition;
+      if (position) {
+        const index = units.findIndex(unit => unit.id === position.mainlineNodeId);
+        if (index >= 0) state.mainlineIndex = index;
+        state.viewMode = position.viewMode || "mainline";
+        state.displayedUnit = units.find(unit => unit.id === position.displayedNodeId) || units[state.mainlineIndex];
+        state.discussed = Boolean(position.currentUnitDiscussed);
+      }
+      renderSource();
+      await refreshPersistedMessages();
+      $("messageInput").disabled = false;
+      $("sendButton").disabled = false;
+      $("simulateFailure").hidden = true;
+      $("menuButton").hidden = true;
+      $("backupButton").textContent = productionRuntime.backupStatus.label;
+      setGenerationStatus("本地阅读数据已加载；讨论消息先保存到本地，再请求 Agent。");
+      productionRuntime.resumePending({
+        onDelta: () => {},
+      }).then(refreshPersistedMessages).catch(error => {
+        setGenerationStatus("有未完成的生成任务，自动恢复暂不可用：" + error.message);
+      });
     } catch (error) {
       $("sourceHeading").textContent = "书籍内容加载失败";
-      $("sourceText").textContent = "当前无法加载此书籍版本，请检查内容提供器。";
+      $("sourceText").textContent = "当前无法加载此书籍版本，请检查内容提供器与本地数据配置。";
       setGenerationStatus("内容加载失败：" + error.message);
       $("messageInput").disabled = true;
       $("sendButton").disabled = true;
