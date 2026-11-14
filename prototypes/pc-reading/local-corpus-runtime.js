@@ -4,10 +4,12 @@ const LOCAL_DATASET_STORAGE_KEY = "read-book:local-dataset-id";
 
 function getOrCreateLocalDataSetId() {
   try {
-    const existing = globalThis.localStorage?.getItem(LOCAL_DATASET_STORAGE_KEY);
+    const storage = globalThis.localStorage;
+    if (!storage) throw new Error("当前浏览器不支持 localStorage。");
+    const existing = storage.getItem(LOCAL_DATASET_STORAGE_KEY);
     if (existing) return existing;
     const created = uuid();
-    globalThis.localStorage?.setItem(LOCAL_DATASET_STORAGE_KEY, created);
+    storage.setItem(LOCAL_DATASET_STORAGE_KEY, created);
     return created;
   } catch {
     throw new Error("无法持久化本地数据集标识；请允许当前站点使用本地存储后重试。");
