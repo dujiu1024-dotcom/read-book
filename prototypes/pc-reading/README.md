@@ -1,6 +1,6 @@
 # 知行 PC 窄屏阅读交互原型
 
-独立阅读交互页面，当前使用明确标注的 Demo BookContentProvider。无真实账号、数据库、模型服务、业务 API 或持久化依赖。
+PC 阅读客户端原型，支持明确标注的 Demo BookContentProvider、公共书籍 API Provider，以及六本 GitHub 公开语料的只读 Provider。真实 API/持久化/Agent 能力必须由宿主配置，不会由演示状态冒充。
 
 ## 启动
 
