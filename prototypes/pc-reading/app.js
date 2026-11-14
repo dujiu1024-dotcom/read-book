@@ -292,6 +292,8 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
       if (isDemoProvider) {
         bookContentProvider = createDemoBookContentProvider();
       } else {
+        state.messages = [];
+        messageList.replaceChildren();
         if (!readerConfig.apiBaseUrl || !readerConfig.bookRevisionId) {
           throw new Error("真实书籍模式必须同时提供 READ_BOOK_CONFIG.apiBaseUrl 和 bookRevisionId。");
         }
@@ -299,8 +301,6 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
           baseUrl: readerConfig.apiBaseUrl,
           getAccessToken: readerConfig.getAccessToken,
         });
-        state.messages = [];
-        messageList.replaceChildren();
       }
       if (!requestedBookRevisionId) throw new Error("真实书籍模式必须提供 READ_BOOK_CONFIG.bookRevisionId。");
       bookRevision = await bookContentProvider.loadBookRevision(requestedBookRevisionId);
@@ -326,7 +326,9 @@ import { createPublicBookApiProvider } from "./public-book-content-provider.js";
       $("sourceHeading").textContent = "书籍内容加载失败";
       $("sourceText").textContent = "当前无法加载此书籍版本，请检查内容提供器。";
       setGenerationStatus("内容加载失败：" + error.message);
+      $("messageInput").disabled = true;
       $("sendButton").disabled = true;
+      $("simulateFailure").disabled = true;
     }
   }
 
