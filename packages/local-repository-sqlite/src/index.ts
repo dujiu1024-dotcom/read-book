@@ -78,6 +78,7 @@ export class SqliteOpfsRepository implements LocalRepository {
         saveNote: (note: NoteRecord) => call("saveNote", { note }),
         appendMemoryVersion: (version: MemoryVersion) =>
           call("appendMemoryVersion", { version }),
+        createAccountDataSetBinding: (binding: AccountDataSetBinding) => call("createAccountDataSetBinding", { binding }),
         getAccountDataSetBinding: (bindingId: string) => call("getAccountDataSetBinding", { bindingId }),
         softRevokeAccountDataSetBinding: (bindingId: string, revokedAt: string) =>
           call("softRevokeAccountDataSetBinding", { bindingId, revokedAt }),
