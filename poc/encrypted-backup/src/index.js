@@ -168,14 +168,21 @@ function nonceForChunk(index) {
   return nonce;
 }
 
+export function shouldCreateFullCheckpoint(backupsSinceFull, interval = 10) {
+  if (!Number.isSafeInteger(backupsSinceFull) || backupsSinceFull < 0 ||
+      !Number.isSafeInteger(interval) || interval < 1) throw new RangeError("Checkpoint counters must be non-negative and interval positive");
+  return backupsSinceFull >= interval;
+}
+
 export async function encryptBackup(snapshot, options = {}) {
   const dataKey = requireValue(options?.dataKey, "dataKey");
   const keyEnvelope = requireValue(options?.keyEnvelope, "keyEnvelope");
   const chunkBytes = options.chunkBytes ?? DEFAULT_CHUNK_BYTES;
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1024) throw new RangeError("chunkBytes must be >= 1024");
-  const parentBackupId = options.parentBackupId ?? null;
+  const parentBackupId = options.forceFull ? null : options.parentBackupId ?? null;
   const backupId = options.backupId ?? crypto.randomUUID();
-  const payload = createBackupPayload(snapshot, options.previousSnapshot ?? null);
+  if (options.forceFull && options.parentBackupId) throw new Error("A full checkpoint cannot have a parent backup");
+  const payload = options.forceFull ? createBackupPayload(snapshot, null) : createBackupPayload(snapshot, options.previousSnapshot ?? null);
   const backupKey = await deriveBackupChunkKey(dataKey, snapshot.datasetId, backupId);
   const plaintext = encoder.encode(canonicalJson(payload));
   const chunks = [];
@@ -307,6 +314,15 @@ export async function restoreBackupChain(backups, recoveryCredential) {
   return snapshot;
 }
 
+export async function uploadBackupResumable(server, backup, token = server.beginUpload(backup.manifest.datasetId)) {
+  const uploaded = new Set(server.getUploadProgress(token));
+  for (let index = 0; index < backup.chunks.length; index += 1) {
+    if (!uploaded.has(index)) server.uploadChunk(token, index, backup.chunks[index]);
+  }
+  const receipt = await server.completeUpload(token, backup.manifest);
+  return { ...receipt, uploadSessionToken: token };
+}
+
 /** Mock server stores ciphertext only and enforces the cleared-dataset tombstone at upload completion and download. */
 export function createMockBackupServer() {
   const backups = new Map();
@@ -317,28 +333,53 @@ export function createMockBackupServer() {
       requireValue(datasetId, "datasetId");
       if (tombstones.has(datasetId)) throw new Error("Dataset is cleared");
       const token = crypto.randomUUID();
-      sessions.set(token, datasetId);
+      sessions.set(token, { datasetId, chunks: new Map() });
       return token;
     },
-    async completeUpload(token, backup) {
-      const datasetId = sessions.get(token);
-      if (!datasetId) throw new Error("Upload session is missing or expired");
+    uploadChunk(token, index, chunk) {
+      const session = sessions.get(token);
+      if (!session) throw new Error("Upload session is missing or expired");
+      if (tombstones.has(session.datasetId)) throw new Error("Dataset is cleared");
+      if (!Number.isSafeInteger(index) || index < 0 || !(chunk instanceof Uint8Array)) throw new TypeError("Upload chunk is invalid");
+      const previous = session.chunks.get(index);
+      if (previous && toBase64(previous) !== toBase64(chunk)) throw new Error("Chunk retry conflicts with previously uploaded bytes");
+      session.chunks.set(index, new Uint8Array(chunk));
+      return { index, idempotent: Boolean(previous) };
+    },
+    getUploadProgress(token) {
+      const session = sessions.get(token);
+      if (!session) throw new Error("Upload session is missing or expired");
+      return [...session.chunks.keys()].sort((a, b) => a - b);
+    },
+    async completeUpload(token, backupOrManifest) {
+      const session = sessions.get(token);
+      if (!session) throw new Error("Upload session is missing or expired");
+      const datasetId = session.datasetId;
+      if (tombstones.has(datasetId)) {
+        sessions.delete(token);
+        throw new Error("Dataset was cleared before upload completion");
+      }
+      const manifest = backupOrManifest.manifest || backupOrManifest;
+      if (manifest.datasetId !== datasetId) throw new Error("Upload dataset does not match session");
+      if (backupOrManifest.manifest) {
+        backupOrManifest.chunks.forEach((chunk, index) => this.uploadChunk(token, index, chunk));
+      }
+      if (!Number.isSafeInteger(manifest.chunkCount) || session.chunks.size !== manifest.chunkCount) {
+        throw new Error("Upload session is missing encrypted chunks");
+      }
+      const chunks = Array.from({ length: manifest.chunkCount }, (_, index) => session.chunks.get(index));
+      if (chunks.some((chunk) => !chunk)) throw new Error("Upload session has a missing chunk index");
       sessions.delete(token);
-      if (tombstones.has(datasetId)) throw new Error("Dataset was cleared before upload completion");
-      if (backup.manifest.datasetId !== datasetId) throw new Error("Upload dataset does not match session");
-      const key = datasetId + ":" + backup.manifest.backupId;
+      const key = datasetId + ":" + manifest.backupId;
       const existing = backups.get(key);
       if (existing) {
-        if (existing.manifest.chunks.map((item) => item.sha256).join() !== backup.manifest.chunks.map((item) => item.sha256).join()) {
+        if (existing.manifest.chunks.map((item) => item.sha256).join() !== manifest.chunks.map((item) => item.sha256).join()) {
           throw new Error("Backup ID idempotency conflict");
         }
-        return { backupId: backup.manifest.backupId, idempotent: true };
+        return { backupId: manifest.backupId, idempotent: true };
       }
-      backups.set(key, {
-        manifest: structuredClone(backup.manifest),
-        chunks: backup.chunks.map((chunk) => new Uint8Array(chunk)),
-      });
-      return { backupId: backup.manifest.backupId, idempotent: false };
+      backups.set(key, { manifest: structuredClone(manifest), chunks: chunks.map((chunk) => new Uint8Array(chunk)) });
+      return { backupId: manifest.backupId, idempotent: false };
     },
     listBackups(datasetId) {
       if (tombstones.has(datasetId)) throw new Error("Dataset is cleared");
