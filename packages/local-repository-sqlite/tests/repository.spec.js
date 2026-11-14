@@ -487,20 +487,24 @@ test("ReadingUnitProgress rejects backward transitions and temporary presentatio
   const result = await page.evaluate(async (ids) => {
     const { SqliteOpfsRepository } = await import("/src/index.ts");
     const repository = new SqliteOpfsRepository();
-    let backwardRejected = false;
     await repository.transaction(ids.datasetA, async (tx) => {
       await tx.createThread({ id: ids.threadId, datasetId: ids.datasetA, bookRevisionId: ids.revision, createdAt: "2026-11-14T00:00:00.000Z" });
       await tx.createReadingRound({ id: ids.roundId, threadId: ids.threadId, roundNumber: 1, status: "active", startedAt: "2026-11-14T00:00:00.000Z", completedAt: null });
       await tx.saveReadingUnitProgress({ readingRoundId: ids.roundId, structureNodeId: "unit-1", status: "not_presented", firstPresentedSourceId: null, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:00.000Z" });
       await tx.createPresentedSource({ id: ids.sourceId, threadId: ids.threadId, bookRevisionId: ids.revision, structureNodeId: "unit-1", chunkId: null, presentationType: "temporary", readingRoundId: null, presentedAt: "2026-11-14T00:00:01.000Z", sourceLocator: { locator: "epubcfi(/6/2)" } });
-      const before = await tx.createConsistentSnapshot();
-      try {
-        await tx.saveReadingUnitProgress({ readingRoundId: ids.roundId, structureNodeId: "unit-1", status: "awaiting_user", firstPresentedSourceId: null, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:02.000Z" });
-      } catch { backwardRejected = true; }
-      return { before: before.readingUnitProgress, after: (await tx.createConsistentSnapshot()).readingUnitProgress };
     });
+    const before = await repository.getReadingUnitProgress(ids.datasetA, ids.roundId);
+    let backwardRejected = false;
+    try {
+      await repository.transaction(ids.datasetA, (tx) => tx.saveReadingUnitProgress({
+        readingRoundId: ids.roundId, structureNodeId: "unit-1", status: "awaiting_user",
+        firstPresentedSourceId: null, lastActivityMessageId: null, completedAt: null,
+        updatedAt: "2026-11-14T00:00:02.000Z",
+      }));
+    } catch { backwardRejected = true; }
+    const after = await repository.getReadingUnitProgress(ids.datasetA, ids.roundId);
     await repository.close();
-    return { backwardRejected, before: result.before, after: result.after };
+    return { backwardRejected, before, after };
   }, { datasetA: "abababab-abab-4aba-8aba-abababababab", revision: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd", threadId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", roundId: "88888888-8888-4888-8888-888888888888", sourceId: "99999999-9999-4999-8999-999999999999" });
   expect(result.backwardRejected).toBe(true);
   expect(result.before[0].status).toBe("not_presented");
