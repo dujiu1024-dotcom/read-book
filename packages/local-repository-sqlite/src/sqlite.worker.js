@@ -187,7 +187,10 @@ function txOperation(datasetId, operation, input) {
       if (!thread) throw new Error("Thread 不属于当前数据集");
       if (m.idempotencyKey) {
         const old=first("SELECT * FROM message WHERE thread_id=? AND idempotency_key=?", [m.threadId,m.idempotencyKey]);
-        if (old) return rowToMessage(old);
+        if (old) {
+          if (old.id !== m.id || old.content !== m.content) throw new Error("幂等键已用于不同的用户消息");
+          return rowToMessage(old);
+        }
       }
       const sequence=nextSequence(m.threadId);
       execute("INSERT INTO message(id,dataset_id,thread_id,sequence,role,content,status,created_at,source_references,idempotency_key) VALUES(?,?,?,?,'user',?,'saved',?,?,?)",
@@ -233,7 +236,8 @@ function txOperation(datasetId, operation, input) {
     case "saveCitation": {
       const c=input.citation;
       if (!first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [c.threadId,datasetId])) throw new Error("Citation Thread 不属于当前数据集");
-      if (!first("SELECT id FROM message WHERE id=? AND dataset_id=?", [c.messageId,datasetId])) throw new Error("Citation Message 不属于当前数据集");
+      const sourceMessage = first("SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [c.messageId,datasetId]);
+      if (!sourceMessage || sourceMessage.thread_id !== c.threadId) throw new Error("Citation Message 必须属于同一 Thread");
       execute("INSERT INTO citation(id,dataset_id,thread_id,message_id,book_revision_id,structure_node_id,locator,excerpt,excerpt_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
         [c.id,datasetId,c.threadId,c.messageId,c.bookRevisionId,c.structureNodeId,c.locator,c.excerpt,c.excerptHash,c.createdAt]);
       transactionDirty=true;
@@ -243,6 +247,16 @@ function txOperation(datasetId, operation, input) {
       const n=input.note;
       if (!first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [n.threadId,datasetId])) throw new Error("Note Thread 不属于当前数据集");
       if (n.readingRoundId && !first("SELECT id FROM reading_round WHERE id=? AND dataset_id=?", [n.readingRoundId,datasetId])) throw new Error("Note ReadingRound 不属于当前数据集");
+      const noteThread = first("SELECT book_revision_id FROM thread WHERE id=? AND dataset_id=?", [n.threadId,datasetId]);
+      for (const messageId of n.sourceMessageIds || []) {
+        const source = first("SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [messageId,datasetId]);
+        if (!source || source.thread_id !== n.threadId) throw new Error("Note 来源消息必须属于同一 Thread");
+      }
+      for (const reference of n.sourceReferences || []) {
+        if (!reference.bookRevisionId || reference.bookRevisionId !== noteThread.book_revision_id || !reference.structureNodeId || !reference.locator) {
+          throw new Error("Note 原文来源必须绑定当前 BookRevision 和有效定位");
+        }
+      }
       execute("INSERT INTO note(id,dataset_id,thread_id,reading_round_id,content,source_message_ids,source_references,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content,source_message_ids=excluded.source_message_ids,source_references=excluded.source_references,updated_at=excluded.updated_at,revision=excluded.revision",
         [n.id,datasetId,n.threadId,n.readingRoundId,n.content,JSON.stringify(n.sourceMessageIds),JSON.stringify(n.sourceReferences),n.createdAt,n.updatedAt,n.revision]);
       transactionDirty=true;
@@ -253,16 +267,30 @@ function txOperation(datasetId, operation, input) {
       const memory=first("SELECT * FROM memory WHERE id=? AND dataset_id=?", [v.memoryId,datasetId]);
       if (!memory) {
         if (v.version!==1 || v.previousVersionId!==null || v.changeKind!=="new") throw new Error("首个 MemoryVersion 必须是 version 1 / new");
-        const firstSourceMessageId = v.sourceMessageIds?.[0];
-        const sourceMessage = firstSourceMessageId
-          ? first("SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [firstSourceMessageId,datasetId])
-          : null;
-        if (!sourceMessage) throw new Error("首个 MemoryVersion 必须关联当前数据集中的来源消息");
+        if (!Array.isArray(v.sourceMessageIds) || v.sourceMessageIds.length === 0 || new Set(v.sourceMessageIds).size !== v.sourceMessageIds.length) {
+          throw new Error("MemoryVersion 必须包含唯一来源消息 ID");
+        }
+        const sourceMessages = v.sourceMessageIds.map((messageId) => first(
+          "SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [messageId,datasetId]
+        ));
+        if (sourceMessages.some((row) => !row) || new Set(sourceMessages.map((row) => row.thread_id)).size !== 1) {
+          throw new Error("MemoryVersion 来源消息必须存在且属于同一 Thread");
+        }
+        const sourceMessage = sourceMessages[0];
         execute("INSERT INTO memory(id,dataset_id,thread_id,current_version_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
           [v.memoryId,datasetId,sourceMessage.thread_id,v.id,v.createdAt,v.createdAt]);
       } else {
         const current=first("SELECT * FROM memory_version WHERE id=? AND dataset_id=?", [memory.current_version_id,datasetId]);
         if (!current || v.version!==current.version+1 || v.previousVersionId!==current.id || v.changeKind==="new") throw new Error("MemoryVersion 必须追加到当前版本");
+        if (!Array.isArray(v.sourceMessageIds) || v.sourceMessageIds.length === 0 || new Set(v.sourceMessageIds).size !== v.sourceMessageIds.length) {
+          throw new Error("MemoryVersion 必须包含唯一来源消息 ID");
+        }
+        const sourceMessages = v.sourceMessageIds.map((messageId) => first(
+          "SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [messageId,datasetId]
+        ));
+        if (sourceMessages.some((row) => !row || row.thread_id !== memory.thread_id)) {
+          throw new Error("MemoryVersion 来源消息必须属于该 Memory 的 Thread");
+        }
         execute("UPDATE memory SET current_version_id=?,updated_at=? WHERE id=?", [v.id,v.createdAt,v.memoryId]);
       }
       execute("INSERT INTO memory_version(id,dataset_id,memory_id,version,previous_version_id,change_kind,content,source_message_ids,source_references,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -284,7 +312,7 @@ function txOperation(datasetId, operation, input) {
     case "createConsistentSnapshot": {
       const ds=first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
       return {
-        datasetId:datasetId,schemaVersion:ds.schema_version,dirtySequence:ds.dirty_sequence,
+        datasetId:datasetId,schemaVersion:ds.schema_version,dirtySequence:ds.dirty_sequence + (transactionDirty ? 1 : 0),
         threads:execute("SELECT id,dataset_id AS datasetId,book_revision_id AS bookRevisionId,created_at AS createdAt FROM thread WHERE dataset_id=?", [datasetId]),
         messages:execute("SELECT * FROM message WHERE dataset_id=? ORDER BY thread_id,sequence", [datasetId]).map(rowToMessage),
         readingRounds:execute("SELECT id,thread_id AS threadId,started_at AS startedAt,completed_at AS completedAt,round_number AS roundNumber,status FROM reading_round WHERE dataset_id=?", [datasetId]),
