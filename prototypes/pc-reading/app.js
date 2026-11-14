@@ -348,7 +348,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
       appendMessage({ role: "agent", text: reply, citation: state.displayedUnit.id });
       if (state.viewMode === "mainline") state.discussed = true;
       setGenerationStatus(isRetry ? "重试完成 · 演示状态" : "生成完成 · 演示状态");
-    }, 900);
+    }, 1500);
   }
 
   async function sendMessage() {
@@ -522,7 +522,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
     if (!state.generating) return;
     // 发送按钮与停止按钮占用同一位置：刚发出后的极短窗口内忽略停止，
     // 避免双击发送的第二次点击把回答直接取消。
-    if (performance.now() - stopArmedAt < 700) {
+    if (performance.now() - stopArmedAt < 500) {
       toast("刚发送，请稍候再停止生成，避免误触取消回答。");
       return;
     }
