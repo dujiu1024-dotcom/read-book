@@ -226,6 +226,8 @@ export interface LocalRepository {
   transaction<T>(datasetId: string, operation: (tx: LocalRepositoryTransaction) => Promise<T>): Promise<T>;
   /** Read a transactionally consistent export snapshot without acknowledging it as backed up. */
   createConsistentSnapshot(datasetId: string): Promise<RepositorySnapshot>;
+  /** Import a verified backup only into a truly empty local dataset; never overwrites existing user data. */
+  restoreSnapshot(datasetId: string, snapshot: RepositorySnapshot, backupId: string, restoredAt: string): Promise<void>;
   /** Acknowledge only after the remote encrypted backup has durably accepted this snapshot. */
   acknowledgeBackup(datasetId: string, snapshotSequence: number, backupId: string, backedUpAt: string): Promise<void>;
   getDataSet(datasetId: string): Promise<LocalDataSet | null>;
