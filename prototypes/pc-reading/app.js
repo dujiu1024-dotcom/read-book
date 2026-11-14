@@ -190,7 +190,11 @@ import { hasGenerationService } from "./reader-capabilities.js";
   }
 
   function showCitation(unitId) {
-    const unit = units.find(item => item.id === unitId) || units[state.mainlineIndex];
+    const unit = units.find(item => item.id === unitId);
+    if (!unit) {
+      toast("原文单元在当前书籍版本中不可用，未跳转到其他内容。");
+      return;
+    }
     state.displayedUnit = unit;
     state.viewMode = "citation";
     renderSource();
@@ -505,12 +509,18 @@ import { hasGenerationService } from "./reader-capabilities.js";
         for (const reference of references) {
           const line = document.createElement("li");
           line.textContent = "原文定位：" + reference.locator;
-          const jump = document.createElement("button");
-          jump.type = "button";
-          jump.className = "text-button";
-          jump.textContent = "回到原文";
-          jump.addEventListener("click", () => showCitation(reference.structureNodeId));
-          line.append(" ", jump);
+          const targetUnit = units.find((unit) =>
+            unit.id === reference.structureNodeId && unit.locator === reference.locator);
+          if (targetUnit) {
+            const jump = document.createElement("button");
+            jump.type = "button";
+            jump.className = "text-button";
+            jump.textContent = "回到原文";
+            jump.addEventListener("click", () => showCitation(reference.structureNodeId));
+            line.append(" ", jump);
+          } else {
+            line.append("（当前版本中无法定位该原文单元）");
+          }
           refs.append(line);
         }
         sourceBox.append(refs);
