@@ -51,6 +51,8 @@ function recordKey(collection, record) {
     messages: "message.id",
     readingRounds: "id",
     readingPositions: "threadId",
+    presentedSources: "id",
+    readingUnitProgress: "readingRoundId.structureNodeId",
     citations: "id",
     notes: "id",
     memories: "id",
@@ -64,7 +66,7 @@ function recordKey(collection, record) {
   return path.split(".").reduce((value, key) => value?.[key], record);
 }
 const COLLECTIONS = [
-  "threads", "messages", "readingRounds", "readingPositions", "citations",
+  "threads", "messages", "readingRounds", "readingPositions", "presentedSources", "readingUnitProgress", "citations",
   "notes", "memories", "memoryVersions", "memoryRelations", "memoryCandidates", "generationDeliveries",
 ];
 
