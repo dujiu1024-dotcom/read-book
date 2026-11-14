@@ -1,0 +1,38 @@
+name: Local repository SQLite OPFS tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/local-repository-sqlite/**"
+      - "packages/local-repository-contract/**"
+      - "packages/domain-core/**"
+      - ".github/workflows/local-repository-sqlite.yml"
+  pull_request:
+    paths:
+      - "packages/local-repository-sqlite/**"
+      - "packages/local-repository-contract/**"
+      - "packages/domain-core/**"
+      - ".github/workflows/local-repository-sqlite.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  browser-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: packages/local-repository-sqlite
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm test

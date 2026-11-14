@@ -49,7 +49,7 @@ export interface LocalDataSet {
 
 export interface AccountDataSetBinding {
   id: string;
-  accountId: string;
+  accountId: string | null;
   localDataSetId: string;
   status: "active" | "inactive" | "revoked";
   boundAt: string;
@@ -170,6 +170,7 @@ export interface LocalRepositoryTransaction {
   saveNote(note: NoteRecord): Promise<void>;
   appendMemoryVersion(version: MemoryVersion): Promise<MemoryVersion>;
 
+  createAccountDataSetBinding(binding: AccountDataSetBinding): Promise<AccountDataSetBinding>;
   getAccountDataSetBinding(bindingId: string): Promise<AccountDataSetBinding | null>;
   /** Soft revoke only the selected binding and its derived authorization/index data. */
   softRevokeAccountDataSetBinding(bindingId: string, revokedAt: string): Promise<boolean>;
