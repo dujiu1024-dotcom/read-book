@@ -466,14 +466,20 @@ export async function recoverGenerationTurn(
     repository.transaction(input.datasetId, (tx) => tx.saveGenerationDelivery({ ...delivery, generationId: accepted.generation_id, status, lastSequence: sequence, lastEventId: eventId, expiresAt: accepted.expires_at, updatedAt: now() }));
   await persist("running", cursor.lastSequence, cursor.lastEventId);
   let pendingWrites = Promise.resolve();
-  await client.stream(accepted.generation_id, cursor, input.signal, (event) => {
-    cursor = advanceGenerationEventCursor(cursor, event).cursor;
-    const status = event.type === "failed" ? "failed" : event.type === "cancelled" ? "cancelled" : "running";
-    const eventCursor = { ...cursor };
-    pendingWrites = pendingWrites.then(() => persist(status, eventCursor.lastSequence, eventCursor.lastEventId));
-    if (event.type === "delta") input.onDelta?.(event.text);
-  });
-  await pendingWrites;
+  try {
+    await client.stream(accepted.generation_id, cursor, input.signal, (event) => {
+      cursor = advanceGenerationEventCursor(cursor, event).cursor;
+      const status = event.type === "failed" ? "failed" : event.type === "cancelled" ? "cancelled" : "running";
+      const eventCursor = { ...cursor };
+      pendingWrites = pendingWrites.then(() => persist(status, eventCursor.lastSequence, eventCursor.lastEventId));
+      if (event.type === "delta") input.onDelta?.(event.text);
+    });
+    await pendingWrites;
+  } catch (error) {
+    await pendingWrites;
+    if (!input.signal.aborted) throw error;
+    await client.cancel(accepted.generation_id, delivery.idempotencyKey + ":cancel").catch(() => undefined);
+  }
   const snapshot = await client.get(accepted.generation_id);
   if (snapshot.status === "completed" && snapshot.result) {
     await repository.transaction(input.datasetId, async (tx) => {
