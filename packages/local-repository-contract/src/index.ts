@@ -131,6 +131,22 @@ export interface MemoryRecord {
   updatedAt: string;
 }
 
+export type GenerationDeliveryStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "expired";
+
+export interface GenerationDeliveryRecord {
+  clientGenerationId: string;
+  generationId: string | null;
+  threadId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  idempotencyKey: string;
+  status: GenerationDeliveryStatus;
+  lastSequence: number;
+  lastEventId: string | null;
+  expiresAt: string | null;
+  updatedAt: string;
+}
+
 export interface RepositorySnapshot {
   datasetId: string;
   schemaVersion: number;
@@ -181,6 +197,7 @@ export interface LocalRepositoryTransaction {
   createConsistentSnapshot(): Promise<RepositorySnapshot>;
   /** Acknowledge only the exact snapshot sequence accepted by remote backup; later writes remain dirty. */
   acknowledgeBackup(snapshotSequence: number, backupId: string, backedUpAt: string): Promise<void>;
+  saveGenerationDelivery(delivery: GenerationDeliveryRecord): Promise<GenerationDeliveryRecord>;
 }
 
 /**
@@ -193,6 +210,7 @@ export interface LocalRepository {
   transaction<T>(datasetId: string, operation: (tx: LocalRepositoryTransaction) => Promise<T>): Promise<T>;
   getDataSet(datasetId: string): Promise<LocalDataSet | null>;
   getMessages(datasetId: string, threadId: string, afterSequence?: number): Promise<PersistedMessage[]>;
+  getGenerationDelivery(datasetId: string, clientGenerationId: string): Promise<GenerationDeliveryRecord | null>;
   getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]>;
   getMemoryRelations(datasetId: string, versionId: string): Promise<MemoryRelation[]>;
   close(): Promise<void>;
