@@ -281,7 +281,7 @@ export function verifiedGenerationCitationRecords(
   createdAt: string;
 }> {
   const references = verifiedGenerationSourceReferences(result, request);
-  const sourceText = request.context.current_source.excerpt.replace(/\\s+/g, " ").trim();
+  const sourceText = request.context.current_source.excerpt.replace(/\s+/g, " ").trim();
   return references.flatMap((reference) => {
     const citation = (result.citations || []).find((item) =>
       item.book_revision_id === reference.bookRevisionId &&
