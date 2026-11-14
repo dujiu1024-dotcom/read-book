@@ -285,6 +285,142 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     }));
   }
 
+  let lastPresentationPromise = Promise.resolve();
+
+  async function recordPresentedSource(unit, presentationType = "mainline") {
+    if (!unit) return null;
+    const now = new Date().toISOString();
+    const source = {
+      id: uuid(),
+      threadId: thread.id,
+      bookRevisionId: bookRevision.bookRevisionId,
+      structureNodeId: unit.id,
+      chunkId: unit.chunkId || null,
+      presentationType,
+      readingRoundId: presentationType === "mainline" ? readingRound?.id || null : null,
+      presentedAt: now,
+      sourceLocator: { locator: unit.locator, chapter: unit.chapter, title: unit.title },
+    };
+    const progress = presentationType === "mainline" && readingRound?.status === "active"
+      ? (await repository.getReadingUnitProgress(datasetId, readingRound.id)).find((item) => item.structureNodeId === unit.id)
+      : null;
+    lastPresentationPromise = repository.transaction(datasetId, async (tx) => {
+      await tx.createPresentedSource(source);
+      if (progress && progress.status === "not_presented") {
+        await tx.saveReadingUnitProgress({ ...progress, status: "presented", firstPresentedSourceId: source.id, updatedAt: now });
+        await tx.saveReadingUnitProgress({ ...progress, status: "awaiting_user", firstPresentedSourceId: source.id, updatedAt: now });
+      } else if (progress && progress.status === "presented") {
+        await tx.saveReadingUnitProgress({ ...progress, status: "awaiting_user", firstPresentedSourceId: progress.firstPresentedSourceId || source.id, updatedAt: now });
+      }
+    });
+    await lastPresentationPromise;
+    return source;
+  }
+
+  async function markDiscussionStarted(unit, userMessageId, presentationType) {
+    if (presentationType !== "mainline" || readingRound?.status !== "active") return;
+    await lastPresentationPromise;
+    const progress = (await repository.getReadingUnitProgress(datasetId, readingRound.id)).find((item) => item.structureNodeId === unit.id);
+    if (!progress || ["discussed", "skipped"].includes(progress.status)) return;
+    if (!["awaiting_user", "presented", "discussion_active"].includes(progress.status)) {
+      throw new Error("当前主线单元尚未完成原文呈现，不能启动讨论状态。");
+    }
+    const now = new Date().toISOString();
+    await repository.transaction(datasetId, (tx) => tx.saveReadingUnitProgress({
+      ...progress,
+      status: "discussion_active",
+      lastActivityMessageId: userMessageId,
+      updatedAt: now,
+    }));
+  }
+
+  async function getReadingUnitProgress() {
+    if (!readingRound) return [];
+    return repository.getReadingUnitProgress(datasetId, readingRound.id);
+  }
+
+  async function completeMainlineUnit(unitId, skipped) {
+    await lastPresentationPromise;
+    if (!readingRound || readingRound.status !== "active") throw new Error("当前阅读轮次已结束，请开启新一轮。");
+    const progress = (await getReadingUnitProgress()).find((item) => item.structureNodeId === unitId);
+    if (!progress) throw new Error("当前主线单元没有阅读进度记录。");
+    if (["discussed", "skipped"].includes(progress.status)) {
+      const snapshot = await repository.createConsistentSnapshot(datasetId);
+      const round = snapshot.readingRounds.find((item) => item.id === readingRound.id);
+      return { status: progress.status, roundCompleted: round?.status === "completed" };
+    }
+    const nextStatus = skipped ? "skipped" : "discussed";
+    if (skipped && !["presented", "awaiting_user"].includes(progress.status)) {
+      throw new Error("只有已呈现且尚未开始讨论的单元可以确认略读。");
+    }
+    if (!skipped && progress.status !== "discussion_active") {
+      throw new Error("当前单元没有已保存的讨论输入，不能标记为已讨论。");
+    }
+    const now = new Date().toISOString();
+    let roundCompleted = false;
+    await repository.transaction(datasetId, async (tx) => {
+      await tx.saveReadingUnitProgress({
+        ...progress,
+        status: nextStatus,
+        completedAt: now,
+        updatedAt: now,
+      });
+      const snapshot = await tx.createConsistentSnapshot();
+      const roundProgress = snapshot.readingUnitProgress.filter((item) => item.readingRoundId === readingRound.id);
+      roundCompleted = roundProgress.length > 0 && roundProgress.every((item) => ["discussed", "skipped"].includes(item.status));
+      if (roundCompleted) await tx.updateReadingRound(readingRound.id, "completed", now);
+    });
+    if (roundCompleted) readingRound = { ...readingRound, status: "completed", completedAt: now };
+    return { status: nextStatus, roundCompleted };
+  }
+
+  async function startNewReadingRound() {
+    if (readingRound?.status === "active") throw new Error("当前阅读轮次尚未完成。");
+    const snapshot = await repository.createConsistentSnapshot(datasetId);
+    const rounds = snapshot.readingRounds.filter((item) => item.threadId === thread.id);
+    const round = {
+      id: uuid(),
+      threadId: thread.id,
+      roundNumber: Math.max(0, ...rounds.map((item) => item.roundNumber)) + 1,
+      status: "active",
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+    };
+    await repository.transaction(datasetId, async (tx) => {
+      await tx.createReadingRound(round);
+      for (const unit of bookRevision.units) {
+        await tx.saveReadingUnitProgress({
+          readingRoundId: round.id,
+          structureNodeId: unit.id,
+          status: "not_presented",
+          firstPresentedSourceId: null,
+          lastActivityMessageId: null,
+          completedAt: null,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      await tx.saveReadingPosition({
+        threadId: thread.id,
+        mainlineNodeId: bookRevision.initialMainlineUnitId,
+        displayedNodeId: bookRevision.initialMainlineUnitId,
+        viewMode: "mainline",
+        currentUnitDiscussed: false,
+        updatedAt: new Date().toISOString(),
+      });
+    });
+    readingRound = round;
+    readingPosition = {
+      threadId: thread.id,
+      mainlineNodeId: bookRevision.initialMainlineUnitId,
+      displayedNodeId: bookRevision.initialMainlineUnitId,
+      viewMode: "mainline",
+      currentUnitDiscussed: false,
+      updatedAt: new Date().toISOString(),
+    };
+    lastPresentationPromise = Promise.resolve();
+    return round;
+  }
+
   async function send(content, unit, callbacks = {}) {
     if (!unit) throw new Error("当前没有可关联的原文单元。");
     const messages = await loadMessages();
