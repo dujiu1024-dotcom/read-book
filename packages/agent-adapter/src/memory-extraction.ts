@@ -3,6 +3,7 @@ import {
   validateMemoryExtractionResult,
   validateMemoryEvolution,
   type MemoryVersion,
+  type MemoryChangeKind,
   type MemoryCandidate,
   type MemoryCandidateEvaluation,
   type MemoryCandidatePolicy,
@@ -227,15 +228,191 @@ export interface MemoryVersionPlan {
   previousVersionId: string | null;
   /** Required for every non-first version so the domain evolution rules can be re-evaluated. */
   previousVersion?: MemoryVersion;
+  /** A cross-memory target is used for duplicate_of; it is not part of the new memory's version chain. */
+  relationTargetVersion?: MemoryVersion;
   /** Set only when a user explicitly confirms a persisted low-confidence candidate. */
   resolveCandidateId?: string;
-  changeKind: "new" | "supplement" | "correction" | "conflict" | "rejection" | "extension";
+  changeKind: MemoryChangeKind;
   relation?: {
     id: string;
     toVersionId: string;
-    relationType: "supports" | "contradicts" | "extends" | "supersedes" | "retracts";
+    relationType: "supports" | "contradicts" | "extends" | "supersedes" | "retracts" | "duplicate_of";
     createdAt: string;
   };
+}
+
+export interface MemoryEvolutionProposal {
+  candidateId: string;
+  changeKind: MemoryChangeKind;
+  /** Required for supplement/correction/conflict/rejection/extension; null for a new memory. */
+  targetMemoryId: string | null;
+  /** Optional cross-memory duplicate target, valid only for changeKind=new. */
+  duplicateOfMemoryId?: string;
+  rationale: string;
+}
+
+export interface MemoryEvolutionPlannerInput {
+  candidates: readonly MemoryCandidate[];
+  existingLatestVersions: readonly MemoryVersion[];
+}
+
+export interface MemoryEvolutionPlanner {
+  propose(input: MemoryEvolutionPlannerInput): Promise<readonly MemoryEvolutionProposal[]>;
+}
+
+export interface MemoryEvolutionPlanningRepository {
+  createConsistentSnapshot(datasetId: string): Promise<{ memoryVersions: MemoryVersion[] }>;
+}
+
+export interface MemoryEvolutionPlanningResult {
+  plans: MemoryVersionPlan[];
+  alreadyPersistedCandidateIds: string[];
+}
+
+/**
+ * Build safe immutable-version plans across batches. Exact duplicates are linked
+ * deterministically; semantic changes require an injected planner. The model may
+ * propose a target, but code derives version numbers, previous IDs and relation types.
+ */
+export async function planAcceptedMemoryCandidates(
+  repository: MemoryEvolutionPlanningRepository,
+  datasetId: string,
+  result: MemoryExtractionPipelineResult,
+  planner?: MemoryEvolutionPlanner,
+  now: () => string = () => new Date().toISOString(),
+  idFactory: () => string = () => crypto.randomUUID(),
+): Promise<MemoryEvolutionPlanningResult> {
+  if (result.accepted.length === 0) return { plans: [], alreadyPersistedCandidateIds: [] };
+  const snapshot = await repository.createConsistentSnapshot(datasetId);
+  const allVersions = snapshot.memoryVersions || [];
+  const existingIds = new Set(allVersions.map((version) => version.id));
+  const latestByMemoryId = new Map<string, MemoryVersion>();
+  for (const version of allVersions) {
+    const current = latestByMemoryId.get(version.memoryId);
+    if (!current || version.version > current.version) latestByMemoryId.set(version.memoryId, version);
+  }
+  const alreadyPersistedCandidateIds = result.accepted
+    .filter(({ candidate }) => existingIds.has(candidate.id))
+    .map(({ candidate }) => candidate.id);
+  const pending = result.accepted.filter(({ candidate }) => !existingIds.has(candidate.id));
+  const usedIds = new Set([...existingIds, ...pending.map(({ candidate }) => candidate.id)]);
+  const nextId = () => {
+    const id = idFactory();
+    if (typeof id !== "string" || !id.trim() || usedIds.has(id)) {
+      throw new MemoryExtractionError("The evolution planner ID factory returned an empty or duplicate ID.");
+    }
+    usedIds.add(id);
+    return id;
+  };
+  const latestVersions = [...latestByMemoryId.values()];
+  const fingerprint = (title: string | undefined, content: string, viewpoint: string | undefined) =>
+    JSON.stringify([
+      (title || "").trim().toLocaleLowerCase(),
+      content.replace(/\s+/g, " ").trim().toLocaleLowerCase(),
+      viewpoint || null,
+    ]);
+  const plans: MemoryVersionPlan[] = [];
+  const toPropose: typeof pending = [];
+  for (const item of pending) {
+    const key = fingerprint(item.candidate.title, item.candidate.content, item.candidate.viewpoint);
+    const matches = latestVersions.filter((version) =>
+      fingerprint(version.title, version.content, version.viewpoint) === key && version.viewpoint !== undefined
+    );
+    if (matches.length !== 1) {
+      toPropose.push(item);
+      continue;
+    }
+    const target = matches[0];
+    plans.push({
+      candidateId: item.candidate.id,
+      memoryId: nextId(),
+      version: 1,
+      previousVersionId: null,
+      changeKind: "new",
+      relationTargetVersion: target,
+      relation: {
+        id: nextId(),
+        toVersionId: target.id,
+        relationType: "duplicate_of",
+        createdAt: now(),
+      },
+    });
+  }
+  if (toPropose.length > 0 && !planner) {
+    throw new MemoryExtractionError("A semantic MemoryEvolutionPlanner is required when no exact duplicate match exists.");
+  }
+  if (toPropose.length > 0) {
+    const proposals = await planner!.propose({
+      candidates: toPropose.map((item) => item.candidate),
+      existingLatestVersions: latestVersions,
+    });
+    const proposalIds = proposals.map((proposal) => proposal.candidateId);
+    if (new Set(proposalIds).size !== proposalIds.length ||
+        proposalIds.length !== toPropose.length ||
+        toPropose.some((item) => !proposalIds.includes(item.candidate.id))) {
+      throw new MemoryExtractionError("The evolution planner must return exactly one proposal for every pending candidate.");
+    }
+    const usedTargets = new Set<string>();
+    const candidatesById = new Map(toPropose.map((item) => [item.candidate.id, item.candidate]));
+    for (const proposal of proposals) {
+      if (typeof proposal.rationale !== "string" || !proposal.rationale.trim()) {
+        throw new MemoryExtractionError("Every evolution proposal requires a rationale.");
+      }
+      const candidate = candidatesById.get(proposal.candidateId)!;
+      if (proposal.changeKind === "new") {
+        if (proposal.targetMemoryId !== null) throw new MemoryExtractionError("A new memory cannot have a version-chain target.");
+        const duplicateTarget = proposal.duplicateOfMemoryId
+          ? latestByMemoryId.get(proposal.duplicateOfMemoryId)
+          : undefined;
+        if (proposal.duplicateOfMemoryId && !duplicateTarget) {
+          throw new MemoryExtractionError("A duplicate_of proposal must target an existing memory.");
+        }
+        plans.push({
+          candidateId: candidate.id,
+          memoryId: nextId(),
+          version: 1,
+          previousVersionId: null,
+          changeKind: "new",
+          ...(duplicateTarget ? { relationTargetVersion: duplicateTarget, relation: {
+            id: nextId(), toVersionId: duplicateTarget.id, relationType: "duplicate_of" as const, createdAt: now()
+          } } : {}),
+        });
+        continue;
+      }
+      if (proposal.duplicateOfMemoryId || typeof proposal.targetMemoryId !== "string" || !proposal.targetMemoryId.trim()) {
+        throw new MemoryExtractionError("A non-new evolution proposal must target exactly one existing memory.");
+      }
+      if (usedTargets.has(proposal.targetMemoryId)) {
+        throw new MemoryExtractionError("One batch cannot append multiple competing versions to the same memory.");
+      }
+      usedTargets.add(proposal.targetMemoryId);
+      const previousVersion = latestByMemoryId.get(proposal.targetMemoryId);
+      if (!previousVersion) throw new MemoryExtractionError("Evolution proposal targets an unknown memory.");
+      const relationType = ({
+        supplement: "supports",
+        correction: "supersedes",
+        conflict: "contradicts",
+        rejection: "retracts",
+        extension: "extends",
+      } as const)[proposal.changeKind];
+      plans.push({
+        candidateId: candidate.id,
+        memoryId: previousVersion.memoryId,
+        version: previousVersion.version + 1,
+        previousVersionId: previousVersion.id,
+        previousVersion,
+        relationTargetVersion: previousVersion,
+        changeKind: proposal.changeKind,
+        relation: {
+          id: nextId(),
+          toVersionId: previousVersion.id,
+          relationType,
+          createdAt: now(),
+        },
+      });
+    }
+  }
+  return { plans, alreadyPersistedCandidateIds };
 }
 
 export interface MemoryCandidatePersistenceRepository {
@@ -290,8 +467,11 @@ export async function persistAcceptedMemoryCandidates(
       if (plan.previousVersionId !== (plan.previousVersion?.id ?? null)) {
         throw new MemoryExtractionError("The supplied previous version does not match previousVersionId.");
       }
-      if (plan.relation && (!plan.previousVersion || plan.relation.toVersionId !== plan.previousVersion.id)) {
-        throw new MemoryExtractionError("An evolution relation must point to the explicitly supplied previous version.");
+      if (plan.relation) {
+        const relationTarget = plan.relationTargetVersion ?? plan.previousVersion;
+        if (!relationTarget || plan.relation.toVersionId !== relationTarget.id) {
+          throw new MemoryExtractionError("An evolution relation must point to an explicitly supplied existing version.");
+        }
       }
       const relation = plan.relation ? {
         id: plan.relation.id,
