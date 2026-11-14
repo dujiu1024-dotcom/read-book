@@ -274,7 +274,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       book_revision_id: bookRevision.bookRevisionId,
       user_message: { local_message_id: userMessageId, content },
       context: {
-        current_source: { structure_node_id: unit.id, excerpt: unit.text },
+        current_source: { structure_node_id: unit.id, locator: unit.locator, excerpt: unit.text },
         recent_messages: recentMessages,
         response_preferences: { language: "zh-CN" },
       },
