@@ -14,7 +14,7 @@ import { createProductionReaderRuntime } from "./reader-runtime.js";
   let productionRuntime = null;
   const requestedBookRevisionId = isGithubCorpusMode
     ? "github-corpus-" + queryBookId
-    : readerConfig.bookRevisionId || (isDemoProvider ? "demo-book-revision-1" : "");
+    : isDemoProvider ? "demo-book-revision-1" : (readerConfig.bookRevisionId || "");
 
   const state = {
     mainlineIndex: 1,
