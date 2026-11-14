@@ -33,7 +33,7 @@ function getOrCreateLocalDataSetId() {
 function tokenizeSourceText(value) {
   const terms = [];
   const text = String(value || "").toLowerCase().normalize("NFKC");
-  const segments = text.match(/[a-z0-9]+|[\\u3400-\\u9fff]+/g) || [];
+  const segments = text.match(/[a-z0-9]+|[\u3400-\u9fff]+/g) || [];
   for (const segment of segments) {
     if (/^[a-z0-9]+$/.test(segment)) {
       if (segment.length > 1) terms.push(segment);
