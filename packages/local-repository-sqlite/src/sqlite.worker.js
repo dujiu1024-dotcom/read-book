@@ -18,7 +18,7 @@ function parseJson(value, fallback = []) {
 function ensureDataset(datasetId) {
   if (typeof datasetId !== "string" || !datasetId.trim()) throw new Error("datasetId 非法");
   execute(
-    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,1,?,?,0,0,'active')",
+    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,2,?,?,0,0,'active')",
     [datasetId, new Date().toISOString(), new Date().toISOString()],
   );
   const dataset = first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
@@ -149,6 +149,37 @@ async function initialize() {
       UNIQUE(memory_id, version)
     );
   ` });
+
+  // Existing installations have the v1 schema and no PRAGMA user_version marker.
+  // Treat version 0 as the shipped v1 baseline, then migrate atomically to v2.
+  const storedVersion = Number(first("PRAGMA user_version")?.user_version ?? 0);
+  if (storedVersion > 2) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
+  if (storedVersion < 2) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      db.exec({ sql: `
+        CREATE TABLE IF NOT EXISTS memory_relation (
+          id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          from_version_id TEXT NOT NULL REFERENCES memory_version(id),
+          to_version_id TEXT NOT NULL REFERENCES memory_version(id),
+          relation_type TEXT NOT NULL CHECK(relation_type IN ('supports','contradicts','extends','supersedes','retracts','duplicate_of')),
+          source_message_ids TEXT NOT NULL,
+          source_references TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          CHECK(from_version_id <> to_version_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_relation_from ON memory_relation(dataset_id,from_version_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_relation_to ON memory_relation(dataset_id,to_version_id);
+        UPDATE local_dataset SET schema_version=2;
+        PRAGMA user_version=2;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v2 迁移失败，已回滚", { cause: error });
+    }
+  }
 }
 function assertDataset(datasetId) {
   if (!activeDatasetId || datasetId !== activeDatasetId) throw new Error("事务 datasetId 不匹配");
@@ -311,6 +342,44 @@ function txOperation(datasetId, operation, input) {
       transactionDirty=true;
       return v;
     }
+    case "appendMemoryRelation": {
+      const r=input.relation;
+      const allowed = ["supports","contradicts","extends","supersedes","retracts","duplicate_of"];
+      if (!r || typeof r.id !== "string" || !r.id.trim() ||
+          typeof r.fromVersionId !== "string" || !r.fromVersionId.trim() ||
+          typeof r.toVersionId !== "string" || !r.toVersionId.trim() ||
+          r.fromVersionId === r.toVersionId || !allowed.includes(r.relationType)) {
+        throw new Error("MemoryRelation 字段或关系类型非法");
+      }
+      if (!Array.isArray(r.sourceMessageIds) || r.sourceMessageIds.length === 0 ||
+          new Set(r.sourceMessageIds).size !== r.sourceMessageIds.length) {
+        throw new Error("MemoryRelation 必须包含唯一来源消息 ID");
+      }
+      const from = first(
+        "SELECT mv.id,m.thread_id,mv.source_message_ids FROM memory_version mv JOIN memory m ON m.id=mv.memory_id WHERE mv.id=? AND mv.dataset_id=?",
+        [r.fromVersionId,datasetId],
+      );
+      const to = first("SELECT id FROM memory_version WHERE id=? AND dataset_id=?", [r.toVersionId,datasetId]);
+      if (!from || !to) throw new Error("MemoryRelation 两端版本必须存在于当前数据集");
+      const sourceMessages = r.sourceMessageIds.map((messageId) => first(
+        "SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [messageId,datasetId]
+      ));
+      if (sourceMessages.some((row) => !row || row.thread_id !== from.thread_id)) {
+        throw new Error("MemoryRelation 来源消息必须属于 fromVersion 所在 Thread");
+      }
+      const fromSources = parseJson(from.source_message_ids);
+      if (!r.sourceMessageIds.some((id) => fromSources.includes(id))) {
+        throw new Error("MemoryRelation 来源必须与 fromVersion 的来源消息有交集");
+      }
+      assertSourceReferences(datasetId,from.thread_id,r.sourceReferences);
+      if (typeof r.createdAt !== "string" || !Number.isFinite(Date.parse(r.createdAt))) {
+        throw new Error("MemoryRelation createdAt 必须是有效时间");
+      }
+      execute("INSERT INTO memory_relation(id,dataset_id,from_version_id,to_version_id,relation_type,source_message_ids,source_references,created_at) VALUES(?,?,?,?,?,?,?,?)",
+        [r.id,datasetId,r.fromVersionId,r.toVersionId,r.relationType,JSON.stringify(r.sourceMessageIds),JSON.stringify(r.sourceReferences),r.createdAt]);
+      transactionDirty=true;
+      return r;
+    }
     case "createAccountDataSetBinding": {
       const b=input.binding;
       if (b.localDataSetId !== datasetId || !b.accountId || b.status === "revoked" || b.revokedAt !== null) {
@@ -344,6 +413,7 @@ function txOperation(datasetId, operation, input) {
         notes:execute("SELECT * FROM note WHERE dataset_id=?", [datasetId]).map(n=>({id:n.id,datasetId:n.dataset_id,threadId:n.thread_id,readingRoundId:n.reading_round_id,content:n.content,sourceMessageIds:parseJson(n.source_message_ids),sourceReferences:parseJson(n.source_references),createdAt:n.created_at,updatedAt:n.updated_at,revision:n.revision})),
         memories:execute("SELECT * FROM memory WHERE dataset_id=?", [datasetId]).map(m=>({id:m.id,datasetId:m.dataset_id,threadId:m.thread_id,currentVersionId:m.current_version_id,createdAt:m.created_at,updatedAt:m.updated_at})),
         memoryVersions:execute("SELECT * FROM memory_version WHERE dataset_id=? ORDER BY memory_id,version", [datasetId]).map(v=>({id:v.id,memoryId:v.memory_id,version:v.version,previousVersionId:v.previous_version_id,changeKind:v.change_kind,content:v.content,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references),createdAt:v.created_at})),
+        memoryRelations:execute("SELECT * FROM memory_relation WHERE dataset_id=? ORDER BY created_at,id", [datasetId]).map(r=>({id:r.id,fromVersionId:r.from_version_id,toVersionId:r.to_version_id,relationType:r.relation_type,sourceMessageIds:parseJson(r.source_message_ids),sourceReferences:parseJson(r.source_references),createdAt:r.created_at})),
       };
     }
     default: throw new Error("未知 Repository 事务操作：" + operation);
@@ -390,6 +460,12 @@ function handle(message) {
   }
   if (type === "getMemoryVersions") {
     return execute("SELECT * FROM memory_version WHERE dataset_id=? AND memory_id=? ORDER BY version", [message.datasetId,message.memoryId]).map(v=>({...v,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references)}));
+  }
+  if (type === "getMemoryRelations") {
+    return execute("SELECT * FROM memory_relation WHERE dataset_id=? AND (from_version_id=? OR to_version_id=?) ORDER BY created_at,id", [message.datasetId,message.versionId,message.versionId]).map(r=>({
+      id:r.id,fromVersionId:r.from_version_id,toVersionId:r.to_version_id,relationType:r.relation_type,
+      sourceMessageIds:parseJson(r.source_message_ids),sourceReferences:parseJson(r.source_references),createdAt:r.created_at,
+    }));
   }
   if (type === "close") {
     if (activeDatasetId) db.exec({sql:"ROLLBACK"});
