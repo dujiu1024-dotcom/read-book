@@ -91,8 +91,10 @@ async function loadChuanxiLu(fetchImpl) {
   const apiPath = path.split("/").map(encodeURIComponent).join("/");
   const metadataUrl = GITHUB_API + "/repos/" + repository + "/contents/" + apiPath + "?ref=master";
   const metadata = await (await request(fetchImpl, metadataUrl, "《传习录》来源元数据")).json();
-  if (metadata.type !== "file" || typeof metadata.sha !== "string" || typeof metadata.download_url !== "string") {
-    throw new Error("《传习录》来源元数据不完整。");
+  if (metadata.type !== "file" || !/^[a-f0-9]{40}$/i.test(metadata.sha || "") ||
+      typeof metadata.download_url !== "string" ||
+      !metadata.download_url.startsWith(RAW_GITHUB + "/" + repository + "/")) {
+    throw new Error("《传习录》来源元数据不完整或下载地址不可信。");
   }
   const url = metadata.download_url;
   const raw = await (await request(fetchImpl, url, "《传习录》正文")).text();
@@ -131,7 +133,11 @@ async function loadMaoXuanVolume(fetchImpl, book) {
   let totalCharacters = 0;
   const articles = await mapConcurrent(files, CONCURRENCY, async (file) => {
     const url = file.download_url;
-    if (typeof url !== "string" || !url.startsWith(RAW_GITHUB + "/ruguoaaa/gushi/") || typeof file.sha !== "string") throw new Error("GitHub 返回了非预期的正文来源信息：" + file.name);
+    if (typeof url !== "string" || !url.startsWith(RAW_GITHUB + "/ruguoaaa/gushi/") ||
+        !/^[a-f0-9]{40}$/i.test(file.sha || "") || typeof file.path !== "string" ||
+        !file.path.startsWith(directory + "/")) {
+      throw new Error("GitHub 返回了非预期的正文来源信息：" + file.name);
+    }
     const raw = await (await request(fetchImpl, url, file.name)).text();
     if (!raw.trim()) throw new Error(file.name + " 正文为空。");
     if (raw.length > MAX_FILE_CHARACTERS) throw new Error(file.name + " 超过单篇读取上限。");
