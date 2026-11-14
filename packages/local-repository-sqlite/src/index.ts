@@ -92,8 +92,8 @@ export class SqliteOpfsRepository implements LocalRepository {
         createThread: (thread) => call("createThread", { thread }),
         appendUserMessage: (message: NewUserMessage) => call("appendUserMessage", { message }),
         appendAssistantMessage: (message: NewAssistantMessage) => call("appendAssistantMessage", { message }),
-        transitionAssistantMessage: (messageId: string, status: AssistantMessageStatus, content?: string) =>
-          call("transitionAssistantMessage", { messageId, status, content }),
+        transitionAssistantMessage: (messageId: string, status: AssistantMessageStatus, content?: string, sourceReferences?: SourceReference[]) =>
+          call("transitionAssistantMessage", { messageId, status, content, sourceReferences }),
         createReadingRound: (round: ReadingRoundRecord) => call("createReadingRound", { round }),
         saveReadingPosition: (position: ReadingPositionRecord) => call("saveReadingPosition", { position }),
         saveCitation: (citation: CitationRecord) => call("saveCitation", { citation }),
