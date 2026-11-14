@@ -21,8 +21,6 @@ button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px sol
 .brand { color: var(--accent); text-decoration: none; font-weight: 800; letter-spacing: .08em; font-size: 19px; }
 .topbar-book { display: flex; flex-direction: column; line-height: 1.25; flex: 1; }
 .topbar-book strong { font-size: 14px; font-weight: 650; }
-.topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.topbar-actions .text-button { white-space: nowrap; padding: 6px 9px; }
 .eyebrow { color: var(--muted); font-size: 11px; letter-spacing: .08em; }
 .icon-button { border: 0; background: transparent; color: #606970; border-radius: 8px; min-width: 44px; min-height: 44px; font-size: 23px; }
 .icon-button:hover { background: var(--soft); }
@@ -162,3 +160,35 @@ button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px sol
   margin-top: 12px;
 }
 .memory-actions button { min-height: 36px; }
+
+
+.book-selector {
+  max-width: min(250px, 48vw);
+  min-height: 30px;
+  margin-top: 5px;
+  padding: 4px 24px 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  background: var(--paper);
+  font: inherit;
+  font-size: 12px;
+}
+.book-selector:focus-visible, .source-link:focus-visible {
+  outline: 3px solid #8bb6a8;
+  outline-offset: 2px;
+}
+.source-link {
+  color: var(--accent);
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.source-link[hidden] { display: none; }
+@media (max-width: 480px) {
+  .book-selector { max-width: min(210px, 55vw); }
+}
+
+
+.topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.topbar-actions .text-button { white-space: nowrap; padding: 6px 9px; }

@@ -1,5 +1,6 @@
 import { createDemoBookContentProvider } from "./book-content-provider.js";
 import { createPublicBookApiProvider } from "./public-book-content-provider.js";
+import { createGithubCorpusProvider } from "./github-corpus-provider.js";
 import { createProductionReaderRuntime } from "./reader-runtime.js";
 import { createLocalBookPackageProvider, importBookPackageFile } from "./local-book-package-provider.js";
 
@@ -7,19 +8,23 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
   let units = [];
   let bookRevision = null;
   const readerConfig = window.READ_BOOK_CONFIG || {};
+  const queryBookId = new URLSearchParams(window.location.search).get("book");
+  const isGithubCorpusMode = Boolean(queryBookId && queryBookId !== "demo");
   const activeLocalBookPackageId = readerConfig.localBookPackageId || (() => {
     try { return window.localStorage.getItem("read-book:active-local-book") || ""; } catch { return ""; }
   })();
   const preferLocalBookPackage = Boolean(readerConfig.localBookPackageId) || (() => {
     try { return window.localStorage.getItem("read-book:prefer-local-book") === "true"; } catch { return false; }
   })();
-  const useLocalBookPackage = Boolean(activeLocalBookPackageId && (preferLocalBookPackage || !readerConfig.bookRevisionId));
-  const isDemoProvider = !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId && !activeLocalBookPackageId;
+  const useLocalBookPackage = Boolean(activeLocalBookPackageId && !queryBookId && (preferLocalBookPackage || !readerConfig.bookRevisionId));
+  const isDemoProvider = queryBookId === "demo" || (!isGithubCorpusMode && !useLocalBookPackage && !readerConfig.apiBaseUrl && !readerConfig.bookRevisionId);
   let bookContentProvider = null;
   let productionRuntime = null;
-  const requestedBookRevisionId = useLocalBookPackage
-    ? activeLocalBookPackageId
-    : readerConfig.bookRevisionId || (isDemoProvider ? "demo-book-revision-1" : "");
+  const requestedBookRevisionId = isGithubCorpusMode
+    ? "github-corpus-" + queryBookId
+    : isDemoProvider ? "demo-book-revision-1"
+      : useLocalBookPackage ? activeLocalBookPackageId
+        : (readerConfig.bookRevisionId || "");
 
   const state = {
     mainlineIndex: 1,
@@ -53,9 +58,17 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
     const unit = state.displayedUnit;
     if (!unit || !bookRevision) return;
     $("bookTitle").textContent = bookRevision.title;
+    $("topbarBookTitle").textContent = bookRevision.title;
     $("bookAuthor").textContent = bookRevision.author;
-    const topbarTitle = document.querySelector(".topbar-book strong");
-    if (topbarTitle) topbarTitle.textContent = bookRevision.title;
+    $("sourceTag").textContent = isGithubCorpusMode ? "GitHub 公开语料" : "原书内容";
+    const sourceLink = $("sourceSourceLink");
+    if (sourceLink && unit.source?.url) {
+      sourceLink.href = unit.source.url;
+      sourceLink.hidden = false;
+    } else if (sourceLink) {
+      sourceLink.hidden = true;
+      sourceLink.removeAttribute("href");
+    }
     $("sourceHeading").textContent = unit.title;
     $("sourceText").textContent = unit.text;
     $("sourceLocator").textContent = unit.locator;
@@ -162,24 +175,6 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
     messageList.append(article);
     updateCount();
     scrollIfFollowing();
-  }
-
-  function renderTemporaryOptions() {
-    const container = document.querySelector(".chapter-options");
-    if (!container) return;
-    container.replaceChildren();
-    for (const unit of units) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "chapter-option";
-      button.dataset.unit = unit.id;
-      const chapter = document.createElement("strong");
-      chapter.textContent = unit.chapter;
-      const title = document.createElement("span");
-      title.textContent = unit.title;
-      button.append(chapter, title);
-      container.append(button);
-    }
   }
 
   function showCitation(unitId) {
@@ -307,16 +302,36 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
     renderSource();
   });
 
-  $("temporaryButton").addEventListener("click", () => $("temporaryDialog").showModal());
-  document.querySelector(".chapter-options").addEventListener("click", event => {
-    const button = event.target.closest("[data-unit]");
-    if (!button) return;
-    const unit = units.find(item => item.id === button.dataset.unit);
-    if (!unit) return;
-    state.displayedUnit = unit;
-    state.viewMode = "temporary";
-    $("temporaryDialog").close();
-    renderSource();
+  function renderChapterOptions() {
+    const container = $("chapterOptions");
+    if (!container) return;
+    container.replaceChildren();
+    const firstUnitByChapter = new Map();
+    for (const unit of units) {
+      if (!firstUnitByChapter.has(unit.chapter)) firstUnitByChapter.set(unit.chapter, unit);
+    }
+    for (const [chapter, unit] of firstUnitByChapter) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chapter-option";
+      const heading = document.createElement("strong");
+      heading.textContent = chapter;
+      const detail = document.createElement("span");
+      detail.textContent = unit.title;
+      button.append(heading, detail);
+      button.addEventListener("click", () => {
+        state.displayedUnit = unit;
+        state.viewMode = "temporary";
+        $("temporaryDialog").close();
+        renderSource();
+      });
+      container.append(button);
+    }
+  }
+
+  $("temporaryButton").addEventListener("click", () => {
+    renderChapterOptions();
+    $("temporaryDialog").showModal();
   });
 
   $("returnMainline").addEventListener("click", returnToMainline);
@@ -326,18 +341,18 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
       toast("先回到当前主线，再继续阅读。");
       return;
     }
-    if (!state.discussed) {
+    if (!state.discussed && !isGithubCorpusMode) {
       const confirmed = window.confirm("当前论述单元还没有讨论。是否略读当前单元并继续？");
       if (!confirmed) return;
     }
     if (state.mainlineIndex >= units.length - 1) {
-      toast("演示主线已到最后一个单元。");
+      toast(isGithubCorpusMode ? "当前书籍已到最后一个阅读单元。" : "演示主线已到最后一个单元。");
       return;
     }
     state.mainlineIndex += 1;
     state.displayedUnit = units[state.mainlineIndex];
     state.viewMode = "mainline";
-    state.discussed = false;
+    state.discussed = isGithubCorpusMode;
     renderSource();
     toast("已按主线顺序展示下一单元。");
   });
@@ -387,6 +402,10 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
     try {
       const imported = await importBookPackageFile(file);
       setGenerationStatus("已导入《" + imported.title + "》，共 " + imported.unitCount + " 个原文单元。正在打开…");
+      const params = new URLSearchParams(window.location.search);
+      params.delete("book");
+      const query = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (query ? "?" + query : ""));
       window.location.reload();
     } catch (error) {
       setGenerationStatus("书籍导入失败：" + error.message);
@@ -535,10 +554,29 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
     }
   }
 
+  const bookSelector = $("bookSelector");
+  if (bookSelector) {
+    const serviceOption = bookSelector.querySelector('option[value="service"]');
+    if (serviceOption) serviceOption.disabled = !(readerConfig.apiBaseUrl && readerConfig.bookRevisionId);
+    bookSelector.value = isGithubCorpusMode ? queryBookId : (queryBookId === "demo" || isDemoProvider ? "demo" : "service");
+    bookSelector.addEventListener("change", () => {
+      const next = bookSelector.value;
+      const params = new URLSearchParams(window.location.search);
+      if (next === "service") params.delete("book");
+      else params.set("book", next);
+      const query = params.toString();
+      window.location.search = query ? "?" + query : "";
+    });
+  }
+
   async function initializeReader() {
     try {
       if (isDemoProvider) {
         bookContentProvider = createDemoBookContentProvider();
+      } else if (isGithubCorpusMode) {
+        state.messages = [];
+        messageList.replaceChildren();
+        bookContentProvider = createGithubCorpusProvider();
       } else if (useLocalBookPackage) {
         state.messages = [];
         messageList.replaceChildren();
@@ -561,10 +599,24 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
       if (!requestedBookRevisionId) throw new Error("真实书籍模式必须提供 READ_BOOK_CONFIG.bookRevisionId。");
       bookRevision = await bookContentProvider.loadBookRevision(requestedBookRevisionId);
       units = bookRevision.units;
-      renderTemporaryOptions();
       state.mainlineIndex = units.findIndex(unit => unit.id === bookRevision.initialMainlineUnitId);
       if (state.mainlineIndex < 0) throw new Error("书籍主线起始单元不存在。");
       state.displayedUnit = units[state.mainlineIndex];
+      renderChapterOptions();
+      if (isGithubCorpusMode) {
+        $("conversationSection").hidden = true;
+        $("composerSection").hidden = true;
+        $("memoryPanel").hidden = true;
+        $("menuButton").hidden = true;
+        $("readerModeLabel").textContent = "GitHub 公开语料 · 只读模式";
+        $("backupButton").disabled = true;
+        $("backupButton").textContent = "备份未接入";
+        state.discussed = true;
+        renderSource();
+        updateCount();
+        setGenerationStatus("已从原始 GitHub 仓库读取 " + units.length + " 个阅读单元。当前为只读语料模式，尚未接入本地持久化和真实 Agent。");
+        return;
+      }
       if (isDemoProvider) {
         renderSource();
         updateCount();
@@ -598,6 +650,7 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
       $("simulateFailure").hidden = true;
       $("menuButton").hidden = true;
       $("backupButton").textContent = productionRuntime.backupStatus.label;
+      $("readerModeLabel").textContent = productionRuntime.generationConfigured ? "本地阅读 · Agent 已配置" : "本地导入书籍 · 阅读模式";
       setGenerationStatus(productionRuntime.generationConfigured
         ? "本地阅读数据已加载；讨论消息先保存到本地，再请求 Agent。"
         : "本地书籍、阅读主线和讨论历史已保存到当前浏览器。Agent 与云端备份尚未配置。");
@@ -612,7 +665,7 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
       });
     } catch (error) {
       $("sourceHeading").textContent = "书籍内容加载失败";
-      $("sourceText").textContent = "当前无法加载此书籍版本，请检查内容提供器与本地数据配置。";
+      $("sourceText").textContent = "当前无法加载此书籍版本，请检查网络、来源仓库和内容提供器配置。";
       setGenerationStatus("内容加载失败：" + error.message);
       $("messageInput").disabled = true;
       $("sendButton").disabled = true;
