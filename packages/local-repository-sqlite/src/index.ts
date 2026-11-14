@@ -23,6 +23,7 @@ export class SqliteOpfsRepository implements LocalRepository {
   private nextId = 0;
   private pending = new Map<number, Pending>();
   private closed = false;
+  private ready: Promise<void> | null = null;
 
   constructor() {
     this.worker = new Worker(new URL("./sqlite.worker.js", import.meta.url), { type: "module" });
@@ -48,9 +49,15 @@ export class SqliteOpfsRepository implements LocalRepository {
     });
   }
 
-  async initialize(): Promise<void> { await this.request("init"); }
+  async initialize(): Promise<void> {
+    if (!this.ready) this.ready = this.request<void>("init");
+    await this.ready;
+  }
+
+  private async ensureReady(): Promise<void> { await this.initialize(); }
 
   async transaction<T>(datasetId: string, operation: (tx: LocalRepositoryTransaction) => Promise<T>): Promise<T> {
+    await this.ensureReady();
     if (!navigator.locks?.request) throw new Error("Web Locks 不可用，已阻止写入并降级只读");
     return navigator.locks.request("read-book-dataset:" + datasetId, { mode: "exclusive", ifAvailable: true }, async (lock) => {
       if (!lock) throw new Error("当前标签页未获得数据集写锁，已阻止写入");
@@ -87,13 +94,16 @@ export class SqliteOpfsRepository implements LocalRepository {
     });
   }
 
-  getDataSet(datasetId: string): Promise<LocalDataSet | null> {
+  async getDataSet(datasetId: string): Promise<LocalDataSet | null> {
+    await this.ensureReady();
     return this.request("getDataSet", { datasetId });
   }
-  getMessages(datasetId: string, threadId: string, afterSequence = 0): Promise<PersistedMessage[]> {
+  async getMessages(datasetId: string, threadId: string, afterSequence = 0): Promise<PersistedMessage[]> {
+    await this.ensureReady();
     return this.request("getMessages", { datasetId, threadId, afterSequence });
   }
-  getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]> {
+  async getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]> {
+    await this.ensureReady();
     return this.request("getMemoryVersions", { datasetId, memoryId });
   }
   async close(): Promise<void> {
