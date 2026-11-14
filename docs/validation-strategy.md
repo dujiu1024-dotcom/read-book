@@ -241,7 +241,7 @@
 |---|---|---|
 | 外部身份映射 | User 有 email/phone 登录标识，未定义平台身份表 | 增加 ExternalIdentity；provider + provider_subject 唯一；服务端验证平台登录凭证；定义绑定/解绑/合并/注销 |
 | 消息并发顺序 | Message 有 sequence 唯一约束 | 定义 sequence 原子分配策略；同一 Thread 并发发送时的排序规则；是否允许多个 Agent generation 并行 |
-| 生成任务实体 | Message 有 streaming/completed/failed 状态，但无独立 generation/job 契约 | 明确 generation_id、取消、超时、重试、worker 崩溃恢复和重复执行保护 |
+| 生成任务实体 | Message 有 saved/generating/completed/failed/cancelled 状态，但无独立 generation/job 契约 | 明确 generation_id、取消、超时、重试、worker 崩溃恢复和重复执行保护 |
 | 流式事件恢复 | 草案提到 SSE 和按 message_id 查询最终状态 | 定义事件 ID/序号、心跳、断线恢复语义；明确首版是否只恢复最终结果，不回放 token |
 | 停止生成 | 产品要求支持停止，API 表未定义 stop endpoint | 定义取消接口和取消状态；区分用户取消、模型超时、服务端失败 |
 | 消息正文结构 | Message content 为正文字符串，另有 citations | 明确 Markdown、文本片段、引用卡片、错误状态和工具输出的序列化版本；避免客户端依赖模型私有格式 |

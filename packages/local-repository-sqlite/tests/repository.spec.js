@@ -195,7 +195,7 @@ test("message source references cannot cross immutable BookRevision boundaries",
 });
 
 
-test("schema v1 to v5 migration preserves legacy dataset cursors and creates candidate storage", async ({ page }) => {
+test("schema v1 to v6 migration preserves legacy dataset cursors and creates candidate storage", async ({ page }) => {
   await page.goto("/");
   const seeded = await page.evaluate(async () => {
     const worker = new Worker("/tests/legacy-db.worker.js", { type: "module" });
@@ -217,7 +217,7 @@ test("schema v1 to v5 migration preserves legacy dataset cursors and creates can
     return { dataset, candidates };
   });
   expect(migrated.dataset.id).toBe("legacy-v1-dataset");
-  expect(migrated.dataset.schemaVersion).toBe(5);
+  expect(migrated.dataset.schemaVersion).toBe(8);
   expect(migrated.dataset.dirtySequence).toBe(7);
   expect(migrated.dataset.lastAckedSequence).toBe(2);
   expect(migrated.candidates).toEqual([]);
@@ -285,6 +285,85 @@ test("MemoryRelation persists only when both versions and source provenance belo
   expect(result.relations[0].relationType).toBe("contradicts");
   expect(result.snapshot.memoryRelations).toHaveLength(1);
   expect(result.invalidRejected).toBe(true);
+});
+
+test("memory recall returns only effective versions by thread, chapter and topic", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({
+        id: ids.threadId, datasetId: ids.datasetA, bookRevisionId: ids.revision,
+        createdAt: "2026-11-14T00:00:00.000Z",
+      });
+      await tx.appendUserMessage({
+        id: ids.messageA, threadId: ids.threadId, content: "决策取决于关键变量",
+        createdAt: "2026-11-14T00:00:01.000Z", sourceReferences: [],
+      });
+      await tx.appendUserMessage({
+        id: ids.messageB, threadId: ids.threadId, content: "先看目录再读正文",
+        createdAt: "2026-11-14T00:00:02.000Z", sourceReferences: [],
+      });
+      await tx.appendMemoryVersion({
+        id: "recall-a1", memoryId: "recall-memory-a", version: 1, previousVersionId: null,
+        changeKind: "new", title: "信息与决策", viewpoint: "user", content: "信息越充分决策越准确。",
+        sourceMessageIds: [ids.messageA],
+        sourceReferences: [{ bookRevisionId: ids.revision, structureNodeId: "node-01", locator: "epubcfi(/6/2)" }],
+        createdAt: "2026-11-14T00:00:03.000Z",
+      });
+      await tx.appendMemoryVersion({
+        id: "recall-a2", memoryId: "recall-memory-a", version: 2, previousVersionId: "recall-a1",
+        changeKind: "correction", title: "关键变量", viewpoint: "user", content: "决策质量取决于是否识别关键变量。",
+        sourceMessageIds: [ids.messageA],
+        sourceReferences: [{ bookRevisionId: ids.revision, structureNodeId: "node-01", locator: "epubcfi(/6/2)" }],
+        createdAt: "2026-11-14T00:00:04.000Z",
+      });
+      await tx.appendMemoryVersion({
+        id: "recall-b1", memoryId: "recall-memory-b", version: 1, previousVersionId: null,
+        changeKind: "new", title: "阅读顺序", viewpoint: "user", content: "先看目录有助于建立结构感。",
+        sourceMessageIds: [ids.messageB],
+        sourceReferences: [{ bookRevisionId: ids.revision, structureNodeId: "node-02", locator: "epubcfi(/6/4)" }],
+        createdAt: "2026-11-14T00:00:05.000Z",
+      });
+    });
+    const byThread = await repository.recallMemoryVersions(ids.datasetA, { threadId: ids.threadId });
+    const byChapter = await repository.recallMemoryVersions(ids.datasetA, {
+      threadId: ids.threadId, structureNodeId: "node-01",
+    });
+    const byTopic = await repository.recallMemoryVersions(ids.datasetA, {
+      threadId: ids.threadId, topic: "关键变量",
+    });
+    const limited = await repository.recallMemoryVersions(ids.datasetA, {
+      threadId: ids.threadId, limit: 1,
+    });
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.appendMemoryVersion({
+        id: "recall-b2", memoryId: "recall-memory-b", version: 2, previousVersionId: "recall-b1",
+        changeKind: "rejection", title: "阅读顺序", viewpoint: "user", content: "不再坚持先看目录。",
+        sourceMessageIds: [ids.messageB],
+        sourceReferences: [{ bookRevisionId: ids.revision, structureNodeId: "node-02", locator: "epubcfi(/6/4)" }],
+        createdAt: "2026-11-14T00:00:06.000Z",
+      });
+    });
+    const afterRejection = await repository.recallMemoryVersions(ids.datasetA, { threadId: ids.threadId });
+    let invalidLimitRejected = false;
+    try {
+      await repository.recallMemoryVersions(ids.datasetA, { threadId: ids.threadId, limit: 9 });
+    } catch { invalidLimitRejected = true; }
+    await repository.close();
+    return { byThread, byChapter, byTopic, limited, afterRejection, invalidLimitRejected };
+  }, {
+    datasetA, revision, threadId,
+    messageA: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    messageB: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+  });
+  expect(result.byThread.map((version) => version.id)).toEqual(["recall-b1", "recall-a2"]);
+  expect(result.byChapter.map((version) => version.id)).toEqual(["recall-a2"]);
+  expect(result.byTopic.map((version) => version.id)).toEqual(["recall-a2"]);
+  expect(result.limited).toHaveLength(1);
+  expect(result.afterRejection.map((version) => version.id)).toEqual(["recall-a2"]);
+  expect(result.invalidLimitRejected).toBe(true);
 });
 
 
@@ -504,8 +583,9 @@ test("SQLite OPFS persists CitationRecord with the completed Assistant message",
       await tx.saveCitation({
         id: citationId, threadId: ids.threadId, messageId: assistantId,
         bookRevisionId: ids.revision, structureNodeId: nodeId,
+        chunkId: "66666666-6666-4666-8666-666666666666",
         locator: "epubcfi(/6/4!/4/2)", excerpt: "原文片段",
-        excerptHash: null, createdAt: "2026-11-14T00:00:02.000Z"
+        excerptHash: null, sourceHash: "a".repeat(64), createdAt: "2026-11-14T00:00:02.000Z"
       });
     });
     const snapshot = await repository.createConsistentSnapshot(ids.datasetA);
@@ -516,6 +596,8 @@ test("SQLite OPFS persists CitationRecord with the completed Assistant message",
   expect(result.message.sourceReferences).toHaveLength(1);
   expect(result.citation.messageId).toBe("99999999-9999-4999-8999-999999999999");
   expect(result.citation.excerpt).toBe("原文片段");
+  expect(result.citation.chunkId).toBe("66666666-6666-4666-8666-666666666666");
+  expect(result.citation.sourceHash).toBe("a".repeat(64));
 });
 
 
@@ -628,4 +710,208 @@ test("Note writes cannot cross Thread or dataset boundaries or overwrite an olde
   expect(result.staleRevisionRejected).toBe(true);
   expect(result.savedNote.content).toBe("原始笔记");
   expect(result.savedNote.revision).toBe(1);
+});
+
+test("backup journal records content mutations at the committed dirty sequence and prunes after ack", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({
+        id: ids.threadId, datasetId: ids.datasetA, bookRevisionId: ids.revision,
+        createdAt: "2026-11-14T00:00:00.000Z",
+      });
+      await tx.appendUserMessage({
+        id: ids.messageId, threadId: ids.threadId, content: "第一条消息",
+        createdAt: "2026-11-14T00:00:01.000Z", sourceReferences: [],
+      });
+    });
+    const first = await repository.createConsistentSnapshot(ids.datasetA);
+    await repository.transaction(ids.datasetA, (tx) => tx.saveReadingPosition({
+      datasetId: ids.datasetA, threadId: ids.threadId, mainlineNodeId: "node-1",
+      displayedNodeId: "node-1", viewMode: "mainline", currentUnitDiscussed: false,
+      updatedAt: "2026-11-14T00:00:02.000Z",
+    }));
+    const second = await repository.createConsistentSnapshot(ids.datasetA);
+    await repository.transaction(ids.datasetA, (tx) =>
+      tx.acknowledgeBackup(second.dirtySequence, "backup-journal", "2026-11-14T00:00:03.000Z"));
+    const afterAck = await repository.createConsistentSnapshot(ids.datasetA);
+    await repository.close();
+    return { first, second, afterAck };
+  }, {
+    datasetA, revision, threadId,
+    messageId: "cccccccc-3333-4333-8333-cccccccccccc",
+  });
+  expect(result.first.schemaVersion).toBe(8);
+  expect(result.first.dirtySequence).toBe(1);
+  expect(result.first.backupJournal.map((entry) => entry.entityType).sort()).toEqual(["message", "thread"]);
+  expect(new Set(result.first.backupJournal.map((entry) => entry.sequence))).toEqual(new Set([1]));
+  expect(result.second.dirtySequence).toBe(2);
+  expect(result.second.backupJournal).toHaveLength(3);
+  expect(result.second.backupJournal.find((entry) => entry.entityType === "readingPosition")?.entityId).toBe(threadId);
+  expect(result.afterAck.dirtySequence).toBe(2);
+  expect(result.afterAck.backupJournal).toEqual([]);
+});
+
+test("SQLite OPFS persists SM-001 to SM-008 mainline progress and reading rounds", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({
+        id: ids.threadId,
+        datasetId: ids.datasetA,
+        bookRevisionId: ids.revision,
+        createdAt: "2026-11-14T00:00:00.000Z",
+      });
+    });
+    let illegalSkipRejected = false;
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createReadingRoundPlan({
+        round: {
+          id: ids.roundId, threadId: ids.threadId, roundNumber: 1,
+          status: "active", startReason: "first_read", startedAt: "2026-11-14T00:00:01.000Z",
+        },
+        state: {
+          readingRoundId: ids.roundId, currentStructureNodeId: "node-01",
+          currentOrderIndex: 0, lastPresentedSourceId: null, updatedAt: "2026-11-14T00:00:01.000Z",
+        },
+        unitProgress: [
+          { readingRoundId: ids.roundId, structureNodeId: "node-01", status: "not_presented", firstPresentedSourceId: null, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:01.000Z" },
+          { readingRoundId: ids.roundId, structureNodeId: "node-02", status: "not_presented", firstPresentedSourceId: null, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:01.000Z" },
+        ],
+      });
+      await tx.savePresentedSource({
+        id: ids.sourceOne, datasetId: ids.datasetA, threadId: ids.threadId,
+        bookRevisionId: ids.revision, structureNodeId: "node-01", chunkId: null,
+        presentationType: "mainline", readingRoundId: ids.roundId,
+        presentedAt: "2026-11-14T00:00:02.000Z", sourceLocator: { cfi: "/6/4!/4/2" },
+      });
+      await tx.saveReadingUnitProgress({
+        readingRoundId: ids.roundId, datasetId: ids.datasetA, structureNodeId: "node-01",
+        status: "awaiting_user", firstPresentedSourceId: ids.sourceOne,
+        lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:02.000Z",
+      });
+      await tx.saveReadingRoundState({
+        readingRoundId: ids.roundId, datasetId: ids.datasetA,
+        currentStructureNodeId: "node-01", currentOrderIndex: 0,
+        lastPresentedSourceId: ids.sourceOne, updatedAt: "2026-11-14T00:00:02.000Z",
+      });
+      try {
+        await tx.saveReadingUnitProgress({
+          readingRoundId: ids.roundId, datasetId: ids.datasetA, structureNodeId: "node-01",
+          status: "discussed", firstPresentedSourceId: ids.sourceOne,
+          lastActivityMessageId: null, completedAt: "2026-11-14T00:00:03.000Z",
+          updatedAt: "2026-11-14T00:00:03.000Z",
+        });
+      } catch {
+        illegalSkipRejected = true;
+      }
+      await tx.savePresentedSource({
+        id: ids.temporarySource, datasetId: ids.datasetA, threadId: ids.threadId,
+        bookRevisionId: ids.revision, structureNodeId: "node-09", chunkId: null,
+        presentationType: "temporary", readingRoundId: null,
+        presentedAt: "2026-11-14T00:00:03.000Z", sourceLocator: { cfi: "/6/10!/4/2" },
+      });
+      await tx.saveReadingUnitProgress({
+        readingRoundId: ids.roundId, datasetId: ids.datasetA, structureNodeId: "node-01",
+        status: "discussion_active", firstPresentedSourceId: ids.sourceOne,
+        lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:04.000Z",
+      });
+      await tx.saveReadingUnitProgress({
+        readingRoundId: ids.roundId, datasetId: ids.datasetA, structureNodeId: "node-01",
+        status: "discussed", firstPresentedSourceId: ids.sourceOne,
+        lastActivityMessageId: null, completedAt: "2026-11-14T00:00:05.000Z",
+        updatedAt: "2026-11-14T00:00:05.000Z",
+      });
+      await tx.savePresentedSource({
+        id: ids.sourceTwo, datasetId: ids.datasetA, threadId: ids.threadId,
+        bookRevisionId: ids.revision, structureNodeId: "node-02", chunkId: null,
+        presentationType: "mainline", readingRoundId: ids.roundId,
+        presentedAt: "2026-11-14T00:00:06.000Z", sourceLocator: { cfi: "/6/4!/4/6" },
+      });
+      await tx.saveReadingUnitProgress({
+        readingRoundId: ids.roundId, datasetId: ids.datasetA, structureNodeId: "node-02",
+        status: "awaiting_user", firstPresentedSourceId: ids.sourceTwo,
+        lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:06.500Z",
+      });
+      await tx.saveReadingUnitProgress({
+        readingRoundId: ids.roundId, datasetId: ids.datasetA, structureNodeId: "node-02",
+        status: "skipped", firstPresentedSourceId: ids.sourceTwo,
+        lastActivityMessageId: null, completedAt: "2026-11-14T00:00:07.000Z",
+        updatedAt: "2026-11-14T00:00:07.000Z",
+      });
+      await tx.saveReadingRoundState({
+        readingRoundId: ids.roundId, datasetId: ids.datasetA,
+        currentStructureNodeId: "node-02", currentOrderIndex: 1,
+        lastPresentedSourceId: ids.sourceTwo, updatedAt: "2026-11-14T00:00:07.000Z",
+      });
+      await tx.updateReadingRoundStatus(ids.roundId, "completed", "2026-11-14T00:00:08.000Z");
+    });
+
+    let thirdActiveRejected = false;
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createReadingRoundPlan({
+        round: {
+          id: ids.secondRoundId, threadId: ids.threadId, roundNumber: 2,
+          status: "active", startReason: "reread", startedAt: "2026-11-14T00:00:09.000Z",
+        },
+        state: {
+          readingRoundId: ids.secondRoundId, currentStructureNodeId: "node-01",
+          currentOrderIndex: 0, lastPresentedSourceId: null, updatedAt: "2026-11-14T00:00:09.000Z",
+        },
+        unitProgress: [
+          { readingRoundId: ids.secondRoundId, structureNodeId: "node-01", status: "not_presented", firstPresentedSourceId: null, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:09.000Z" },
+        ],
+      });
+    });
+    try {
+      await repository.transaction(ids.datasetA, async (tx) => {
+        await tx.createReadingRoundPlan({
+          round: {
+            id: ids.thirdRoundId, threadId: ids.threadId, roundNumber: 3,
+            status: "active", startReason: "reread", startedAt: "2026-11-14T00:00:10.000Z",
+          },
+          state: {
+            readingRoundId: ids.thirdRoundId, currentStructureNodeId: "node-01",
+            currentOrderIndex: 0, lastPresentedSourceId: null, updatedAt: "2026-11-14T00:00:10.000Z",
+          },
+          unitProgress: [
+            { readingRoundId: ids.thirdRoundId, structureNodeId: "node-01", status: "not_presented", firstPresentedSourceId: null, lastActivityMessageId: null, completedAt: null, updatedAt: "2026-11-14T00:00:10.000Z" },
+          ],
+        });
+      });
+    } catch {
+      thirdActiveRejected = true;
+    }
+
+    const round = await repository.getReadingRound(ids.datasetA, ids.roundId);
+    const state = await repository.getReadingRoundState(ids.datasetA, ids.roundId);
+    const units = await repository.listReadingUnitProgress(ids.datasetA, ids.roundId);
+    const sources = await repository.listPresentedSources(ids.datasetA, ids.threadId);
+    const secondRound = await repository.getReadingRound(ids.datasetA, ids.secondRoundId);
+    await repository.close();
+    return { round, secondRound, state, units, sources, illegalSkipRejected, thirdActiveRejected };
+  }, {
+    datasetA, revision, threadId,
+    roundId: "11111111-1111-4111-8111-111111111111",
+    secondRoundId: "22222222-2222-4222-8222-222222222222",
+    thirdRoundId: "77777777-7777-4777-8777-777777777777",
+    sourceOne: "33333333-3333-4333-8333-333333333333",
+    sourceTwo: "44444444-4444-4444-8444-444444444444",
+    temporarySource: "55555555-5555-4555-8555-555555555555",
+  });
+
+  expect(result.illegalSkipRejected).toBe(true);
+  expect(result.thirdActiveRejected).toBe(true);
+  expect(result.round.status).toBe("completed");
+  expect(result.secondRound.status).toBe("active");
+  expect(result.secondRound.startReason).toBe("reread");
+  expect(result.state.currentStructureNodeId).toBe("node-02");
+  expect(result.state.lastPresentedSourceId).toBe(result.sources.find((source) => source.structureNodeId === "node-02").id);
+  expect(result.units.map((unit) => unit.status).sort()).toEqual(["discussed", "skipped"]);
+  expect(result.sources).toHaveLength(3);
+  expect(result.sources.filter((source) => source.presentationType === "temporary")).toHaveLength(1);
 });

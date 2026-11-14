@@ -231,11 +231,13 @@ test("cross-batch planner derives immutable version numbers and typed correction
     viewpoint: "user" as const, sourceMessageIds: ["older-user"], sourceReferences: [],
     createdAt: "2026-11-13T00:00:00.000Z",
   };
+  const acceptedCandidateId = accepted.accepted[0].candidate.id;
   const planner: MemoryEvolutionPlanner = {
     async propose({ candidates, existingLatestVersions }) {
       assert.equal(candidates.length, 1);
+      assert.equal(candidates[0].id, acceptedCandidateId);
       assert.equal(existingLatestVersions[0].id, "version-1");
-      return [{ candidateId: candidate.id, changeKind: "correction", targetMemoryId: "memory-1", rationale: "用户明确修正旧观点" }];
+      return [{ candidateId: acceptedCandidateId, changeKind: "correction", targetMemoryId: "memory-1", rationale: "用户明确修正旧观点" }];
     },
   };
   const planned = await planAcceptedMemoryCandidates({
@@ -258,7 +260,7 @@ test("cross-batch planner rejects unknown targets and incomplete proposals", asy
   };
   const planner: MemoryEvolutionPlanner = {
     async propose() {
-      return [{ candidateId: candidate.id, changeKind: "conflict", targetMemoryId: "missing-memory", rationale: "冲突" }];
+      return [{ candidateId: accepted.accepted[0].candidate.id, changeKind: "conflict", targetMemoryId: "missing-memory", rationale: "冲突" }];
     },
   };
   await assert.rejects(planAcceptedMemoryCandidates({
@@ -273,8 +275,9 @@ test("plan-and-persist is idempotent for candidate IDs already stored as version
   const accepted = await runMemoryExtraction({
     async extractStructured() { return { candidates: [candidate] }; },
   }, { context, messages, policy, modelVersion: "mock-v1" });
+  const acceptedCandidateId = accepted.accepted[0].candidate.id;
   const previous = {
-    id: candidate.id, memoryId: "memory-existing", version: 1, previousVersionId: null,
+    id: acceptedCandidateId, memoryId: "memory-existing", version: 1, previousVersionId: null,
     changeKind: "new" as const, title: candidate.title, content: candidate.content,
     viewpoint: "user" as const, sourceMessageIds: ["user-1"], sourceReferences: [],
     createdAt: "2026-11-14T00:00:00.000Z",
@@ -291,7 +294,7 @@ test("plan-and-persist is idempotent for candidate IDs already stored as version
     },
   }, "dataset-1", accepted);
   assert.deepEqual(result.persistedIds, []);
-  assert.deepEqual(result.alreadyPersistedCandidateIds, [candidate.id]);
+  assert.deepEqual(result.alreadyPersistedCandidateIds, [acceptedCandidateId]);
   assert.equal(writes, 0);
 });
 
@@ -317,7 +320,7 @@ test("persists exact duplicate as an explicit duplicate_of relation to the exist
     },
   };
   const plan = {
-    candidateId: candidate.id, memoryId: "memory-duplicate", version: 1,
+    candidateId: accepted.accepted[0].candidate.id, memoryId: "memory-duplicate", version: 1,
     previousVersionId: null, changeKind: "new" as const, relationTargetVersion: target,
     relation: { id: "relation-duplicate", toVersionId: target.id, relationType: "duplicate_of" as const, createdAt: "2026-11-14T00:00:00.000Z" },
   };

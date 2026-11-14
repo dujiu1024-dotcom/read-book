@@ -615,7 +615,7 @@ components:
         author: { type: string }
         description: { type: [string, 'null'] }
         cover_url: { type: [string, 'null'], format: uri }
-        status: { type: string, const: published }
+        status: { type: string, const: published, description: 书目发布状态；公开接口只返回 published }
     BookRevisionSummary:
       type: object
       required: [id, book_id, language, status]
@@ -626,7 +626,7 @@ components:
         translator: { type: [string, 'null'] }
         publisher: { type: [string, 'null'] }
         language: { type: string }
-        status: { type: string, const: published }
+        status: { type: string, const: published, description: 发布状态；公开接口只返回 published 版本，processing_status 等内部加工状态不对外暴露 }
     BookRevision:
       allOf:
         - $ref: '#/components/schemas/BookRevisionSummary'
@@ -651,13 +651,25 @@ components:
         source_locator: { type: object, additionalProperties: true }
     NodeContent:
       type: object
-      required: [book_revision_id, structure_node_id, content, source_locator, content_hash]
+      required: [book_revision_id, structure_node_id, content, source_locator, content_hash, chunks]
       properties:
         book_revision_id: { type: string, format: uuid }
         structure_node_id: { type: string, format: uuid }
         content: { type: string }
         source_locator: { type: object, additionalProperties: true }
         content_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+        chunks:
+          type: array
+          description: 该结构节点下的原文切片；引用的最小可追溯单元。非叶节点可为空数组
+          items:
+            type: object
+            additionalProperties: false
+            required: [chunk_id, source_hash, source_locator, content_hash]
+            properties:
+              chunk_id: { type: string, format: uuid }
+              source_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+              source_locator: { type: object, additionalProperties: true }
+              content_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
     KnowledgeSearchRequest:
       type: object
       required: [query]
@@ -774,10 +786,12 @@ components:
               items:
                 type: object
                 additionalProperties: false
-                required: [book_revision_id, structure_node_id, locator, excerpt]
+                required: [book_revision_id, structure_node_id, chunk_id, source_hash, locator, excerpt]
                 properties:
                   book_revision_id: { type: string, format: uuid }
                   structure_node_id: { type: string, format: uuid }
+                  chunk_id: { type: string, format: uuid }
+                  source_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
                   locator: { type: string, minLength: 1, maxLength: 512 }
                   excerpt: { type: string, minLength: 1, maxLength: 2000 }
             usage:
@@ -826,13 +840,16 @@ components:
             type: { type: string, const: cancelled }
     BackupClientManifest:
       type: object
-      required: [format, formatVersion, datasetId, backupId, backupSequence, dirtySequence, parentBackupId, backupType, kind, schemaVersion, cipherSuite, keyVersion, ciphertextHash, ciphertextSize, plaintextBytes, partCount, chunkCount, chunks, keyEnvelope, createdAt]
+      required: [format, formatVersion, datasetId, backupId, deviceId, lineageId, forkId, backupSequence, dirtySequence, parentBackupId, backupType, kind, schemaVersion, cipherSuite, keyVersion, ciphertextHash, ciphertextSize, plaintextBytes, partCount, chunkCount, chunks, keyEnvelope, createdAt]
       properties:
         format: { type: string, const: read-book-encrypted-backup }
         formatVersion: { type: integer, minimum: 1 }
         datasetId: { type: string, format: uuid }
         backupId: { type: string, format: uuid }
-        backupSequence: { type: integer, minimum: 1 }
+        deviceId: { type: string, format: uuid, description: 安装实例标识 }
+        lineageId: { type: string, format: uuid, description: 跨恢复稳定的逻辑数据集血缘 }
+        forkId: { type: string, format: uuid, description: 恢复/分叉分支标识；跨设备恢复必须使用新值 }
+        backupSequence: { type: integer, minimum: 1, description: 每个 fork 内独立递增，不复用 dirtySequence }
         dirtySequence: { type: integer, minimum: 1 }
         parentBackupId: { type: [string, 'null'], format: uuid }
         backupType: { type: string, enum: [full, incremental] }
@@ -869,10 +886,13 @@ components:
         createdAt: { type: string, format: date-time }
     BackupInitRequest:
       type: object
-      required: [dataset_id, backup_id, backup_sequence, backup_type, schema_version, cipher_suite, key_version, ciphertext_size, ciphertext_hash, part_count, client_manifest]
+      required: [dataset_id, backup_id, device_id, lineage_id, fork_id, backup_sequence, backup_type, schema_version, cipher_suite, key_version, ciphertext_size, ciphertext_hash, part_count, client_manifest]
       properties:
         dataset_id: { type: string, format: uuid }
         backup_id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        lineage_id: { type: string, format: uuid }
+        fork_id: { type: string, format: uuid }
         backup_sequence: { type: integer, minimum: 1 }
         parent_backup_id: { type: [string, 'null'], format: uuid }
         backup_type: { type: string, enum: [full, incremental] }
@@ -896,10 +916,13 @@ components:
           items: { type: integer, minimum: 0 }
     BackupRecord:
       type: object
-      required: [backup_id, dataset_id, backup_sequence, backup_type, schema_version, ciphertext_hash, ciphertext_size, created_at, status, client_manifest]
+      required: [backup_id, dataset_id, device_id, lineage_id, fork_id, backup_sequence, backup_type, schema_version, ciphertext_hash, ciphertext_size, created_at, status, client_manifest]
       properties:
         backup_id: { type: string, format: uuid }
         dataset_id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        lineage_id: { type: string, format: uuid }
+        fork_id: { type: string, format: uuid }
         backup_sequence: { type: integer }
         parent_backup_id: { type: [string, 'null'], format: uuid }
         backup_type: { type: string, enum: [full, incremental] }

@@ -72,11 +72,21 @@
 | language | TEXT | 是 | BCP 47 语言标签 |
 | source_hash | TEXT | 是 | 原始来源文件 SHA-256 |
 | processing_version | TEXT | 是 | 加工流水线版本 |
-| status | TEXT | 是 | draft / processing / quality_check / published / withdrawn |
-| published_at | TIMESTAMP | 否 | published 时必填 |
+| processing_status | TEXT | 是 | 加工尝试状态：not_started / processing / quality_check / accepted / rejected |
+| status | TEXT | 是 | 发布状态：draft / published / withdrawn |
+| published_at | TIMESTAMP | 否 | status=published 时必填 |
 | created_at | TIMESTAMP | 是 | 创建时间 |
 
-约束：FK book_id；索引 (book_id, status)、source_hash。版本发布后原文、结构、知识库和引用定位不可原位覆盖；内容变更创建新 BookRevision。
+约束：FK book_id；索引 (book_id, status)、(book_id, processing_status)、source_hash。两个字段表达不同生命周期，不得互相推导：processing_status 只描述本次加工尝试是否通过质量检查，status 只描述版本是否对读者发布。允许 processing_status=accepted 且 status=draft（已验收未发布），也允许 status=withdrawn 且 processing_status 保持 accepted（已发布后撤回，不重跑加工）。rejected 的加工尝试必须保留记录，重加工创建新 BookKnowledgeBase 批次，不得把 rejected 原位改成 accepted。processing_status 为内部字段，不进入面向读者的公开 API；管理员侧后续通过独立内部通道读取和操作，不得复用公开 `/v1/books` 契约。版本发布后原文、结构、知识库和引用定位不可原位覆盖；内容变更创建新 BookRevision。
+
+| 旧 status 值 | 迁移后 processing_status | 迁移后 status | 说明 |
+|---|---|---|---|
+| draft | not_started | draft | 尚未开始加工 |
+| processing | processing | draft | 加工中，未发布 |
+| quality_check | quality_check | draft | 质量检查中，未发布 |
+| published | accepted | published | 已验收并发布 |
+| withdrawn | accepted | withdrawn | 曾发布后撤回；加工结果保持已验收 |
+| （无对应旧值） | rejected | draft | 加工或质量检查失败，新建 BookKnowledgeBase 批次重试 |
 
 ### 2.3 BookKnowledgeBase
 
@@ -142,9 +152,9 @@ item_type：key_point / concept / author_claim / argument / evidence / case / cr
 
 ### 3.5 Message
 
-字段：id UUID PK；thread_id UUID NOT NULL FK；sequence INTEGER NOT NULL；role TEXT NOT NULL（user / assistant / system）；content TEXT NOT NULL；content_format_version INTEGER NOT NULL；status TEXT NOT NULL（pending / complete / failed / cancelled）；model TEXT NULL；token_usage JSON NULL；created_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL；idempotency_key TEXT NULL；supersedes_message_id UUID NULL FK → Message.id。
+字段：id UUID PK；thread_id UUID NOT NULL FK；sequence INTEGER NOT NULL；role TEXT NOT NULL（user / assistant）；content TEXT NOT NULL；content_format_version INTEGER NOT NULL；status TEXT NOT NULL（saved / generating / completed / failed / cancelled）；model TEXT NULL；token_usage JSON NULL；created_at TIMESTAMP NOT NULL；completed_at TIMESTAMP NULL；idempotency_key TEXT NULL；supersedes_message_id UUID NULL FK → Message.id。
 
-约束：(thread_id, sequence) UNIQUE；(thread_id, idempotency_key) UNIQUE（idempotency_key 非 NULL 时）；role 只能是 user/assistant/system；用户消息先本地持久化再发起生成。重新生成创建新的 Assistant Message，并通过 supersedes_message_id 关联旧结果，不覆盖历史消息。失败的用户消息仍保留。
+约束：(thread_id, sequence) UNIQUE；(thread_id, idempotency_key) UNIQUE（idempotency_key 非 NULL 时）；role 只能是 user/assistant，与 SQLite CHECK 一致；用户消息以 saved 先本地持久化再发起生成，Assistant 消息以 generating 创建并只能由 generating 转为 completed/failed/cancelled。重新生成创建新的 Assistant Message，并通过 supersedes_message_id 关联旧结果，不覆盖历史消息。失败的用户消息仍保留。
 
 ### 3.6 PresentedSource
 
@@ -174,7 +184,7 @@ item_type：key_point / concept / author_claim / argument / evidence / case / cr
 
 字段：id UUID PK；message_id UUID NOT NULL FK；book_revision_id UUID NOT NULL；chunk_id UUID NOT NULL；structure_node_id UUID NOT NULL；source_locator JSON NOT NULL；quote TEXT NOT NULL；source_hash TEXT NOT NULL；created_at TIMESTAMP NOT NULL。
 
-约束：引用必须绑定具体 BookRevision、chunk、结构节点和来源哈希；原文版本变更不得静默迁移旧引用。
+约束：引用必须绑定具体 BookRevision、chunk、结构节点和来源哈希；原文版本变更不得静默迁移旧引用。生成结果的 citations 必须返回 chunk_id 与 source_hash，NodeContent 必须返回节点下的 chunks，不得只给到 node 级。SQLite v6 起 citation 表以 NOT NULL 约束 chunk_id / source_hash；v6 之前的旧行无法在不伪造数据的前提下补齐 chunk 维度，迁移时整体保留在只读表 citation_legacy_v5。该表仅用于审计留档，不进入新 citation 查询、备份快照、恢复写入或任何面向用户的引用展示；不做伪造回填，也不以空字符串或默认值降级通过 NOT NULL 约束。
 
 ### 3.10 Note
 
@@ -190,21 +200,46 @@ source_role：author / user / assistant。每条 NoteSource 至少绑定一个�
 
 ### 3.12 Memory
 
-字段：id UUID PK；local_dataset_id UUID NOT NULL FK；book_revision_id UUID NOT NULL；memory_type TEXT NOT NULL；content TEXT NOT NULL；status TEXT NOT NULL（active / superseded / retracted / deleted）；reading_round_id UUID NULL FK → ReadingRound.id；created_at TIMESTAMP NOT NULL；updated_at TIMESTAMP NOT NULL。
+字段：id UUID PK；local_dataset_id UUID NOT NULL FK；thread_id UUID NOT NULL FK → Thread.id；current_version_id UUID NOT NULL FK → MemoryVersion.id；created_at TIMESTAMP NOT NULL；updated_at TIMESTAMP NOT NULL。
 
-约束：认知演变不得原位覆盖旧 Memory；通过 MemoryRelation 建立关系。删除后不应被检索为当前有效认知，但审计与来源链按用户删除规则处理。
+约束：Memory 只是不可变版本链的聚合根，不保存可变的 content、status、memory_type 等正文语义字段；所属 BookRevision 通过 Thread.book_revision_id 唯一确定。current_version_id 指向当前有效版本；写入首个版本的事务提交后必须非 NULL。认知演变一律追加新的 MemoryVersion，不得原位覆盖历史版本。
 
-### 3.13 MemorySource
+### 3.13 MemoryVersion
 
-字段：id UUID PK；memory_id UUID NOT NULL FK；source_message_id UUID NULL FK → Message.id；citation_id UUID NULL FK → Citation.id；structure_node_id UUID NULL FK → BookStructureNode.id；source_role TEXT NOT NULL；created_at TIMESTAMP NOT NULL。
+字段：id UUID PK；local_dataset_id UUID NOT NULL FK；memory_id UUID NOT NULL FK → Memory.id；version INTEGER NOT NULL；previous_version_id UUID NULL FK → MemoryVersion.id；change_kind TEXT NOT NULL（new / supplement / correction / conflict / rejection / extension）；title TEXT NOT NULL；viewpoint TEXT NOT NULL（user / author / assistant_inference）；content TEXT NOT NULL；confidence REAL NOT NULL（0–1）；ambiguity REAL NOT NULL（0–1）；evaluation_score REAL NOT NULL（0–1）；source_message_ids JSON NOT NULL；source_references JSON NOT NULL；created_at TIMESTAMP NOT NULL。
 
-约束：每条 Memory 至少有一个来源；来源角色区分 author / user / assistant。
+约束：(memory_id, version) UNIQUE。版本不可变、追加写：首个版本必须 version=1、previous_version_id=NULL、change_kind=new；后续版本必须 version=前驱 version+1、previous_version_id=前驱 id，且 change_kind≠new。source_message_ids 必须非空、去重，且全部属于 Memory 所属 Thread；source_references 必须绑定当前 BookRevision 的结构节点和 locator，不允许引用其他版本或未提供的节点。confidence / ambiguity / evaluation_score 范围 0–1。MemoryVersion 是认知正文的唯一权威，不再单独维护 MemorySource 表。
 
 ### 3.14 MemoryRelation
 
-字段：id UUID PK；from_memory_id UUID NOT NULL FK → Memory.id；to_memory_id UUID NOT NULL FK → Memory.id；relation_type TEXT NOT NULL（supplements / corrects / conflicts / overturns / extends）；created_at TIMESTAMP NOT NULL。
+字段：id UUID PK；local_dataset_id UUID NOT NULL FK；from_version_id UUID NOT NULL FK → MemoryVersion.id；to_version_id UUID NOT NULL FK → MemoryVersion.id；relation_type TEXT NOT NULL（supports / contradicts / extends / supersedes / retracts / duplicate_of）；source_message_ids JSON NOT NULL；source_references JSON NOT NULL；created_at TIMESTAMP NOT NULL。
 
-约束：(from_memory_id, to_memory_id, relation_type) UNIQUE；from 与 to 不得相同；关系方向表示新认知指向被关联的既有认知，具体展示顺序由应用层解释。
+约束：(from_version_id, to_version_id, relation_type) UNIQUE；from 与 to 不得相同；方向表示新版本指向被关联的既有版本。关系是版本链之外的跨认知补充，不得替代 previous_version_id 版本链；所有关系必须携带来源证据。change_kind 与 relation_type 的必选/可选对应关系见 [用户认知记忆](user-memory.md#六类认知变化)。
+
+### 3.14.1 记忆模型迁移映射
+
+本表用于把早期文档中的「可变 Memory + from/to 关系」与「user-memory.md 内联演进」映射到上述唯一模型；实现以 SQLite 现有 `memory` / `memory_version` / `memory_relation` 表为准。
+
+| 旧字段或旧模型 | 新位置 | 迁移规则 |
+|---|---|---|
+| Memory.content | MemoryVersion.content（version=1） | 首个版本 change_kind=new，previous_version_id=NULL |
+| Memory.status=active | Memory.current_version_id | 无独立状态列；当前版本即有效认知 |
+| Memory.status=superseded | MemoryVersion 版本链 | 存在后继版本即视为被取代，不写状态列 |
+| Memory.status=retracted | 新 MemoryVersion（change_kind=rejection） | 追加撤回版本，并通过 MemoryRelation.retracts 指向被撤回版本 |
+| Memory.status=deleted | 本地删除策略 | 不进入版本枚举；删除与备份表达见第 6 节 |
+| Memory.memory_type | MemoryVersion.viewpoint + title | author_view→author；user_view→user；AI 组织/解释→assistant_inference |
+| Memory.source_message_ids / citation_ids | MemoryVersion.source_message_ids / source_references | 内联到版本，不再拆 MemorySource 表 |
+| Memory.reading_round_id | Thread + Message 来源链 | 阅读轮次由来源消息与会话上下文推导，不单独存储 |
+| previous_memory_id | previous_version_id | 指向同一条 Memory 的前一个版本 |
+| evolution_relation=supplement | change_kind=supplement + supports | 同链追加版本，可选跨认知关系 |
+| evolution_relation=revise | change_kind=correction + supersedes | 同链追加版本，可选跨认知关系 |
+| evolution_relation=conflict | change_kind=conflict + contradicts | 同链追加版本，必须携带 contradicts |
+| evolution_relation=overturn | change_kind=rejection + retracts | 同链追加版本，必须携带 retracts |
+| evolution_relation=extend | change_kind=extension + extends | 同链追加版本，必须携带 extends |
+| MemoryRelation.from_memory_id / to_memory_id | from_version_id / to_version_id | 端点从认知 ID 提升为版本 ID |
+| relation_type=supplements / corrects / conflicts / overturns / extends | supports / supersedes / contradicts / retracts / extends | 枚举按实现归一化；新增 duplicate_of 用于去重关系 |
+
+SQLite schema 迁移次序：v1 建立 `memory` + `memory_version` 基线；v2 建立 `memory_relation`（from_version_id / to_version_id，含 6 类关系 CHECK）；v4 为 `memory_version` 增加 title / viewpoint / confidence / ambiguity / evaluation_score；v5 增加 `memory_candidate`。旧库 `user_version=0` 按 v1 基线处理后再逐级迁移，不得跳级写入。
 
 ### 3.15 GenerationReceipt
 
@@ -214,9 +249,9 @@ source_role：author / user / assistant。每条 NoteSource 至少绑定一个�
 
 ### 3.16 BackupJournal
 
-字段：id UUID PK；local_dataset_id UUID NOT NULL FK；dirty_sequence INTEGER NOT NULL；entity_type TEXT NOT NULL；entity_id UUID NOT NULL；operation TEXT NOT NULL（insert / update / soft_delete）；changed_at TIMESTAMP NOT NULL。
+字段：local_dataset_id UUID NOT NULL FK；dirty_sequence INTEGER NOT NULL；entity_type TEXT NOT NULL（thread / message / readingRound / readingPosition / readingRoundState / readingUnitProgress / presentedSource / citation / note / memory / memoryVersion / memoryRelation / memoryCandidate / generationDelivery）；entity_id TEXT NOT NULL；operation TEXT NOT NULL（upsert / delete）；changed_at TIMESTAMP NOT NULL。
 
-约束：(local_dataset_id, dirty_sequence) UNIQUE；sequence 严格递增。Journal 是本地增量备份依据，不代表跨设备同步日志。
+主键与唯一约束：(local_dataset_id, dirty_sequence, entity_type, entity_id)。同一事务的多条变更共享同一 sequence；同一实体在同一事务内多次变更只保留最终操作。Journal 是增量备份的唯一变更依据：备份必须只从 journal 取 dirty_sequence > 上次已备份序号的条目，且 journal 必须完整覆盖快照差异，缺失条目时备份失败关闭，不得退回全量差分或静默生成看似成功的增量。备份确认后删除 sequence ≤ last_acked_sequence 的条目。Journal 不代表跨设备同步日志。
 
 ### 3.17 MigrationLog
 
@@ -234,9 +269,9 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 
 ### 4.2 BackupManifest
 
-字段：backup_id UUID PK；dataset_id UUID NOT NULL；schema_version INTEGER NOT NULL；cipher_suite TEXT NOT NULL；key_version INTEGER NOT NULL；ciphertext_hash TEXT NOT NULL；ciphertext_size INTEGER NOT NULL；created_at TIMESTAMP NOT NULL；backup_sequence INTEGER NOT NULL；parent_backup_id UUID NULL；backup_type TEXT NOT NULL（full / incremental）；status TEXT NOT NULL（uploading / committed / rejected / inaccessible）。
+字段：backup_id UUID PK；dataset_id UUID NOT NULL；device_id UUID NOT NULL；lineage_id UUID NOT NULL；fork_id UUID NOT NULL；schema_version INTEGER NOT NULL；cipher_suite TEXT NOT NULL；key_version INTEGER NOT NULL；ciphertext_hash TEXT NOT NULL；ciphertext_size INTEGER NOT NULL；created_at TIMESTAMP NOT NULL；backup_sequence INTEGER NOT NULL；parent_backup_id UUID NULL；backup_type TEXT NOT NULL（full / incremental）；status TEXT NOT NULL（uploading / committed / rejected / inaccessible）。
 
-约束：(dataset_id, backup_sequence) UNIQUE；incremental 必须有已提交 parent_backup_id；full 不得依赖父备份恢复。Manifest 仅允许最小必要元数据，不含私人正文、标题或可推断敏感内容的字段。
+约束：(lineage_id, fork_id, backup_sequence) UNIQUE；incremental 必须有已提交 parent_backup_id；full 不得依赖父备份恢复。backup_sequence 在每个 fork 内独立从 1 递增，不与本地 dirty_sequence 复用，也不因跨设备恢复而重置冲突。device_id 标识安装实例；lineage_id 在恢复前后保持稳定，表示同一逻辑数据集；fork_id 标识恢复/分叉分支，跨设备恢复必须生成新 fork_id，不得沿用源 fork。恢复链只要求 lineage_id 一致，允许 device_id/fork_id 在链中变化。Manifest 仅允许最小必要元数据，不含私人正文、标题或可推断敏感内容的字段。
 
 ### 4.3 BackupUploadSession
 
@@ -272,7 +307,7 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 
 | 实体 | 约束/索引 |
 |---|---|
-| BookRevision | (book_id, status)，source_hash |
+| BookRevision | (book_id, status)，(book_id, processing_status)，source_hash |
 | BookStructureNode | (book_revision_id, parent_id, order_index) UNIQUE |
 | BookChunk | (book_revision_id, chunk_index) UNIQUE；(structure_node_id) |
 | ShelfEntry | (local_dataset_id, book_revision_id) UNIQUE；(local_dataset_id, shelf_status) |
@@ -281,9 +316,11 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 | ReadingRound | (thread_id, round_number) UNIQUE；活动轮次部分唯一索引 |
 | PresentedSource | (reading_round_id, presentation_type, presented_at) |
 | Citation | (message_id)，(book_revision_id, chunk_id) |
-| Note / Memory | (local_dataset_id, status, updated_at) |
-| MemoryRelation | (from_memory_id, to_memory_id, relation_type) UNIQUE |
-| BackupManifest | (dataset_id, backup_sequence) UNIQUE；(dataset_id, status, created_at) |
+| Note | (local_dataset_id, status, updated_at) |
+| Memory | (local_dataset_id, thread_id, updated_at)；(thread_id, current_version_id) |
+| MemoryVersion | (memory_id, version) UNIQUE；(memory_id, previous_version_id) |
+| MemoryRelation | (from_version_id, to_version_id, relation_type) UNIQUE |
+| BackupManifest | (lineage_id, fork_id, backup_sequence) UNIQUE；(dataset_id, status, created_at) |
 | BackupUploadSession | (dataset_id, idempotency_key) UNIQUE |
 | ExternalIdentity | (provider, provider_subject) UNIQUE |
 | AccountDataSetBinding | (local_dataset_id) WHERE binding_status='active' UNIQUE；(account_id, local_dataset_id) |
@@ -295,7 +332,7 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 ## 6. 删除、归档与级联规则
 
 1. 移出书架：ShelfEntry 软删除；不得级联删除 Thread、Message、ReadingRound、Citation、Note、Memory。
-2. 删除 Note / Memory：状态改为 deleted；不得静默覆盖或重写来源历史。
+2. 删除 Note：状态改为 deleted；删除 Memory：按本地删除策略处理，不以新增版本或状态列伪造删除，不得静默覆盖或重写来源历史。
 3. 归档 Thread：仅改变 Thread.status；不删除消息和阅读轮次。
 4. 账号注销：删除/停用 Account 身份和 ExternalIdentity；不得删除本地数据或 BackupManifest 密文。
 5. 清除个人数据：本地删除当前设备数据；服务端写入不可逆 cleared 墓碑、失效化关联索引和授权；原始密文、密钥材料及其他原始数据保持不动且不再参与业务使用。
@@ -309,7 +346,7 @@ ExternalIdentity：id UUID PK；account_id UUID NOT NULL FK；provider TEXT NOT 
 - ReadingUnitProgress.status 与 ReadingRoundState.current_structure_node_id 的协同规则
 - Message.status 与 GenerationJob.status 的竞态处理
 - Note.status / edit_origin
-- Memory.status 与 MemoryRelation 的演变方向
+- MemoryVersion.change_kind 与 MemoryRelation.relation_type 的演变方向
 - BackupManifest.status / DataSetLifecycle.status
 
 ## 8. 设计决策与未决事项

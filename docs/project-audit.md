@@ -1,5 +1,7 @@
 # 项目记录审查与下一步清单
 
+> **历史审查记录，已失效，不再更新。** 部分结论形成于本地优先方案与 PC Web 路线确认之前；现行结论以 README、产品原则、D-030/D-049 之后的决策、[核心状态机](state-machines.md)、[数据字典](data-dictionary.md) 和 [OpenAPI 契约](api-contract.yaml) 为准。
+>
 > 审查日期：2026-11-13  
 > 范围：README、产品原则、技术架构、决策日志、开源项目初评、ReadAny + TextSage 深度复用评估。  
 > 注意：本文部分审查记录形成于本地优先方案确认之前。凡与 2026-11-13 新决策冲突的内容均为历史记录，以 README、product-principles、architecture、core-data-model 和 D-030 之后的决策为准。尚未进入业务开发。

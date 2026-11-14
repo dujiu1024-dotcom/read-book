@@ -10,7 +10,7 @@
 ### Book
 - id、title、author、description、cover_asset_id、category_id、status、created_at、updated_at。
 ### BookRevision
-- id、book_id、edition、translator、publisher、language、source_hash、processing_version、status、published_at。
+- id、book_id、edition、translator、publisher、language、source_hash、processing_version、processing_status（加工尝试）、status（发布状态）、published_at。
 - 每个版本拥有独立原文、结构、知识库和引用定位。
 ### BookKnowledgeBase
 - id、book_revision_id、processing_version、status、quality_report_id、created_at、published_at。
@@ -53,16 +53,18 @@
 ### Note
 - id、local_dataset_id、book_revision_id、type、title、content、source_type、version、source_message_ids、citation_ids、reading_round_id。
 - 用户可编辑或删除；AI 不得静默覆盖用户编辑。
-### Memory
-- id、local_dataset_id、book_revision_id、memory_type、content、status、source_message_ids、citation_ids、reading_round_id、evolution_relation、previous_memory_id。
-- 认知演变建立新记录并关联旧记录，不覆盖旧观点。
+### Memory / MemoryVersion
+- Memory：id、local_dataset_id、thread_id、current_version_id、created_at、updated_at。只是不可变版本链的聚合根，不保存可变正文。
+- MemoryVersion：id、memory_id、version、previous_version_id、change_kind（new/supplement/correction/conflict/rejection/extension）、title、viewpoint（user/author/assistant_inference）、content、confidence、ambiguity、evaluation_score、source_message_ids、source_references、created_at。
+- 认知演变只追加版本并关联前驱，不覆盖旧观点；跨认知关系由 MemoryRelation 单独记录。
 
 ## 4. 服务端账号与备份实体
 ### Account / ExternalIdentity
 - Account 代表身份和认证关系，不是用户私人数据容器。
 - ExternalIdentity：id、account_id、provider、provider_subject、created_at、status；(provider, provider_subject) 唯一。
 ### BackupManifest
-- backup_id、local_dataset_id、schema_version、cipher_suite、key_version、ciphertext_hash、ciphertext_size、created_at、backup_sequence、parent_backup_id、backup_type（full/incremental）。
+- backup_id、local_dataset_id、device_id、lineage_id、fork_id、schema_version、cipher_suite、key_version、ciphertext_hash、ciphertext_size、created_at、backup_sequence、parent_backup_id、backup_type（full/incremental）。
+- backup_sequence 在每个 fork 内独立递增，不复用 dirty_sequence；跨设备恢复生成新 fork_id，lineage_id 保持稳定。
 - 本地记录 last_backup_at、last_backup_id、last_backup_status、pending_change_marker；应用每次打开时检查是否存在待备份变更。
 - 只保存密文和最小必要元数据，不保存可读私人内容。
 ### BackupAuthorization
@@ -126,9 +128,9 @@
 - AccountDataSetBinding：account_id、local_dataset_id、binding_status、bound_at、last_selected_at。绑定必须显式，不因登录态变化自动切换数据集。
 - GenerationReceipt：generation_id、thread_id、local_user_message_id、status、created_at、completed_at、result_message_id、last_event_sequence。仅用于本地恢复生成状态。
 - NoteSource：note_id、source_message_id、citation_id、source_role、source_locator。
-- MemorySource：memory_id、source_message_id、citation_id、source_role、source_locator。
-- MemoryRelation：from_memory_id、to_memory_id、relation_type（补充/修正/冲突/推翻/延伸）、created_at。
-- BackupJournal：local_dataset_id、dirty_sequence、entity_type、entity_id、operation、changed_at。用于同一数据集增量备份，不用于跨设备同步。
+- MemoryVersion：memory_id、version、previous_version_id、change_kind、title、viewpoint、content、confidence、ambiguity、evaluation_score、source_message_ids、source_references。来源内联在版本上，不单独拆 MemorySource 表。
+- MemoryRelation：from_version_id、to_version_id、relation_type（supports/contradicts/extends/supersedes/retracts/duplicate_of）、source_message_ids、source_references、created_at。
+- BackupJournal：local_dataset_id、dirty_sequence、entity_type、entity_id、operation（upsert/delete）、changed_at。用于同一数据集增量备份，不用于跨设备同步。增量备份只读取 journal，且 journal 必须覆盖快照全部变更，否则失败关闭。
 - MigrationLog：from_schema_version、to_schema_version、started_at、completed_at、status、snapshot_ref。
 
 ### 8.2 关键约束
@@ -137,9 +139,10 @@
 3. GenerationJob 在服务端是短暂计算任务；GenerationReceipt 在本地保存任务与正式 Message 的关联。
 4. 服务端生成结果必须可按 generation_id 查询，客户端最终将结果写入本地。
 5. dirty_sequence 单调递增；只有服务端确认备份提交后才能推进 last_acked_sequence。
-6. 增量备份必须绑定 parent_backup_id；父链不完整时不得继续增量恢复。
-7. 清除数据集墓碑优先于普通备份索引；并发上传完成请求不得复活已清除数据集。
-8. 本地数据库 schema_version 与加密备份包 schema_version 独立管理。
+6. 增量备份必须绑定 parent_backup_id，且 payload 只能由 BackupJournal 生成；父链不完整或 journal 未覆盖全部变更时不得继续增量恢复。
+7. backup_sequence 在每个 fork 内独立递增，不复用 dirty_sequence；跨设备恢复生成新 fork_id，避免与源 fork 的 (lineage_id, fork_id, backup_sequence) 唯一约束冲突。
+8. 清除数据集墓碑优先于普通备份索引；并发上传完成请求不得复活已清除数据集。
+9. 本地数据库 schema_version 与加密备份包 schema_version 独立管理。
 
 ### 8.3 权益凭证补充
 ShelfEntry.entitlement_proof 不能只作为客户端自报字段。必须定义服务端签发的签名凭证，至少绑定 account、book_revision_id、entitlement_id、issued_at、signature_version 和权益状态。离线时校验签名和缓存权限；在线获取新内容时服务端再次校验。永久权益不得因商城下架失效，新版本仍需单独加入。

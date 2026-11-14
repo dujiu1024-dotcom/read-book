@@ -6,9 +6,15 @@ import {
   appendMemoryVersion,
   assertUniqueThreadPerRevision,
   createUserMessage,
+  createReadingRoundPlan,
+  completeReadingRound,
+  nextMainlineUnit,
+  nextReadingRoundOffer,
   openNonMainlineView,
+  requestMainlineAdvance,
   returnToMainline,
   transitionAssistantMessage,
+  transitionReadingUnit,
   validateMemoryEvolution,
   validateMemoryExtractionResult,
   validateMemoryRelation,
@@ -271,4 +277,90 @@ test("memory relations require distinct endpoints and original source provenance
     memoryVersion("new", 1), memoryVersion("conflict"),
     { ...relation, sourceMessageIds: ["another-user-message"] },
   ), /provenance must overlap/);
+});
+
+const mainlineUnits = [
+  { structureNodeId: "node-01", orderIndex: 0 },
+  { structureNodeId: "node-02", orderIndex: 1 },
+];
+
+function readingPlan() {
+  return createReadingRoundPlan({
+    roundId: "round-01",
+    threadId: "thread-01",
+    roundNumber: 1,
+    startReason: "first_read",
+    startedAt: "2026-11-14T00:00:00.000Z",
+    mainlineUnits,
+  });
+}
+
+function unit(plan = readingPlan(), nodeId = "node-01") {
+  return plan.unitProgress.find((item) => item.structureNodeId === nodeId)!;
+}
+
+test("SM-001 to SM-004 follow the six-state mainline without silent skipping", () => {
+  const plan = readingPlan();
+  assert.deepEqual(plan.unitProgress.map((item) => item.status), ["not_presented", "not_presented"]);
+  assert.equal(plan.state.currentStructureNodeId, "node-01");
+
+  const presented = transitionReadingUnit(unit(plan), {
+    type: "present_source", sourceId: "source-01", at: "2026-11-14T00:00:01.000Z",
+  });
+  assert.equal(presented.progress.status, "awaiting_user");
+  assert.deepEqual(presented.events, ["mainline.source_presented", "mainline.awaiting_user"]);
+  assert.equal(presented.progress.firstPresentedSourceId, "source-01");
+
+  assert.deepEqual(
+    requestMainlineAdvance(presented.progress, "2026-11-14T00:00:02.000Z"),
+    { action: "ask_skip_confirmation" },
+  );
+
+  const skipped = transitionReadingUnit(presented.progress, {
+    type: "confirm_skip", at: "2026-11-14T00:00:03.000Z",
+  });
+  assert.equal(skipped.progress.status, "skipped");
+  assert.equal(skipped.progress.completedAt, "2026-11-14T00:00:03.000Z");
+  assert.equal(nextMainlineUnit(mainlineUnits, "node-01")?.structureNodeId, "node-02");
+
+  const secondPresented = transitionReadingUnit(unit(plan, "node-02"), {
+    type: "present_source", sourceId: "source-02", at: "2026-11-14T00:00:04.000Z",
+  }).progress;
+  const discussion = transitionReadingUnit(secondPresented, {
+    type: "start_discussion", messageId: "message-01", at: "2026-11-14T00:00:05.000Z",
+  });
+  assert.equal(discussion.progress.status, "discussion_active");
+  const advance = requestMainlineAdvance(discussion.progress, "2026-11-14T00:00:06.000Z");
+  assert.equal(advance.action, "advance");
+  assert.equal(advance.action === "advance" ? advance.completedUnit.status : null, "discussed");
+  assert.equal(nextMainlineUnit(mainlineUnits, "node-02"), null);
+});
+
+test("SM-007 and SM-008 complete only when every unit is terminal; next round is only offered", () => {
+  const plan = readingPlan();
+  const activeRound = plan.round;
+  assert.throws(() => completeReadingRound(activeRound, plan.unitProgress, "2026-11-14T00:00:06.000Z"), DomainRuleError);
+  const allTerminal = plan.unitProgress.map((item) => ({
+    ...item, status: "skipped" as const, completedAt: "2026-11-14T00:00:06.000Z",
+  }));
+  const completed = completeReadingRound(activeRound, allTerminal, "2026-11-14T00:00:07.000Z");
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(nextReadingRoundOffer(completed), {
+    question: "本轮阅读已完成，是否开始下一轮？",
+    nextRoundNumber: 2,
+  });
+  assert.equal(nextReadingRoundOffer(activeRound), null);
+});
+
+test("mainline plan rejects duplicate nodes and invalid round numbers", () => {
+  assert.throws(() => createReadingRoundPlan({
+    roundId: "round-01", threadId: "thread-01", roundNumber: 1,
+    startReason: "first_read", startedAt: "2026-11-14T00:00:00.000Z",
+    mainlineUnits: [...mainlineUnits, { structureNodeId: "node-01", orderIndex: 2 }],
+  }), /unique/);
+  assert.throws(() => createReadingRoundPlan({
+    roundId: "round-01", threadId: "thread-01", roundNumber: 0,
+    startReason: "first_read", startedAt: "2026-11-14T00:00:00.000Z",
+    mainlineUnits,
+  }), /positive integer/);
 });

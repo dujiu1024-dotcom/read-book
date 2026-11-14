@@ -2,6 +2,10 @@ name: Repository quality gates
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
 
 permissions:
   contents: read
@@ -34,3 +38,21 @@ jobs:
         run: npm test
       - name: Lint OpenAPI 3.1 contract
         run: npx --yes @redocly/cli@1.27.1 lint --config .redocly.yaml docs/api-contract.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned contract validator dependencies
+        run: python -m pip install openapi-spec-validator==0.7.2 PyYAML==6.0.2
+      - name: Validate state machine, data dictionary and OpenAPI contract
+        run: python tools/contract_validation/validate_state_machine_contract.py
+      - name: Run encrypted backup PoC tests
+        working-directory: poc/encrypted-backup
+        run: node --test
+      - name: Verify dependency lockfiles exist
+        run: |
+          for package in packages/*/package.json poc/*/package.json prototypes/pc-reading/package.json; do
+            directory="$(dirname "$package")"
+            if node -e "const p=require('./$package'); process.exit(Object.keys(p.dependencies||{}).length ? 0 : 1)"; then
+              test -f "$directory/package-lock.json" || { echo "Missing lockfile: $directory/package-lock.json"; exit 1; }
+            fi
+          done

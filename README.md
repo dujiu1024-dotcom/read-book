@@ -12,14 +12,14 @@
 
 **MVP 0.1 的主要产品代码链路已进入 main，当前重点转为收尾缺口、配置边界和最终整合。**
 
-- #1：IndexedDB 与 SQLite WASM + OPFS 对照 PoC、ADR-0001 和自动化证据已进入仓库；仍缺依赖 lockfile 的可重复安装基线。
-- #2：端侧加密备份 PoC 已实现全量/增量、分块加密、续传和清除墓碑；仍需生产威胁模型、密码学评审、生产服务端及密钥轮换策略。
+- #1：IndexedDB 与 SQLite WASM + OPFS 对照 PoC、ADR-0001 和自动化证据已进入仓库；依赖 lockfile 已补齐，CI 使用 lockfile 安装。
+- #2：端侧加密备份 PoC 已实现 journal 驱动的全量/增量、独立 backup_sequence、设备/分叉标识、分块加密、续传和清除墓碑；仍需生产威胁模型、密码学评审、生产服务端及密钥轮换策略。
 - #3：EPUB/PDF/TXT 导入 PoC 已实现；真实授权出版物、复杂版式、OCR 和定位人工抽样仍未完成。
 - #4：Mock Generation Server 的幂等、SSE、断线恢复和取消验证已完成；正式 HTTP/SSE Transport 已在产品运行时实现，但生产服务端仍需部署。
 - #5：PR #52 已合并书籍包 v1 Schema、目录/ZIP 校验器 CLI 和处理契约校验；不代表云端加工服务已实现。
 - #6：PR #59 已合并通用 JSONL 指标运行器；另有离线 Agent/RAG 评测 PoC（12 个合成 chunk、30 道六类问题、gold-blind mock 检索、人工标注规范和评测报告）正在合并；真实中文书籍、授权记录、人工标注和模型实测仍未完成。
-- #7：状态机、数据字典和 OpenAPI 已有一致性修订；Message.pending、账号 ID 类型、恢复挑战证明等语义仍需产品/安全决策。
-- #9：PR #53 已合并 Markdown、JSON/JSONL、OpenAPI 和书籍包契约质量门禁；当前仅手动触发，最终验收后再启用 PR/main 自动触发。
+- #7：状态机、数据字典和 OpenAPI 已有一致性修订；Message 状态已统一为实现枚举，账号 ID 类型、恢复挑战证明等语义仍需产品/安全决策（见审计文档 OPEN-02 至 OPEN-06）。
+- #9：PR #53 已合并 Markdown、JSON/JSONL、OpenAPI 和书籍包契约质量门禁；已挂 PR/main 自动触发，并覆盖状态机契约、加密备份与原型全部单元测试。
 - MVP 主链路：PR #40、#43–#45、#48–#49、#51、#58–#63 已合并，覆盖本地消息与认知持久化、PC 阅读运行时、标准书籍包导出、Agent 会话控制、备份上传/恢复、评测工具和服务端引用校验。
 - PR #54 已修复生成服务地址配置；PR #55 已合并失败任务重试，复用原始用户消息并保留历史 Assistant 尝试。
 - 真实书籍 API、Generation API、模型 Provider、备份服务地址和认证模块均由部署环境注入；仓库未包含生产凭据或生产服务实现。

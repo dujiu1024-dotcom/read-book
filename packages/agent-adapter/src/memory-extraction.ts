@@ -354,7 +354,7 @@ export async function planAcceptedMemoryCandidates(
     return { plans, alreadyPersistedCandidateIds };
   }
   if (toPropose.length > 0 && !planner) {
-    throw new MemoryExtractionError("A semantic MemoryEvolutionPlanner is required when existing memories may need evolution.");
+    throw new MemoryExtractionError("A semantic evolution planner is required when existing memories may need evolution.");
   }
   if (toPropose.length > 0) {
     const proposals = await planner!.propose({

@@ -28,9 +28,64 @@ export interface GenerationAccepted {
   expires_at: string;
 }
 
+export interface RelevantMemoryItem {
+  memory_id: string;
+  version_id: string;
+  title: string;
+  viewpoint: "user" | "author" | "assistant_inference";
+  content: string;
+  change_kind: string;
+}
+
+/**
+ * Attach a small, already-selected memory slice to a generation request.
+ * The full memory archive is never sent; recall must supply at most 5 effective versions.
+ */
+export function withRelevantMemory(
+  request: GenerationRequest,
+  memories: readonly RelevantMemoryItem[],
+): GenerationRequest {
+  if (memories.length > 5) {
+    throw new GenerationProtocolError("relevant_memory must contain at most 5 items.");
+  }
+  const seen = new Set<string>();
+  const relevant_memory = memories.map((memory) => {
+    requiredString(memory.memory_id, "relevant_memory.memory_id");
+    requiredString(memory.version_id, "relevant_memory.version_id");
+    requiredString(memory.title, "relevant_memory.title");
+    requiredString(memory.content, "relevant_memory.content");
+    if (!["user", "author", "assistant_inference"].includes(memory.viewpoint)) {
+      throw new GenerationProtocolError("relevant_memory.viewpoint is invalid.");
+    }
+    if (memory.content.length > 4000) {
+      throw new GenerationProtocolError("relevant_memory.content exceeds 4000 characters.");
+    }
+    if (seen.has(memory.version_id)) {
+      throw new GenerationProtocolError("relevant_memory contains a duplicate version.");
+    }
+    seen.add(memory.version_id);
+    return {
+      memory_id: memory.memory_id,
+      version_id: memory.version_id,
+      title: memory.title,
+      viewpoint: memory.viewpoint,
+      content: memory.content,
+      change_kind: memory.change_kind,
+    };
+  });
+  const next: GenerationRequest = {
+    ...request,
+    context: { ...request.context, relevant_memory },
+  };
+  validateGenerationRequest(next);
+  return next;
+}
+
 export interface GenerationCitation {
   book_revision_id: string;
   structure_node_id: string;
+  chunk_id: string;
+  source_hash: string;
   locator: string;
   excerpt: string;
 }
@@ -119,6 +174,14 @@ function requiredUuid(value: unknown, field: string): string {
   const text = requiredString(value, field);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) {
     throw new GenerationProtocolError(`"${field}" must be a UUID.`);
+  }
+  return text;
+}
+
+function requiredSha256(value: unknown, field: string): string {
+  const text = requiredString(value, field);
+  if (!/^[a-fA-F0-9]{64}$/.test(text)) {
+    throw new GenerationProtocolError(`"${field}" must be a SHA-256 hex digest.`);
   }
   return text;
 }
@@ -241,6 +304,8 @@ export function validateGenerationSnapshot(value: unknown): GenerationSnapshot {
         return {
           book_revision_id: requiredUuid(citation.book_revision_id, "result.citations[" + index + "].book_revision_id"),
           structure_node_id: requiredUuid(citation.structure_node_id, "result.citations[" + index + "].structure_node_id"),
+          chunk_id: requiredUuid(citation.chunk_id, "result.citations[" + index + "].chunk_id"),
+          source_hash: requiredSha256(citation.source_hash, "result.citations[" + index + "].source_hash"),
           locator: boundedString(citation.locator, "result.citations[" + index + "].locator", 1, 512),
           excerpt,
         };
@@ -319,9 +384,11 @@ export function verifiedGenerationCitationRecords(
   messageId: string;
   bookRevisionId: string;
   structureNodeId: string;
+  chunkId: string;
   locator: string;
   excerpt: string;
   excerptHash: string | null;
+  sourceHash: string;
   createdAt: string;
 }> {
   const sources = generationSourceMap(request);
@@ -337,9 +404,11 @@ export function verifiedGenerationCitationRecords(
       messageId,
       bookRevisionId: reference.bookRevisionId,
       structureNodeId: reference.structureNodeId,
+      chunkId: citation.chunk_id,
       locator: reference.locator,
       excerpt: citation.excerpt,
       excerptHash: null,
+      sourceHash: citation.source_hash,
       createdAt,
     }];
   });
@@ -476,7 +545,7 @@ export interface GenerationTurnRepository {
     appendUserMessage(message: { id: string; threadId: string; content: string; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
     appendAssistantMessage(message: { id: string; threadId: string; content: string; status: "generating"; createdAt: string; sourceReferences: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> ; idempotencyKey: string }): Promise<unknown>;
     transitionAssistantMessage(messageId: string, status: "completed" | "failed" | "cancelled", content?: string, sourceReferences?: Array<{ bookRevisionId: string; structureNodeId: string; locator: string }>): Promise<unknown>;
-    saveCitation(citation: { id: string; threadId: string; messageId: string; bookRevisionId: string; structureNodeId: string; locator: string; excerpt: string; excerptHash: string | null; createdAt: string }): Promise<unknown>;
+    saveCitation(citation: { id: string; threadId: string; messageId: string; bookRevisionId: string; structureNodeId: string; chunkId: string; locator: string; excerpt: string; excerptHash: string | null; sourceHash: string; createdAt: string }): Promise<unknown>;
     saveGenerationDelivery(delivery: { clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }): Promise<unknown>;
   }) => Promise<T>): Promise<T>;
   getGenerationDelivery(clientGenerationId: string): Promise<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string } | null>;

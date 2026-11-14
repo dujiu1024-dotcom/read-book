@@ -5,6 +5,7 @@ import {
   advanceGenerationEventCursor,
   authoritativeFinalResult,
   createGenerationClient,
+  createGenerationTurnController,
   persistUserMessageBeforeGeneration,
   runGenerationTurn,
   validateGenerationAccepted,
@@ -12,6 +13,7 @@ import {
   validateGenerationSnapshot,
   verifiedGenerationSourceReferences,
   verifiedGenerationCitationRecords,
+  withRelevantMemory,
   type GenerationRequest,
 } from "../src/index.ts";
 
@@ -32,6 +34,52 @@ const accepted = {
   status: "queued",
   expires_at: "2026-11-14T00:00:00.000Z",
 };
+
+const citationChunkId = "99999999-9999-4999-8999-999999999999";
+const citationSourceHash = "a".repeat(64);
+
+test("withRelevantMemory fills GenerationRequest.context.relevant_memory with a bounded effective slice", () => {
+  const assembled = withRelevantMemory(request, [{
+    memory_id: "memory-01",
+    version_id: "version-02",
+    title: "决策的关键变量",
+    viewpoint: "user",
+    content: "决策质量取决于是否识别出关键变量。",
+    change_kind: "correction",
+  }]);
+  assert.deepEqual(assembled.context.relevant_memory, [{
+    memory_id: "memory-01",
+    version_id: "version-02",
+    title: "决策的关键变量",
+    viewpoint: "user",
+    content: "决策质量取决于是否识别出关键变量。",
+    change_kind: "correction",
+  }]);
+  assert.deepEqual(request.context.relevant_memory, []);
+  assert.throws(() => withRelevantMemory(request, Array.from({ length: 6 }, (_, index) => ({
+    memory_id: `memory-${index}`,
+    version_id: `version-${index}`,
+    title: "超量记忆",
+    viewpoint: "user" as const,
+    content: "不应发送完整记忆档案。",
+    change_kind: "new",
+  }))), /at most 5 items/);
+  assert.throws(() => withRelevantMemory(request, [{
+    memory_id: "memory-01",
+    version_id: "version-02",
+    title: "重复版本",
+    viewpoint: "user",
+    content: "重复版本必须被拒绝。",
+    change_kind: "new",
+  }, {
+    memory_id: "memory-01",
+    version_id: "version-02",
+    title: "重复版本",
+    viewpoint: "user",
+    content: "重复版本必须被拒绝。",
+    change_kind: "new",
+  }]), /duplicate version/);
+});
 
 function fakeTransport(events: unknown[] = []) {
   const calls: string[] = [];
@@ -387,6 +435,8 @@ test("validates structured citations and rejects malformed citation identity", (
       citations: [{
         book_revision_id: request.book_revision_id,
         structure_node_id: request.context.current_source.structure_node_id,
+        chunk_id: citationChunkId,
+        source_hash: citationSourceHash,
         locator: "epubcfi(/6/4!/4/2)",
         excerpt: "原文片段",
       }],
@@ -411,10 +461,10 @@ test("only citations from the current BookRevision and current source node becom
   const result = {
     content: "回答",
     citations: [
-      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
-      { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "other-node", excerpt: "当前原文片段" },
-      { book_revision_id: "66666666-6666-4666-8666-666666666666", structure_node_id: request.context.current_source.structure_node_id, locator: "other-book", excerpt: "当前原文片段" },
-      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, chunk_id: citationChunkId, source_hash: citationSourceHash, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
+      { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", chunk_id: citationChunkId, source_hash: citationSourceHash, locator: "other-node", excerpt: "当前原文片段" },
+      { book_revision_id: "66666666-6666-4666-8666-666666666666", structure_node_id: request.context.current_source.structure_node_id, chunk_id: citationChunkId, source_hash: citationSourceHash, locator: "other-book", excerpt: "当前原文片段" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, chunk_id: citationChunkId, source_hash: citationSourceHash, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
     ],
   };
   assert.deepEqual(verifiedGenerationSourceReferences(result, request), [{
@@ -437,8 +487,8 @@ test("generation turn persists only service-verified citations for its current s
         result: {
           content: "带原文来源的最终回答",
           citations: [
-            { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
-            { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", locator: "locator-other-node" },
+            { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, chunk_id: citationChunkId, source_hash: citationSourceHash, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
+            { book_revision_id: request.book_revision_id, structure_node_id: "55555555-5555-4555-8555-555555555555", chunk_id: citationChunkId, source_hash: citationSourceHash, locator: "locator-other-node", excerpt: "未提供节点的片段" },
           ],
         },
       };
@@ -485,18 +535,24 @@ test("accepts citations from multiple explicitly supplied source nodes and rejec
       {
         book_revision_id: request.book_revision_id,
         structure_node_id: request.context.current_source.structure_node_id,
+        chunk_id: citationChunkId,
+        source_hash: citationSourceHash,
         locator: request.context.current_source.locator,
         excerpt: "当前原文片段",
       },
       {
         book_revision_id: request.book_revision_id,
         structure_node_id: secondNode,
+        chunk_id: "88888888-8888-4888-8888-888888888888",
+        source_hash: citationSourceHash,
         locator: "chapter-2:unit-4",
         excerpt: "另一个章节中的可核验原文",
       },
       {
         book_revision_id: request.book_revision_id,
         structure_node_id: "66666666-6666-4666-8666-666666666666",
+        chunk_id: "77777777-7777-4777-8777-777777777777",
+        source_hash: citationSourceHash,
         locator: "not-in-request",
         excerpt: "伪造来源",
       },
@@ -544,8 +600,8 @@ test("citation records require a quoted excerpt found in the current source text
   const result = {
     content: "回答",
     citations: [
-      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
-      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, locator: "fabricated", excerpt: "不存在的引用片段" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, chunk_id: citationChunkId, source_hash: citationSourceHash, locator: "epubcfi(/6/4!/4/2)", excerpt: "当前原文片段" },
+      { book_revision_id: request.book_revision_id, structure_node_id: request.context.current_source.structure_node_id, chunk_id: citationChunkId, source_hash: citationSourceHash, locator: "fabricated", excerpt: "不存在的引用片段" },
     ],
   };
   const records = verifiedGenerationCitationRecords(result, request, "assistant-message-citation", request.thread_id, "2026-11-14T00:00:00.000Z");

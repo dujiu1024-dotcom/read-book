@@ -116,7 +116,7 @@
 - PresentedSource / ReadingRound / ReadingRoundState
 - Citation
 - Note / NoteSource
-- Memory / MemoryRelation / MemorySource
+- Memory / MemoryVersion / MemoryRelation
 - BackupState / BackupJournal / BackupManifestCache
 - AppSetting / MigrationLog
 

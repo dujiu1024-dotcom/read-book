@@ -6,6 +6,10 @@ import {
   type PersistedMessage,
   type LocalDataSet,
   type ReadingRoundRecord,
+  type ReadingRoundPlanRecord,
+  type ReadingRoundStateRecord,
+  type ReadingUnitProgressRecord,
+  type PresentedSourceRecord,
   type ReadingPositionRecord,
   type CitationRecord,
   type NoteRecord,
@@ -40,7 +44,7 @@ export function mapWorkerError(payload: { message: string; code?: string }): Err
 
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
-  readonly schemaVersion = 5;
+  readonly schemaVersion = 8;
   private worker: Worker;
   private nextId = 0;
   private pending = new Map<number, Pending>();
@@ -109,7 +113,13 @@ export class SqliteOpfsRepository implements LocalRepository {
         transitionAssistantMessage: (messageId: string, status: AssistantMessageStatus, content?: string, sourceReferences?: SourceReference[]) =>
           call("transitionAssistantMessage", { messageId, status, content, sourceReferences }),
         createReadingRound: (round: ReadingRoundRecord) => call("createReadingRound", { round }),
+        createReadingRoundPlan: (plan: ReadingRoundPlanRecord) => call("createReadingRoundPlan", { plan }),
         saveReadingPosition: (position: ReadingPositionRecord) => call("saveReadingPosition", { position }),
+        saveReadingRoundState: (state: ReadingRoundStateRecord) => call("saveReadingRoundState", { state }),
+        saveReadingUnitProgress: (progress: ReadingUnitProgressRecord) => call("saveReadingUnitProgress", { progress }),
+        savePresentedSource: (source: PresentedSourceRecord) => call("savePresentedSource", { source }),
+        updateReadingRoundStatus: (roundId: string, status: "completed" | "abandoned", completedAt: string | null) =>
+          call("updateReadingRoundStatus", { roundId, status, completedAt }),
         saveCitation: (citation: CitationRecord) => call("saveCitation", { citation }),
         saveNote: (note: NoteRecord) => call("saveNote", { note }),
         appendMemoryVersion: (version: MemoryVersion) =>
@@ -171,6 +181,13 @@ export class SqliteOpfsRepository implements LocalRepository {
     await this.ensureReady();
     return this.request("getMemoryVersions", { datasetId, memoryId });
   }
+  async recallMemoryVersions(
+    datasetId: string,
+    query: { threadId: string; structureNodeId?: string; topic?: string; limit?: number },
+  ): Promise<MemoryVersion[]> {
+    await this.ensureReady();
+    return this.request("recallMemoryVersions", { datasetId, ...query });
+  }
   async getMemoryRelations(datasetId: string, versionId: string): Promise<MemoryRelation[]> {
     await this.ensureReady();
     return this.request("getMemoryRelations", { datasetId, versionId });
@@ -178,6 +195,22 @@ export class SqliteOpfsRepository implements LocalRepository {
   async getMemoryCandidates(datasetId: string, threadId: string): Promise<MemoryCandidateRecord[]> {
     await this.ensureReady();
     return this.request("getMemoryCandidates", { datasetId, threadId });
+  }
+  async getReadingRound(datasetId: string, roundId: string): Promise<ReadingRoundRecord | null> {
+    await this.ensureReady();
+    return this.request("getReadingRound", { datasetId, roundId });
+  }
+  async getReadingRoundState(datasetId: string, roundId: string): Promise<ReadingRoundStateRecord | null> {
+    await this.ensureReady();
+    return this.request("getReadingRoundState", { datasetId, roundId });
+  }
+  async listReadingUnitProgress(datasetId: string, roundId: string): Promise<ReadingUnitProgressRecord[]> {
+    await this.ensureReady();
+    return this.request("listReadingUnitProgress", { datasetId, roundId });
+  }
+  async listPresentedSources(datasetId: string, threadId: string): Promise<PresentedSourceRecord[]> {
+    await this.ensureReady();
+    return this.request("listPresentedSources", { datasetId, threadId });
   }
   async close(): Promise<void> {
     if (this.closed) return;

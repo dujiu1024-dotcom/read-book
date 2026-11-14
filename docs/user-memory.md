@@ -21,17 +21,22 @@
 
 ## 3. 记忆数据结构
 
-每条认知记忆至少包括：
-- memory_id、memory_type、content
-- source_message_ids
-- book_revision_id、structure_node_id、citation_ids
-- reading_round_id、created_at、updated_at
-- status：current / historical / unresolved
-- evolution_relation：supplement / revise / conflict / overturn / extend
-- previous_memory_id
-- extraction_model_version、review_confidence
+唯一模型是 Memory + MemoryVersion 不可变版本链。不再维护可变的记忆正文，也不通过内联字段重复表达演进关系。
 
-无法确认来源的推断不得作为用户明确观点保存。
+Memory（聚合根）：
+- memory_id、local_dataset_id、thread_id
+- current_version_id、created_at、updated_at
+- BookRevision 由 Thread 唯一确定，不在 Memory 上重复存储
+
+MemoryVersion（不可变版本）：
+- version_id、memory_id、version、previous_version_id
+- change_kind：new / supplement / correction / conflict / rejection / extension
+- title、viewpoint（user / author / assistant_inference）、content
+- confidence、ambiguity、evaluation_score
+- source_message_ids、source_references（含 book_revision_id、structure_node_id、citation 与 locator）
+- created_at、extraction_model_version
+
+约束：首个版本必须是 version=1、change_kind=new、previous_version_id=null；后续版本只能追加到当前版本，旧版本不得覆盖。无法确认来源的推断不得作为用户明确观点保存。
 
 ## 4. 认知演变
 
@@ -50,10 +55,12 @@
 
 ## 5. 记忆召回
 
-- 当前讨论：优先召回本书、当前章节和当前主题相关的少量记忆。
-- 本书复习：可按阅读轮次查看认知演变。
+- 召回范围以 Thread 为必选边界；可再按当前章节（structure_node_id）或主题（title/content 关键词）缩小。
+- 只召回每个 Memory 的 current_version_id，且排除当前版本 change_kind=rejection 的已撤回认知；历史版本不进入默认召回。
+- 默认最多 5 条，存储层硬上限 8 条；组装 GenerationRequest 时最多发送 5 条，不把完整认知档案默认发送给模型。
+- 本书复习可按阅读轮次查看认知演变。
 - 跨书关联：未来可按用户主动提出的主题检索其他书籍记忆，且必须区分不同作者观点与用户观点。
-- 不把完整认知档案默认发送给模型；只传输当前任务所需的最小片段。
+- 召回片段只包含 memory_id、version_id、title、viewpoint、content、change_kind，并保留来源消息/原文定位以便追溯。
 
 ## 6. 笔记呈现
 

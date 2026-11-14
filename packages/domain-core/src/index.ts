@@ -70,6 +70,76 @@ export interface ReadingPosition {
   currentUnitDiscussed: boolean;
 }
 
+export type ReadingUnitStatus =
+  | "not_presented"
+  | "presented"
+  | "awaiting_user"
+  | "discussion_active"
+  | "discussed"
+  | "skipped";
+export type ReadingRoundStatus = "active" | "completed" | "abandoned";
+export type ReadingRoundStartReason = "first_read" | "reread";
+export type PresentationType = "mainline" | "review" | "temporary";
+
+export interface MainlineUnit {
+  structureNodeId: StructureNodeId;
+  orderIndex: number;
+}
+
+export interface ReadingRoundLifecycle {
+  id: ReadingRoundId;
+  threadId: ThreadId;
+  roundNumber: number;
+  status: ReadingRoundStatus;
+  startReason: ReadingRoundStartReason;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface ReadingRoundState {
+  readingRoundId: ReadingRoundId;
+  /** Only the mainline cursor; temporary and review views never move it. */
+  currentStructureNodeId: StructureNodeId | null;
+  currentOrderIndex: number;
+  lastPresentedSourceId: string | null;
+  updatedAt: string;
+}
+
+export interface ReadingUnitProgress {
+  readingRoundId: ReadingRoundId;
+  structureNodeId: StructureNodeId;
+  status: ReadingUnitStatus;
+  firstPresentedSourceId: string | null;
+  lastActivityMessageId: MessageId | null;
+  completedAt: string | null;
+  updatedAt: string;
+}
+
+export interface PresentedSource {
+  id: string;
+  threadId: ThreadId;
+  bookRevisionId: BookRevisionId;
+  structureNodeId: StructureNodeId;
+  chunkId: string | null;
+  presentationType: PresentationType;
+  readingRoundId: ReadingRoundId | null;
+  presentedAt: string;
+  sourceLocator: Record<string, unknown>;
+}
+
+export interface ReadingRoundPlan {
+  round: ReadingRoundLifecycle;
+  state: ReadingRoundState;
+  unitProgress: ReadingUnitProgress[];
+}
+
+export type MainlineUnitEvent =
+  | { type: "present_source"; sourceId: string; at: string }
+  | { type: "start_discussion"; messageId: MessageId; at: string }
+  | { type: "discuss"; messageId: MessageId; at: string }
+  | { type: "confirm_skip"; at: string };
+
+
 export interface MemoryVersion {
   id: MemoryVersionId;
   memoryId: MemoryId;
@@ -147,6 +217,183 @@ export function advanceMainline(
     currentUnitDiscussed: false,
   };
 }
+
+/**
+ * Create the authoritative mainline plan for a reading round.
+ * Every mainline unit starts at not_presented; only the first unit becomes current.
+ */
+export function createReadingRoundPlan(input: {
+  roundId: ReadingRoundId;
+  threadId: ThreadId;
+  roundNumber: number;
+  startReason: ReadingRoundStartReason;
+  startedAt: string;
+  mainlineUnits: readonly MainlineUnit[];
+}): ReadingRoundPlan {
+  if (!Number.isSafeInteger(input.roundNumber) || input.roundNumber < 1) {
+    throw new DomainRuleError("A reading round number must be a positive integer.");
+  }
+  if (!input.mainlineUnits.length) {
+    throw new DomainRuleError("A reading round requires at least one mainline unit.");
+  }
+  const seenIds = new Set<string>();
+  const seenOrder = new Set<number>();
+  for (const unit of input.mainlineUnits) {
+    if (!unit.structureNodeId.trim() || !Number.isSafeInteger(unit.orderIndex) || unit.orderIndex < 0) {
+      throw new DomainRuleError("Mainline units require a node ID and a non-negative order index.");
+    }
+    if (seenIds.has(unit.structureNodeId)) {
+      throw new DomainRuleError("Mainline units must be unique.");
+    }
+    if (seenOrder.has(unit.orderIndex)) {
+      throw new DomainRuleError("Mainline unit order indexes must be unique.");
+    }
+    seenIds.add(unit.structureNodeId);
+    seenOrder.add(unit.orderIndex);
+  }
+  const ordered = [...input.mainlineUnits].sort((left, right) => left.orderIndex - right.orderIndex);
+  const first = ordered[0];
+  return {
+    round: {
+      id: input.roundId,
+      threadId: input.threadId,
+      roundNumber: input.roundNumber,
+      status: "active",
+      startReason: input.startReason,
+      startedAt: input.startedAt,
+    },
+    state: {
+      readingRoundId: input.roundId,
+      currentStructureNodeId: first.structureNodeId,
+      currentOrderIndex: first.orderIndex,
+      lastPresentedSourceId: null,
+      updatedAt: input.startedAt,
+    },
+    unitProgress: ordered.map((unit) => ({
+      readingRoundId: input.roundId,
+      structureNodeId: unit.structureNodeId,
+      status: "not_presented" as const,
+      firstPresentedSourceId: null,
+      lastActivityMessageId: null,
+      completedAt: null,
+      updatedAt: input.startedAt,
+    })),
+  };
+}
+
+/**
+ * Apply one mainline event to a unit. Terminal states never move backwards.
+ * A source presentation records presented then awaiting_user in one transaction.
+ */
+export function transitionReadingUnit(
+  progress: ReadingUnitProgress,
+  event: MainlineUnitEvent,
+): { progress: ReadingUnitProgress; events: string[] } {
+  const base = { ...progress, updatedAt: event.at };
+  switch (event.type) {
+    case "present_source":
+      if (progress.status !== "not_presented") {
+        throw new DomainRuleError("Only a not_presented unit can present a mainline source.");
+      }
+      return {
+        progress: {
+          ...base,
+          status: "awaiting_user",
+          firstPresentedSourceId: progress.firstPresentedSourceId ?? event.sourceId,
+        },
+        events: ["mainline.source_presented", "mainline.awaiting_user"],
+      };
+    case "start_discussion":
+      if (progress.status !== "awaiting_user" && progress.status !== "discussion_active") {
+        throw new DomainRuleError("Discussion can only start after the unit is presented.");
+      }
+      return {
+        progress: { ...base, status: "discussion_active", lastActivityMessageId: event.messageId },
+        events: progress.status === "discussion_active"
+          ? ["mainline.discussion_continued"]
+          : ["mainline.discussion_started"],
+      };
+    case "discuss":
+      if (progress.status !== "discussion_active") {
+        throw new DomainRuleError("A unit needs substantive discussion before it can be marked discussed.");
+      }
+      return {
+        progress: { ...base, status: "discussed", lastActivityMessageId: event.messageId, completedAt: event.at },
+        events: ["mainline.discussed"],
+      };
+    case "confirm_skip":
+      if (progress.status !== "awaiting_user") {
+        throw new DomainRuleError("Only an awaiting_user unit can be skipped with explicit confirmation.");
+      }
+      return {
+        progress: { ...base, status: "skipped", completedAt: event.at },
+        events: ["mainline.skipped_confirmed"],
+      };
+    default:
+      throw new DomainRuleError("Unknown mainline unit event.");
+  }
+}
+
+export type MainlineAdvanceDecision =
+  | { action: "ask_skip_confirmation" }
+  | { action: "advance"; completedUnit: ReadingUnitProgress };
+
+/** Decide whether the current unit may advance; a bare continue never skips silently. */
+export function requestMainlineAdvance(
+  progress: ReadingUnitProgress,
+  at: string,
+): MainlineAdvanceDecision {
+  if (progress.status === "awaiting_user") return { action: "ask_skip_confirmation" };
+  if (progress.status === "discussion_active") {
+    return {
+      action: "advance",
+      completedUnit: { ...progress, status: "discussed", completedAt: at, updatedAt: at },
+    };
+  }
+  throw new DomainRuleError("The current unit is not ready to advance.");
+}
+
+/** Select the next mainline unit after the current one; null means the round's mainline is exhausted. */
+export function nextMainlineUnit(
+  orderedUnits: readonly MainlineUnit[],
+  currentStructureNodeId: StructureNodeId,
+): MainlineUnit | null {
+  const index = orderedUnits.findIndex((unit) => unit.structureNodeId === currentStructureNodeId);
+  if (index < 0) throw new DomainRuleError("Current node is not part of the mainline.");
+  return orderedUnits[index + 1] ?? null;
+}
+
+export function canCompleteReadingRound(units: readonly ReadingUnitProgress[]): boolean {
+  return units.length > 0 &&
+    units.every((unit) => unit.status === "discussed" || unit.status === "skipped");
+}
+
+/** Complete a round only when every mainline unit reached a terminal unit state. */
+export function completeReadingRound(
+  round: ReadingRoundLifecycle,
+  units: readonly ReadingUnitProgress[],
+  completedAt: string,
+): ReadingRoundLifecycle {
+  if (round.status !== "active") {
+    throw new DomainRuleError("Only an active reading round can be completed.");
+  }
+  if (!canCompleteReadingRound(units)) {
+    throw new DomainRuleError("Every mainline unit must be discussed or skipped before completion.");
+  }
+  return { ...round, status: "completed", completedAt };
+}
+
+/** Completion only offers a next round; it never creates one automatically. */
+export function nextReadingRoundOffer(
+  round: ReadingRoundLifecycle,
+): { question: string; nextRoundNumber: number } | null {
+  if (round.status !== "completed") return null;
+  return {
+    question: "本轮阅读已完成，是否开始下一轮？",
+    nextRoundNumber: round.roundNumber + 1,
+  };
+}
+
 
 /** Build a user-message draft. The repository must commit it before starting Agent generation. */
 export function createUserMessage(

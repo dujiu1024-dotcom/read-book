@@ -2,7 +2,7 @@
 
 > 版本：0.2.1-draft  
 > 状态：设计草案；产品语义边界已按已确认原则约束，讨论完成判定、消息持久化边界及恢复流程仍有待确认。  
-> 权威范围：定义阅读主线、阅读轮次、生成任务、消息、备份和数据集的状态及转换。字段定义见 [核心数据字典](data-dictionary.md)，API 定义见 [OpenAPI 契约](api-contract.yaml)。交叉审查记录见 [状态机与 API 契约一致性审查](state-machine-contract-audit.md)。
+> 权威范围：定义阅读主线、阅读轮次、生成任务、消息、备份和数据集的状态及转换。**本文是项目唯一的状态定义主文档**；数据字典、API 契约、验收报告和历史审查记录不得另行维护一套状态表，只能引用本文。字段定义见 [核心数据字典](data-dictionary.md)，API 定义见 [OpenAPI 契约](api-contract.yaml)。交叉审查记录见 [状态机与 API 契约一致性审查](state-machine-contract-audit.md)。
 
 ## 1. 状态机总原则
 
@@ -135,14 +135,16 @@ Thread 状态仅表达会话生命周期，不表达阅读进度。
 
 | 状态 | 含义 | 允许转换 |
 |---|---|---|
-| pending | 消息已创建但尚未完成持久化/生成 | complete / failed / cancelled |
-| complete | 消息正文完整并已持久化 | 终态 |
-| failed | 生成或持久化失败，保留失败记录 | 通过新消息/新生成尝试恢复，不覆盖原记录 |
-| cancelled | 生成已取消 | 通过新生成尝试恢复，不覆盖原记录 |
+| saved | 用户消息已完整写入本地事务；不代表任何生成状态 | 终态；生成结果不改写该消息 |
+| generating | Assistant 消息占位已创建，生成进行中 | completed / failed / cancelled |
+| completed | Assistant 完整结果已写入本地事务 | 终态；重新生成由新消息 supersedes 旧消息 |
+| failed | 生成或结果落库失败，保留失败记录 | 终态；通过新消息/新生成尝试恢复，不覆盖原记录 |
+| cancelled | 生成已取消 | 终态；通过新生成尝试恢复，不覆盖原记录 |
 
-- 用户 Message 必须先写入本地并标记 complete，再发起网络请求。
-- Assistant Message 只有在服务端最终结果完整返回且本地事务提交后才标记 complete。
-- 流式 delta 仅为 UI 临时状态，不创建正式 Message。
+- 用户 Message 必须先写入本地并标记 saved，再发起网络请求；saved 不表示生成成功或失败。
+- Assistant Message 以 generating 创建，只有在最终结果完整返回且本地事务提交后才可标记 completed。
+- 只有 generating 的 Assistant Message 可以转为 completed / failed / cancelled；终态不可回退，也不允许重新进入 generating。
+- 流式 delta 仅为 UI 临时状态，不创建正式 Message，也不写 Message.status。
 - 重新生成创建新的 Assistant Message，并用 supersedes_message_id 指向被替代的旧回复。
 - 消息 sequence 在同一 Thread 内单调递增；失败尝试也不能复用已分配的 sequence。
 
@@ -345,12 +347,12 @@ inaccessible 是访问状态，不代表密文已删除或已损坏；DataSetLif
 - 同一幂等键重试必须返回同一上传会话；已提交备份不可被重试覆盖。
 - 清除墓碑在会话完成和清单提交时再次检查；墓碑存在时拒绝提交且不得复活数据集。
 
-## 12. 消息与生成状态边界（待契约确认）
+## 12. 消息与生成状态边界
 
 - `GenerationJob` 是服务端短暂计算任务；`GenerationReceipt` 是本地恢复生成状态的记录；`Message` 是本地长期对话记录。三者不能共用一个状态字段。
 - 用户 Message 必须在发起网络生成前本地持久化成功；生成失败不删除用户 Message。
-- Assistant Message 只有完整结果写入本地事务后才可标记 `complete`。
-- 当前数据字典为 Message 定义了 `pending / complete / failed / cancelled`，但尚未明确 `pending` 是否表示本地持久化事务未完成，还是生成过程进行中。不得用 Message.pending 代替 GenerationReceipt.streaming；该字段语义须在契约评审中明确。
+- Assistant Message 只有完整结果写入本地事务后才可标记 `completed`。
+- Message 状态以实现为准：user 消息为 `saved`；assistant 消息为 `generating → completed / failed / cancelled`。`saved` 只表示用户消息已本地持久化，不代表生成进度；不得用 Message 状态代替 GenerationReceipt.streaming。
 - 流式 delta 仅为临时 UI 状态；不得作为正式 Message 或备份数据。
 - GenerationJob 的 `completed / failed / cancelled / expired` 是服务端终态；终态竞态由服务端原子提交决定。客户端以查询到的最终结果为准，不以 SSE 事件流作为最终权威。
 
@@ -416,7 +418,7 @@ inaccessible 是访问状态，不代表密文已删除或已损坏；DataSetLif
 1. 简短回应（如“确实”“不对”）是否可由 Agent 结合上下文判定为实质性讨论；建议允许上下文判断，但不得依赖字数阈值。
 2. 用户在主线已完成后要求重新深入讨论某个 skipped 单元，是否只作为 review，不改变已完成轮次状态；建议默认如此，除非用户主动开启新一轮。
 3. abandoned 轮次是否允许继续恢复；建议第一版先不提供恢复 abandoned 的入口，避免和二刷语义混淆。
-4. Message.pending 的持久化语义，以及本地 Message 状态与 GenerationReceipt 状态的映射。
+4. 本地 Message 状态与 GenerationReceipt 状态的展示映射（二者语义已固定，仅展示层映射待定）。
 5. 浏览器安装上下文是否需要独立 Device 标识；第一版不因此引入多设备同步或数据集自动合并。
 6. RecoveryChallenge 的失败次数、速率限制、挑战有效期和重放保护参数，由安全设计确定。
 7. AccountDataSetBinding.account_id 在数据字典中为 TEXT，而服务端 Account.id 为 UUID；需确认它存储 Account UUID 字符串还是平台 opaque subject，确认前不得假定二者可直接关联。

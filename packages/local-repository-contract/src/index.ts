@@ -5,8 +5,13 @@ import type {
   MemoryRelation,
   MemoryCandidate,
   Message,
+  PresentedSource,
   ReadingPosition,
   ReadingRound,
+  ReadingRoundLifecycle,
+  ReadingRoundPlan,
+  ReadingRoundState,
+  ReadingUnitProgress,
   SourceReference,
   Thread,
 } from "../../domain-core/src/index.ts";
@@ -87,6 +92,21 @@ export interface NewAssistantMessage {
 export interface ReadingRoundRecord extends ReadingRound {
   roundNumber: number;
   status: "active" | "completed" | "abandoned";
+  startReason?: "first_read" | "reread";
+}
+
+export interface ReadingRoundPlanRecord extends ReadingRoundPlan {}
+
+export interface ReadingRoundStateRecord extends ReadingRoundState {
+  datasetId: string;
+}
+
+export interface ReadingUnitProgressRecord extends ReadingUnitProgress {
+  datasetId: string;
+}
+
+export interface PresentedSourceRecord extends PresentedSource {
+  datasetId: string;
 }
 
 export interface ReadingPositionRecord {
@@ -104,9 +124,11 @@ export interface CitationRecord {
   messageId: string;
   bookRevisionId: string;
   structureNodeId: string;
+  chunkId: string;
   locator: string;
   excerpt: string;
   excerptHash: string | null;
+  sourceHash: string;
   createdAt: string;
 }
 
@@ -167,6 +189,9 @@ export interface RepositorySnapshot {
   messages: PersistedMessage[];
   readingRounds: ReadingRoundRecord[];
   readingPositions: ReadingPositionRecord[];
+  readingRoundStates: ReadingRoundStateRecord[];
+  readingUnitProgress: ReadingUnitProgressRecord[];
+  presentedSources: PresentedSourceRecord[];
   citations: CitationRecord[];
   notes: NoteRecord[];
   memories: MemoryRecord[];
@@ -197,7 +222,17 @@ export interface LocalRepositoryTransaction {
   ): Promise<AssistantMessage>;
 
   createReadingRound(round: ReadingRoundRecord): Promise<ReadingRoundRecord>;
+  /** Create the round, its mainline cursor and every unit progress row in one transaction. */
+  createReadingRoundPlan(plan: ReadingRoundPlanRecord): Promise<ReadingRoundPlanRecord>;
   saveReadingPosition(position: ReadingPositionRecord): Promise<void>;
+  saveReadingRoundState(state: ReadingRoundStateRecord): Promise<void>;
+  saveReadingUnitProgress(progress: ReadingUnitProgressRecord): Promise<void>;
+  savePresentedSource(source: PresentedSourceRecord): Promise<PresentedSourceRecord>;
+  updateReadingRoundStatus(
+    roundId: string,
+    status: "completed" | "abandoned",
+    completedAt: string | null,
+  ): Promise<void>;
 
   saveCitation(citation: CitationRecord): Promise<void>;
   saveNote(note: NoteRecord): Promise<void>;
@@ -236,8 +271,16 @@ export interface LocalRepository {
   getGenerationDelivery(datasetId: string, clientGenerationId: string): Promise<GenerationDeliveryRecord | null>;
   listPendingGenerationDeliveries(datasetId: string): Promise<GenerationDeliveryRecord[]>;
   getMemoryVersions(datasetId: string, memoryId: string): Promise<MemoryVersion[]>;
+  recallMemoryVersions(
+    datasetId: string,
+    query: { threadId: string; structureNodeId?: string; topic?: string; limit?: number },
+  ): Promise<MemoryVersion[]>;
   getMemoryRelations(datasetId: string, versionId: string): Promise<MemoryRelation[]>;
   getMemoryCandidates(datasetId: string, threadId: string): Promise<MemoryCandidateRecord[]>;
+  getReadingRound(datasetId: string, roundId: string): Promise<ReadingRoundRecord | null>;
+  getReadingRoundState(datasetId: string, roundId: string): Promise<ReadingRoundStateRecord | null>;
+  listReadingUnitProgress(datasetId: string, roundId: string): Promise<ReadingUnitProgressRecord[]>;
+  listPresentedSources(datasetId: string, threadId: string): Promise<PresentedSourceRecord[]>;
   close(): Promise<void>;
 }
 

@@ -38,7 +38,7 @@
 - ReadingUnitProgress：not_presented / presented / awaiting_user / discussion_active / discussed / skipped；与数据字典一致。
 - ReadingRound：active / completed / abandoned；completed 由所有主线单元终态决定。
 - Thread：active / archived；唯一约束为 LocalDataSet + BookRevision。
-- Message：pending / complete / failed / cancelled；其 pending 语义仍待产品/技术确认，未擅自解释。
+- Message：saved / generating / completed / failed / cancelled；与数据字典和 SQLite CHECK 一致。user 消息为 saved，assistant 消息由 generating 转 completed / failed / cancelled。
 - GenerationReceipt：submitted / streaming / completed / failed / cancelled / expired；与数据字典一致。
 - LocalDataSet：active / locally_locked / restore_pending；与数据字典一致。
 - Account：active / suspended / deleted；与数据字典一致。
@@ -62,16 +62,17 @@
 
 | 编号 | 未决项 | 原因/处理 |
 |---|---|---|
-| OPEN-01 | Message.pending 表示本地持久化未完成，还是生成过程进行中 | 不得与 GenerationReceipt.streaming 混用；需产品/技术共同确认 |
 | OPEN-02 | AccountDataSetBinding.account_id 为 TEXT，Account.id 为 UUID | 需确认本地保存 Account UUID 字符串还是平台 opaque subject；确认前不建立错误外键 |
 | OPEN-03 | Device 是否需要独立实体/标识 | 第一版不做多设备同步；浏览器安装上下文标识需安全评审 |
 | OPEN-04 | RecoveryChallenge proof 算法、恢复凭证标识哈希方式、失败次数与速率限制 | 由安全设计冻结，当前仅定义状态与数据最小化边界 |
 | OPEN-05 | abandoned ReadingRound 是否允许恢复 | 建议第一版不恢复，避免混淆二刷语义 |
 | OPEN-06 | 简短回应（如“确实”“不对”）是否视为实质讨论 | 允许 Agent 结合上下文判断，但不得以字数/理解评分判断 |
 
+已关闭：OPEN-01（2026-11-14）。Message 状态以实现为准，文档、状态机与 SQLite CHECK 统一为 saved / generating / completed / failed / cancelled；saved 只表示用户消息本地持久化完成，不再与 GenerationReceipt.streaming 混用。
+
 ## 5. 证据与后续验证边界
 
 - 本审查证明文档字段/枚举/状态语义经过静态核对和修订，不证明 SQLite 部分唯一索引、外键和事务语义已在目标运行环境验证。
 - RecoveryChallenge、备份墓碑、账号切换和并发竞态仍需安全评审及后续 PoC。
 - SM-001 至 SM-030 是可执行测试规格，不代表当前已有业务实现或自动化测试通过。
-- Issue #7 应在 OPEN-01 至 OPEN-04 的产品/安全边界确认、文档链接质量门禁通过后再验收；不得把文档修订当作正式业务开发授权。
+- Issue #7 应在 OPEN-02 至 OPEN-04 的产品/安全边界确认、文档链接质量门禁通过后再验收；不得把文档修订当作正式业务开发授权。

@@ -4,6 +4,7 @@ let sqlite3;
 let db;
 let activeDatasetId = null;
 let transactionDirty = false;
+let journalSequence = null;
 
 function execute(sql, bind = []) {
   const rows = [];
@@ -11,6 +12,16 @@ function execute(sql, bind = []) {
   return rows;
 }
 function first(sql, bind = []) { return execute(sql, bind)[0] ?? null; }
+function recordJournal(datasetId, entityType, entityId, operation, changedAt = new Date().toISOString()) {
+  if (journalSequence === null) {
+    const dataset = first("SELECT dirty_sequence FROM local_dataset WHERE id=?", [datasetId]);
+    if (!dataset) throw new Error("数据集不存在，无法记录备份 journal");
+    journalSequence = Number(dataset.dirty_sequence) + 1;
+  }
+  if (typeof entityId !== "string" || !entityId.trim()) throw new Error("备份 journal entity_id 非法");
+  execute("INSERT INTO backup_journal(dataset_id,sequence,entity_type,entity_id,operation,changed_at) VALUES(?,?,?,?,?,?) ON CONFLICT(dataset_id,sequence,entity_type,entity_id) DO UPDATE SET operation=excluded.operation,changed_at=excluded.changed_at",
+    [datasetId,journalSequence,entityType,entityId,operation,changedAt]);
+}
 function parseJson(value, fallback = []) {
   if (value == null) return fallback;
   try { return JSON.parse(value); } catch { throw new Error("数据库 JSON 字段损坏"); }
@@ -18,7 +29,7 @@ function parseJson(value, fallback = []) {
 function ensureDataset(datasetId) {
   if (typeof datasetId !== "string" || !datasetId.trim()) throw new Error("datasetId 非法");
   execute(
-    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,5,?,?,0,0,'active')",
+    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,8,?,?,0,0,'active')",
     [datasetId, new Date().toISOString(), new Date().toISOString()],
   );
   const dataset = first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
@@ -153,7 +164,7 @@ async function initialize() {
   // Existing installations have the v1 schema and no PRAGMA user_version marker.
   // Treat version 0 as the shipped v1 baseline, then migrate atomically to v2.
   const storedVersion = Number(first("PRAGMA user_version")?.user_version ?? 0);
-  if (storedVersion > 5) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
+  if (storedVersion > 8) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
   if (storedVersion < 2) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -237,6 +248,108 @@ async function initialize() {
       throw new Error("数据库 Schema v5 迁移失败，已回滚", { cause: error });
     }
   }
+  if (storedVersion < 6) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      db.exec({ sql: `
+        ALTER TABLE citation RENAME TO citation_legacy_v5;
+        CREATE TABLE citation (
+          id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          thread_id TEXT NOT NULL REFERENCES thread(id),
+          message_id TEXT NOT NULL REFERENCES message(id),
+          book_revision_id TEXT NOT NULL,
+          structure_node_id TEXT NOT NULL,
+          chunk_id TEXT NOT NULL,
+          locator TEXT NOT NULL,
+          excerpt TEXT NOT NULL,
+          excerpt_hash TEXT,
+          source_hash TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_citation_dataset_message ON citation(dataset_id,message_id);
+        UPDATE local_dataset SET schema_version=6;
+        PRAGMA user_version=6;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v6 迁移失败，已回滚", { cause: error });
+    }
+  }
+  if (storedVersion < 7) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      db.exec({ sql: `
+        ALTER TABLE reading_round ADD COLUMN start_reason TEXT NOT NULL DEFAULT 'first_read' CHECK(start_reason IN ('first_read','reread'));
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_round_active ON reading_round(thread_id) WHERE status='active';
+        CREATE TABLE IF NOT EXISTS presented_source (
+          id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          thread_id TEXT NOT NULL REFERENCES thread(id),
+          book_revision_id TEXT NOT NULL,
+          structure_node_id TEXT NOT NULL,
+          chunk_id TEXT,
+          presentation_type TEXT NOT NULL CHECK(presentation_type IN ('mainline','review','temporary')),
+          reading_round_id TEXT REFERENCES reading_round(id),
+          presented_at TEXT NOT NULL,
+          source_locator TEXT NOT NULL,
+          CHECK(presentation_type <> 'mainline' OR reading_round_id IS NOT NULL)
+        );
+        CREATE INDEX IF NOT EXISTS idx_presented_source_thread ON presented_source(dataset_id,thread_id,presented_at);
+        CREATE INDEX IF NOT EXISTS idx_presented_source_round ON presented_source(dataset_id,reading_round_id,presented_at);
+        CREATE TABLE IF NOT EXISTS reading_round_state (
+          reading_round_id TEXT PRIMARY KEY REFERENCES reading_round(id),
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          current_structure_node_id TEXT,
+          current_order_index INTEGER NOT NULL CHECK(current_order_index >= 0),
+          last_presented_source_id TEXT REFERENCES presented_source(id),
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS reading_unit_progress (
+          reading_round_id TEXT NOT NULL REFERENCES reading_round(id),
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          structure_node_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('not_presented','presented','awaiting_user','discussion_active','discussed','skipped')),
+          first_presented_source_id TEXT REFERENCES presented_source(id),
+          last_activity_message_id TEXT REFERENCES message(id),
+          completed_at TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(reading_round_id, structure_node_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_reading_unit_status ON reading_unit_progress(dataset_id,reading_round_id,status);
+        UPDATE local_dataset SET schema_version=7;
+        PRAGMA user_version=7;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v7 迁移失败，已回滚", { cause: error });
+    }
+  }
+  if (storedVersion < 8) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      db.exec({ sql: `
+        CREATE TABLE IF NOT EXISTS backup_journal (
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          sequence INTEGER NOT NULL,
+          entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          operation TEXT NOT NULL CHECK(operation IN ('upsert','delete')),
+          changed_at TEXT NOT NULL,
+          PRIMARY KEY(dataset_id, sequence, entity_type, entity_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_backup_journal_sequence ON backup_journal(dataset_id, sequence);
+        UPDATE local_dataset SET schema_version=8;
+        PRAGMA user_version=8;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v8 迁移失败，已回滚", { cause: error });
+    }
+  }
   assertDatabaseIntegrity();
 }
 
@@ -300,6 +413,7 @@ function txOperation(datasetId, operation, input) {
     case "createThread": {
       if (input.thread.datasetId !== datasetId) throw new Error("Thread datasetId 与事务不一致");
       execute("INSERT INTO thread(id,dataset_id,book_revision_id,created_at) VALUES(?,?,?,?)", [input.thread.id,datasetId,input.thread.bookRevisionId,input.thread.createdAt]);
+      recordJournal(datasetId,"thread",input.thread.id,"upsert");
       transactionDirty = true;
       return input.thread;
     }
@@ -317,6 +431,7 @@ function txOperation(datasetId, operation, input) {
       const sequence=nextSequence(m.threadId);
       execute("INSERT INTO message(id,dataset_id,thread_id,sequence,role,content,status,created_at,source_references,idempotency_key) VALUES(?,?,?,?,'user',?,'saved',?,?,?)",
         [m.id,datasetId,m.threadId,sequence,m.content,m.createdAt,JSON.stringify(m.sourceReferences||[]),m.idempotencyKey||null]);
+      recordJournal(datasetId,"message",m.id,"upsert");
       transactionDirty=true;
       return rowToMessage(first("SELECT * FROM message WHERE id=?", [m.id]));
     }
@@ -326,6 +441,7 @@ function txOperation(datasetId, operation, input) {
       const sequence=nextSequence(m.threadId);
       execute("INSERT INTO message(id,dataset_id,thread_id,sequence,role,content,status,created_at,source_references,idempotency_key) VALUES(?,?,?,?,'assistant',?,?,?,?,?)",
         [m.id,datasetId,m.threadId,sequence,m.content,m.status,m.createdAt,JSON.stringify(m.sourceReferences||[]),m.idempotencyKey||null]);
+      recordJournal(datasetId,"message",m.id,"upsert");
       transactionDirty=true;
       return rowToMessage(first("SELECT * FROM message WHERE id=?", [m.id]));
     }
@@ -336,6 +452,7 @@ function txOperation(datasetId, operation, input) {
       const sourceReferences = input.sourceReferences === undefined ? parseJson(old.source_references) : input.sourceReferences;
       if (input.sourceReferences !== undefined) assertSourceReferences(datasetId, old.thread_id, sourceReferences);
       execute("UPDATE message SET status=?,content=?,source_references=? WHERE id=?", [input.status,input.content ?? old.content,JSON.stringify(sourceReferences),input.messageId]);
+      recordJournal(datasetId,"message",input.messageId,"upsert");
       transactionDirty=true;
       const row=first("SELECT * FROM message WHERE id=?", [input.messageId]);
       return rowToMessage(row).message;
@@ -345,25 +462,129 @@ function txOperation(datasetId, operation, input) {
       if (!first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [r.threadId,datasetId])) throw new Error("ReadingRound Thread 不属于当前数据集");
       execute("INSERT INTO reading_round(id,dataset_id,thread_id,round_number,status,started_at,completed_at) VALUES(?,?,?,?,?,?,?)",
         [r.id,datasetId,r.threadId,r.roundNumber,r.status,r.startedAt,r.completedAt||null]);
+      recordJournal(datasetId,"readingRound",r.id,"upsert");
       transactionDirty=true;
       return r;
+    }
+    case "createReadingRoundPlan": {
+      const plan=input.plan;
+      const r=plan?.round;
+      const state=plan?.state;
+      const units=plan?.unitProgress;
+      if (!r || !state || !Array.isArray(units) || units.length===0) throw new Error("ReadingRoundPlan 必须包含轮次、主线状态和单元进度");
+      if (!first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [r.threadId,datasetId])) throw new Error("ReadingRound Thread 不属于当前数据集");
+      if (r.status!=="active" || r.roundNumber<1 || !Number.isFinite(Date.parse(r.startedAt))) throw new Error("ReadingRound 初始状态非法");
+      if (first("SELECT id FROM reading_round WHERE thread_id=? AND status='active'", [r.threadId])) throw new Error("同一 Thread 最多一个 active 轮次");
+      if (state.readingRoundId!==r.id || !Number.isSafeInteger(state.currentOrderIndex) || state.currentOrderIndex<0) throw new Error("ReadingRoundState 字段非法");
+      execute("INSERT INTO reading_round(id,dataset_id,thread_id,round_number,status,started_at,completed_at,start_reason) VALUES(?,?,?,?,?,?,?,?)",
+        [r.id,datasetId,r.threadId,r.roundNumber,r.status,r.startedAt,r.completedAt||null,r.startReason||"first_read"]);
+      execute("INSERT INTO reading_round_state(reading_round_id,dataset_id,current_structure_node_id,current_order_index,last_presented_source_id,updated_at) VALUES(?,?,?,?,?,?)",
+        [r.id,datasetId,state.currentStructureNodeId,state.currentOrderIndex,state.lastPresentedSourceId||null,state.updatedAt]);
+      for (const unit of units) {
+        if (unit.readingRoundId!==r.id) throw new Error("ReadingUnitProgress 必须属于同一轮次");
+        execute("INSERT INTO reading_unit_progress(reading_round_id,dataset_id,structure_node_id,status,first_presented_source_id,last_activity_message_id,completed_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+          [r.id,datasetId,unit.structureNodeId,unit.status,unit.firstPresentedSourceId||null,unit.lastActivityMessageId||null,unit.completedAt||null,unit.updatedAt]);
+        recordJournal(datasetId,"readingUnitProgress",`${r.id}:${unit.structureNodeId}`,"upsert");
+      }
+      recordJournal(datasetId,"readingRound",r.id,"upsert");
+      recordJournal(datasetId,"readingRoundState",r.id,"upsert");
+      transactionDirty=true;
+      return plan;
+    }
+    case "saveReadingRoundState": {
+      const s=input.state;
+      if (!first("SELECT id FROM reading_round WHERE id=? AND dataset_id=?", [s.readingRoundId,datasetId])) throw new Error("ReadingRoundState 轮次不属于当前数据集");
+      if (!Number.isSafeInteger(s.currentOrderIndex) || s.currentOrderIndex<0) throw new Error("ReadingRoundState 序号非法");
+      if (s.lastPresentedSourceId && !first("SELECT id FROM presented_source WHERE id=? AND dataset_id=?", [s.lastPresentedSourceId,datasetId])) throw new Error("ReadingRoundState 展示来源不存在");
+      execute("INSERT INTO reading_round_state(reading_round_id,dataset_id,current_structure_node_id,current_order_index,last_presented_source_id,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(reading_round_id) DO UPDATE SET current_structure_node_id=excluded.current_structure_node_id,current_order_index=excluded.current_order_index,last_presented_source_id=excluded.last_presented_source_id,updated_at=excluded.updated_at",
+        [s.readingRoundId,datasetId,s.currentStructureNodeId,s.currentOrderIndex,s.lastPresentedSourceId||null,s.updatedAt]);
+      recordJournal(datasetId,"readingRoundState",s.readingRoundId,"upsert");
+      transactionDirty=true;
+      return s;
+    }
+    case "savePresentedSource": {
+      const s=input.source;
+      const thread=first("SELECT book_revision_id FROM thread WHERE id=? AND dataset_id=?", [s.threadId,datasetId]);
+      if (!thread) throw new Error("PresentedSource Thread 不属于当前数据集");
+      if (s.bookRevisionId!==thread.book_revision_id) throw new Error("PresentedSource 必须绑定当前 Thread 的 BookRevision");
+      if (!["mainline","review","temporary"].includes(s.presentationType)) throw new Error("PresentedSource 展示类型非法");
+      if (s.presentationType==="mainline" && !s.readingRoundId) throw new Error("mainline 展示必须绑定 ReadingRound");
+      if (s.readingRoundId && !first("SELECT id FROM reading_round WHERE id=? AND dataset_id=? AND thread_id=?", [s.readingRoundId,datasetId,s.threadId])) throw new Error("PresentedSource 轮次必须属于同一数据集和 Thread");
+      if (!Number.isFinite(Date.parse(s.presentedAt)) || typeof s.sourceLocator!=="object" || s.sourceLocator===null) throw new Error("PresentedSource 时间或定位非法");
+      execute("INSERT INTO presented_source(id,dataset_id,thread_id,book_revision_id,structure_node_id,chunk_id,presentation_type,reading_round_id,presented_at,source_locator) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [s.id,datasetId,s.threadId,s.bookRevisionId,s.structureNodeId,s.chunkId||null,s.presentationType,s.readingRoundId||null,s.presentedAt,JSON.stringify(s.sourceLocator)]);
+      recordJournal(datasetId,"presentedSource",s.id,"upsert");
+      transactionDirty=true;
+      return s;
+    }
+    case "saveReadingUnitProgress": {
+      const p=input.progress;
+      const round=first("SELECT id,thread_id,status FROM reading_round WHERE id=? AND dataset_id=?", [p.readingRoundId,datasetId]);
+      if (!round) throw new Error("ReadingUnitProgress 轮次不属于当前数据集");
+      if (round.status!=="active") throw new Error("已结束轮次不得修改主线单元");
+      if (!["not_presented","presented","awaiting_user","discussion_active","discussed","skipped"].includes(p.status)) throw new Error("ReadingUnitProgress 状态非法");
+      if ((p.status==="discussed" || p.status==="skipped") && !p.completedAt) throw new Error("终态单元必须记录 completed_at");
+      if (p.lastActivityMessageId) {
+        const source=first("SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [p.lastActivityMessageId,datasetId]);
+        if (!source || source.thread_id!==round.thread_id) throw new Error("ReadingUnitProgress 活动消息必须属于同一 Thread");
+      }
+      if (p.firstPresentedSourceId && !first("SELECT id FROM presented_source WHERE id=? AND dataset_id=? AND reading_round_id=?", [p.firstPresentedSourceId,datasetId,p.readingRoundId])) {
+        throw new Error("ReadingUnitProgress 展示来源必须属于同一轮次");
+      }
+      const existing=first("SELECT status FROM reading_unit_progress WHERE reading_round_id=? AND structure_node_id=?", [p.readingRoundId,p.structureNodeId]);
+      if (!existing && p.status!=="not_presented") throw new Error("主线单元必须先初始化为 not_presented");
+      if (existing) {
+        const allowed={
+          not_presented:["not_presented","presented","awaiting_user"],
+          presented:["presented","awaiting_user"],
+          awaiting_user:["awaiting_user","discussion_active","skipped"],
+          discussion_active:["discussion_active","discussed"],
+          discussed:["discussed"],
+          skipped:["skipped"],
+        }[existing.status];
+        if (!allowed || !allowed.includes(p.status)) throw new Error(`非法主线单元状态转换：${existing.status} -> ${p.status}`);
+      }
+      execute("INSERT INTO reading_unit_progress(reading_round_id,dataset_id,structure_node_id,status,first_presented_source_id,last_activity_message_id,completed_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(reading_round_id,structure_node_id) DO UPDATE SET status=excluded.status,first_presented_source_id=excluded.first_presented_source_id,last_activity_message_id=excluded.last_activity_message_id,completed_at=excluded.completed_at,updated_at=excluded.updated_at",
+        [p.readingRoundId,datasetId,p.structureNodeId,p.status,p.firstPresentedSourceId||null,p.lastActivityMessageId||null,p.completedAt||null,p.updatedAt]);
+      recordJournal(datasetId,"readingUnitProgress",`${p.readingRoundId}:${p.structureNodeId}`,"upsert");
+      transactionDirty=true;
+      return p;
+    }
+    case "updateReadingRoundStatus": {
+      const round=first("SELECT id,status FROM reading_round WHERE id=? AND dataset_id=?", [input.roundId,datasetId]);
+      if (!round) throw new Error("ReadingRound 不属于当前数据集");
+      if (!["completed","abandoned"].includes(input.status)) throw new Error("ReadingRound 目标状态非法");
+      if (round.status!=="active") throw new Error("只有 active 轮次可以结束");
+      if (input.status==="completed") {
+        const counts=first("SELECT COUNT(*) AS total, SUM(CASE WHEN status IN ('discussed','skipped') THEN 1 ELSE 0 END) AS terminal FROM reading_unit_progress WHERE reading_round_id=?", [input.roundId]);
+        if (Number(counts.total)===0 || Number(counts.terminal)!==Number(counts.total)) throw new Error("所有主线单元进入终态后轮次才可完成");
+        if (!input.completedAt || !Number.isFinite(Date.parse(input.completedAt))) throw new Error("completed 必须记录 completedAt");
+      }
+      execute("UPDATE reading_round SET status=?,completed_at=? WHERE id=?", [input.status,input.completedAt||null,input.roundId]);
+      recordJournal(datasetId,"readingRound",input.roundId,"upsert");
+      transactionDirty=true;
+      return undefined;
     }
     case "saveReadingPosition": {
       const p=input.position;
       if (!first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [p.threadId,datasetId])) throw new Error("ReadingPosition Thread 不属于当前数据集");
       execute("INSERT INTO reading_position(thread_id,dataset_id,mainline_node_id,displayed_node_id,view_mode,current_unit_discussed,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(thread_id) DO UPDATE SET mainline_node_id=excluded.mainline_node_id,displayed_node_id=excluded.displayed_node_id,view_mode=excluded.view_mode,current_unit_discussed=excluded.current_unit_discussed,updated_at=excluded.updated_at",
         [p.threadId,datasetId,p.mainlineNodeId,p.displayedNodeId,p.viewMode,p.currentUnitDiscussed?1:0,p.updatedAt]);
+      recordJournal(datasetId,"readingPosition",p.threadId,"upsert");
       transactionDirty=true;
       return undefined;
     }
     case "saveCitation": {
       const c=input.citation;
       if (typeof c.excerpt !== "string" || !c.excerpt.trim()) throw new Error("Citation 必须包含可核对的原文摘录");
+      if (typeof c.chunkId !== "string" || !c.chunkId.trim()) throw new Error("Citation 必须绑定 chunk_id");
+      if (typeof c.sourceHash !== "string" || !/^[a-fA-F0-9]{64}$/.test(c.sourceHash)) throw new Error("Citation 必须包含合法的 source_hash");
       const citationThread = assertSourceReferences(datasetId,c.threadId,[{bookRevisionId:c.bookRevisionId,structureNodeId:c.structureNodeId,locator:c.locator}]);
       const sourceMessage = first("SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [c.messageId,datasetId]);
       if (!sourceMessage || sourceMessage.thread_id !== c.threadId) throw new Error("Citation Message 必须属于同一 Thread");
-      execute("INSERT INTO citation(id,dataset_id,thread_id,message_id,book_revision_id,structure_node_id,locator,excerpt,excerpt_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-        [c.id,datasetId,c.threadId,c.messageId,c.bookRevisionId,c.structureNodeId,c.locator,c.excerpt,c.excerptHash,c.createdAt]);
+      execute("INSERT INTO citation(id,dataset_id,thread_id,message_id,book_revision_id,structure_node_id,chunk_id,locator,excerpt,excerpt_hash,source_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        [c.id,datasetId,c.threadId,c.messageId,c.bookRevisionId,c.structureNodeId,c.chunkId,c.locator,c.excerpt,c.excerptHash,c.sourceHash,c.createdAt]);
+      recordJournal(datasetId,"citation",c.id,"upsert");
       transactionDirty=true;
       return undefined;
     }
@@ -400,6 +621,7 @@ function txOperation(datasetId, operation, input) {
       }
       execute("INSERT INTO note(id,dataset_id,thread_id,reading_round_id,content,source_message_ids,source_references,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content,source_message_ids=excluded.source_message_ids,source_references=excluded.source_references,updated_at=excluded.updated_at,revision=excluded.revision",
         [n.id,datasetId,n.threadId,n.readingRoundId,n.content,JSON.stringify(n.sourceMessageIds),JSON.stringify(n.sourceReferences),n.createdAt,n.updatedAt,n.revision]);
+      recordJournal(datasetId,"note",n.id,"upsert");
       transactionDirty=true;
       return undefined;
     }
@@ -438,6 +660,8 @@ function txOperation(datasetId, operation, input) {
       }
       execute("INSERT INTO memory_version(id,dataset_id,memory_id,version,previous_version_id,change_kind,content,source_message_ids,source_references,created_at,title,viewpoint,confidence,ambiguity,evaluation_score) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [v.id,datasetId,v.memoryId,v.version,v.previousVersionId,v.changeKind,v.content,JSON.stringify(v.sourceMessageIds),JSON.stringify(v.sourceReferences),v.createdAt,v.title || "",v.viewpoint || "user",v.confidence ?? 1,v.ambiguity ?? 0,v.evaluationScore ?? 0]);
+      recordJournal(datasetId,"memory",v.memoryId,"upsert");
+      recordJournal(datasetId,"memoryVersion",v.id,"upsert");
       transactionDirty=true;
       return v;
     }
@@ -470,6 +694,7 @@ function txOperation(datasetId, operation, input) {
       }
       execute("INSERT INTO memory_candidate(id,dataset_id,thread_id,candidate_json,evaluation_score,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
         [record.id,datasetId,record.threadId,serialized,record.evaluationScore,record.status,record.createdAt,record.updatedAt]);
+      recordJournal(datasetId,"memoryCandidate",record.id,"upsert");
       transactionDirty=true;
       return record;
     }
@@ -484,6 +709,7 @@ function txOperation(datasetId, operation, input) {
       if (old.status===status) return true;
       if (old.status!=="needs_confirmation") throw new Error("MemoryCandidate has already been resolved");
       execute("UPDATE memory_candidate SET status=?,updated_at=? WHERE id=? AND dataset_id=?",[status,updatedAt,input.candidateId,datasetId]);
+      recordJournal(datasetId,"memoryCandidate",input.candidateId,"upsert",updatedAt);
       transactionDirty=true;
       return true;
     }
@@ -522,6 +748,7 @@ function txOperation(datasetId, operation, input) {
       }
       execute("INSERT INTO memory_relation(id,dataset_id,from_version_id,to_version_id,relation_type,source_message_ids,source_references,created_at) VALUES(?,?,?,?,?,?,?,?)",
         [r.id,datasetId,r.fromVersionId,r.toVersionId,r.relationType,JSON.stringify(r.sourceMessageIds),JSON.stringify(r.sourceReferences),r.createdAt]);
+      recordJournal(datasetId,"memoryRelation",r.id,"upsert");
       transactionDirty=true;
       return r;
     }
@@ -532,7 +759,7 @@ function txOperation(datasetId, operation, input) {
       }
       execute("INSERT INTO account_dataset_binding(id,dataset_id,account_id,status,bound_at,last_selected_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)",
         [b.id,datasetId,b.accountId,b.status,b.boundAt,b.lastSelectedAt]);
-      transactionDirty=true;
+      // Device-local account binding is intentionally excluded from encrypted backups and their journal.
       return b;
     }
     case "getAccountDataSetBinding": {
@@ -543,7 +770,7 @@ function txOperation(datasetId, operation, input) {
       execute("UPDATE account_dataset_binding SET account_id=NULL,status='revoked',revoked_at=? WHERE id=? AND dataset_id=? AND status!='revoked'", [input.revokedAt,input.bindingId,datasetId]);
       const changed = db.changes() > 0;
       execute("DELETE FROM binding_authorization WHERE binding_id=? AND EXISTS(SELECT 1 FROM account_dataset_binding b WHERE b.id=? AND b.dataset_id=?)", [input.bindingId,input.bindingId,datasetId]);
-      if (changed) transactionDirty=true;
+      // Device-local binding revocation is not part of encrypted backup content.
       return changed;
     }
     case "saveGenerationDelivery": {
@@ -570,6 +797,7 @@ function txOperation(datasetId, operation, input) {
       if (old && old.status==="running" && d.status==="queued") throw new Error("GenerationDelivery running 状态不可回退为 queued");
       execute("INSERT INTO generation_delivery(client_generation_id,dataset_id,generation_id,thread_id,user_message_id,assistant_message_id,idempotency_key,status,last_sequence,last_event_id,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(client_generation_id) DO UPDATE SET generation_id=COALESCE(excluded.generation_id,generation_delivery.generation_id),status=excluded.status,last_sequence=excluded.last_sequence,last_event_id=excluded.last_event_id,expires_at=COALESCE(excluded.expires_at,generation_delivery.expires_at),updated_at=excluded.updated_at",
         [d.clientGenerationId,datasetId,d.generationId,d.threadId,d.userMessageId,d.assistantMessageId,d.idempotencyKey,d.status,d.lastSequence,d.lastEventId,d.expiresAt,d.updatedAt]);
+      recordJournal(datasetId,"generationDelivery",d.clientGenerationId,"upsert",d.updatedAt);
       transactionDirty=true;
       return d;
     }
@@ -596,6 +824,7 @@ function txOperation(datasetId, operation, input) {
       }
       execute("UPDATE local_dataset SET last_acked_sequence=?,last_backup_id=?,last_backup_at=? WHERE id=?",
         [sequence,backupId,backedUpAt,datasetId]);
+      execute("DELETE FROM backup_journal WHERE dataset_id=? AND sequence<=?", [datasetId,sequence]);
       // Backup metadata is not user content and must not advance dirty_sequence.
       return undefined;
     }
@@ -605,9 +834,13 @@ function txOperation(datasetId, operation, input) {
         datasetId:datasetId,schemaVersion:ds.schema_version,dirtySequence:ds.dirty_sequence + (transactionDirty ? 1 : 0),
         threads:execute("SELECT id,dataset_id AS datasetId,book_revision_id AS bookRevisionId,created_at AS createdAt FROM thread WHERE dataset_id=?", [datasetId]),
         messages:execute("SELECT * FROM message WHERE dataset_id=? ORDER BY thread_id,sequence", [datasetId]).map(rowToMessage),
-        readingRounds:execute("SELECT id,thread_id AS threadId,started_at AS startedAt,completed_at AS completedAt,round_number AS roundNumber,status FROM reading_round WHERE dataset_id=?", [datasetId]),
+        readingRounds:execute("SELECT id,thread_id AS threadId,started_at AS startedAt,completed_at AS completedAt,round_number AS roundNumber,status,start_reason AS startReason FROM reading_round WHERE dataset_id=?", [datasetId]),
         readingPositions:execute("SELECT thread_id AS threadId,mainline_node_id AS mainlineNodeId,displayed_node_id AS displayedNodeId,view_mode AS viewMode,current_unit_discussed AS currentUnitDiscussed,updated_at AS updatedAt FROM reading_position WHERE dataset_id=?", [datasetId]),
-        citations:execute("SELECT * FROM citation WHERE dataset_id=?", [datasetId]).map(c=>({id:c.id,threadId:c.thread_id,messageId:c.message_id,bookRevisionId:c.book_revision_id,structureNodeId:c.structure_node_id,locator:c.locator,excerpt:c.excerpt,excerptHash:c.excerpt_hash,createdAt:c.created_at})),
+        readingRoundStates:execute("SELECT * FROM reading_round_state WHERE dataset_id=?", [datasetId]).map(s=>({datasetId:s.dataset_id,readingRoundId:s.reading_round_id,currentStructureNodeId:s.current_structure_node_id,currentOrderIndex:s.current_order_index,lastPresentedSourceId:s.last_presented_source_id,updatedAt:s.updated_at})),
+        readingUnitProgress:execute("SELECT * FROM reading_unit_progress WHERE dataset_id=?", [datasetId]).map(u=>({datasetId:u.dataset_id,readingRoundId:u.reading_round_id,structureNodeId:u.structure_node_id,status:u.status,firstPresentedSourceId:u.first_presented_source_id,lastActivityMessageId:u.last_activity_message_id,completedAt:u.completed_at,updatedAt:u.updated_at})),
+        presentedSources:execute("SELECT * FROM presented_source WHERE dataset_id=? ORDER BY presented_at,id", [datasetId]).map(s=>({datasetId:s.dataset_id,id:s.id,threadId:s.thread_id,bookRevisionId:s.book_revision_id,structureNodeId:s.structure_node_id,chunkId:s.chunk_id,presentationType:s.presentation_type,readingRoundId:s.reading_round_id,presentedAt:s.presented_at,sourceLocator:parseJson(s.source_locator,{})})),
+        backupJournal:execute("SELECT sequence,entity_type AS entityType,entity_id AS entityId,operation,changed_at AS changedAt FROM backup_journal WHERE dataset_id=? ORDER BY sequence", [datasetId]),
+        citations:execute("SELECT * FROM citation WHERE dataset_id=?", [datasetId]).map(c=>({id:c.id,threadId:c.thread_id,messageId:c.message_id,bookRevisionId:c.book_revision_id,structureNodeId:c.structure_node_id,chunkId:c.chunk_id,locator:c.locator,excerpt:c.excerpt,excerptHash:c.excerpt_hash,sourceHash:c.source_hash,createdAt:c.created_at})),
         notes:execute("SELECT * FROM note WHERE dataset_id=?", [datasetId]).map(n=>({id:n.id,datasetId:n.dataset_id,threadId:n.thread_id,readingRoundId:n.reading_round_id,content:n.content,sourceMessageIds:parseJson(n.source_message_ids),sourceReferences:parseJson(n.source_references),createdAt:n.created_at,updatedAt:n.updated_at,revision:n.revision})),
         memories:execute("SELECT * FROM memory WHERE dataset_id=?", [datasetId]).map(m=>({id:m.id,datasetId:m.dataset_id,threadId:m.thread_id,currentVersionId:m.current_version_id,createdAt:m.created_at,updatedAt:m.updated_at})),
         memoryVersions:execute("SELECT * FROM memory_version WHERE dataset_id=? ORDER BY memory_id,version", [datasetId]).map(v=>({id:v.id,memoryId:v.memory_id,version:v.version,previousVersionId:v.previous_version_id,changeKind:v.change_kind,content:v.content,title:v.title,viewpoint:v.viewpoint,confidence:v.confidence,ambiguity:v.ambiguity,evaluationScore:v.evaluation_score,sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references),createdAt:v.created_at})),
@@ -635,6 +868,7 @@ function handle(message) {
     db.exec({sql:"BEGIN IMMEDIATE"});
     activeDatasetId=message.datasetId;
     transactionDirty=false;
+    journalSequence=null;
     try {
       ensureDataset(message.datasetId);
       return true;
@@ -651,12 +885,14 @@ function handle(message) {
     db.exec({sql:"COMMIT"});
     activeDatasetId=null;
     transactionDirty=false;
+    journalSequence=null;
     return true;
   }
   if (type === "rollback") {
     if (activeDatasetId) db.exec({sql:"ROLLBACK"});
     activeDatasetId=null;
     transactionDirty=false;
+    journalSequence=null;
     return true;
   }
   if (type === "restoreSnapshot") {
@@ -664,7 +900,7 @@ function handle(message) {
     const datasetId=message.datasetId;
     const snapshot=message.snapshot;
     if (!snapshot || snapshot.datasetId!==datasetId || !Number.isSafeInteger(snapshot.schemaVersion) ||
-        snapshot.schemaVersion<1 || snapshot.schemaVersion>5 || !Number.isSafeInteger(snapshot.dirtySequence) ||
+        snapshot.schemaVersion<1 || snapshot.schemaVersion>8 || !Number.isSafeInteger(snapshot.dirtySequence) ||
         snapshot.dirtySequence<1 || typeof message.backupId!=="string" || !message.backupId.trim() ||
         !Number.isFinite(Date.parse(message.restoredAt))) {
       throw new Error("Backup snapshot metadata is invalid");
@@ -697,6 +933,14 @@ function handle(message) {
       }
       for (const round of snapshot.readingRounds || []) txOperation(datasetId,"createReadingRound",{round});
       for (const position of snapshot.readingPositions || []) txOperation(datasetId,"saveReadingPosition",{position});
+      for (const source of snapshot.presentedSources || []) txOperation(datasetId,"savePresentedSource",{source});
+      for (const state of snapshot.readingRoundStates || []) {
+        txOperation(datasetId,"saveReadingRoundState",{state});
+      }
+      for (const progress of snapshot.readingUnitProgress || []) {
+        execute("INSERT INTO reading_unit_progress(reading_round_id,dataset_id,structure_node_id,status,first_presented_source_id,last_activity_message_id,completed_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+          [progress.readingRoundId,datasetId,progress.structureNodeId,progress.status,progress.firstPresentedSourceId||null,progress.lastActivityMessageId||null,progress.completedAt||null,progress.updatedAt]);
+      }
       for (const citation of snapshot.citations || []) txOperation(datasetId,"saveCitation",{citation});
       for (const note of snapshot.notes || []) txOperation(datasetId,"saveNote",{note});
       const versions=[...(snapshot.memoryVersions || [])].sort((a,b)=>a.memoryId.localeCompare(b.memoryId) || a.version-b.version);
@@ -704,8 +948,14 @@ function handle(message) {
       for (const relation of snapshot.memoryRelations || []) txOperation(datasetId,"appendMemoryRelation",{relation});
       for (const candidate of snapshot.memoryCandidates || []) txOperation(datasetId,"saveMemoryCandidate",{candidate});
       for (const delivery of snapshot.generationDeliveries || []) txOperation(datasetId,"saveGenerationDelivery",{delivery});
+      execute("DELETE FROM backup_journal WHERE dataset_id=?", [datasetId]);
+      for (const entry of snapshot.backupJournal || []) {
+        execute("INSERT INTO backup_journal(dataset_id,sequence,entity_type,entity_id,operation,changed_at) VALUES(?,?,?,?,?,?)",
+          [datasetId,entry.sequence,entry.entityType,entry.entityId,entry.operation,entry.changedAt]);
+      }
+      journalSequence=null;
       transactionDirty=false;
-      execute("UPDATE local_dataset SET schema_version=5,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
+      execute("UPDATE local_dataset SET schema_version=8,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
         [snapshot.dirtySequence,snapshot.dirtySequence,message.backupId,message.restoredAt,message.restoredAt,datasetId]);
       db.exec({sql:"COMMIT"});
       activeDatasetId=null;
@@ -733,6 +983,44 @@ function handle(message) {
     return execute("SELECT * FROM generation_delivery WHERE dataset_id=? AND status IN ('queued','running') ORDER BY updated_at,client_generation_id",[message.datasetId]).map(r=>({clientGenerationId:r.client_generation_id,generationId:r.generation_id,threadId:r.thread_id,userMessageId:r.user_message_id,assistantMessageId:r.assistant_message_id,idempotencyKey:r.idempotency_key,status:r.status,lastSequence:r.last_sequence,lastEventId:r.last_event_id,expiresAt:r.expires_at,updatedAt:r.updated_at}));
   }
 
+  if (type === "getReadingRound") {
+    const r=first("SELECT id,thread_id AS threadId,round_number AS roundNumber,status,start_reason AS startReason,started_at AS startedAt,completed_at AS completedAt FROM reading_round WHERE id=? AND dataset_id=?", [message.roundId,message.datasetId]);
+    return r || null;
+  }
+  if (type === "getReadingRoundState") {
+    const s=first("SELECT * FROM reading_round_state WHERE reading_round_id=? AND dataset_id=?", [message.roundId,message.datasetId]);
+    return s ? {datasetId:s.dataset_id,readingRoundId:s.reading_round_id,currentStructureNodeId:s.current_structure_node_id,currentOrderIndex:s.current_order_index,lastPresentedSourceId:s.last_presented_source_id,updatedAt:s.updated_at} : null;
+  }
+  if (type === "listReadingUnitProgress") {
+    return execute("SELECT * FROM reading_unit_progress WHERE dataset_id=? AND reading_round_id=? ORDER BY structure_node_id", [message.datasetId,message.roundId]).map(u=>({datasetId:u.dataset_id,readingRoundId:u.reading_round_id,structureNodeId:u.structure_node_id,status:u.status,firstPresentedSourceId:u.first_presented_source_id,lastActivityMessageId:u.last_activity_message_id,completedAt:u.completed_at,updatedAt:u.updated_at}));
+  }
+  if (type === "listPresentedSources") {
+    return execute("SELECT * FROM presented_source WHERE dataset_id=? AND thread_id=? ORDER BY presented_at,id", [message.datasetId,message.threadId]).map(s=>({datasetId:s.dataset_id,id:s.id,threadId:s.thread_id,bookRevisionId:s.book_revision_id,structureNodeId:s.structure_node_id,chunkId:s.chunk_id,presentationType:s.presentation_type,readingRoundId:s.reading_round_id,presentedAt:s.presented_at,sourceLocator:parseJson(s.source_locator,{})}));
+  }
+  if (type === "recallMemoryVersions") {
+    const limit=message.limit ?? 5;
+    if (!Number.isInteger(limit) || limit<1 || limit>8) throw new Error("记忆召回 limit 必须是 1 到 8 的整数");
+    if (typeof message.threadId!=="string" || !message.threadId.trim()) throw new Error("记忆召回必须指定 Thread");
+    if (message.structureNodeId!==undefined && (typeof message.structureNodeId!=="string" || !message.structureNodeId.trim())) throw new Error("记忆召回章节 ID 非法");
+    if (message.topic!==undefined && (typeof message.topic!=="string" || !message.topic.trim())) throw new Error("记忆召回主题非法");
+    const params=[message.datasetId,message.threadId];
+    let sql="SELECT mv.* FROM memory m JOIN memory_version mv ON mv.id=m.current_version_id WHERE m.dataset_id=? AND m.thread_id=? AND mv.change_kind <> 'rejection'";
+    if (message.structureNodeId!==undefined) {
+      sql+=" AND EXISTS (SELECT 1 FROM json_each(mv.source_references) WHERE json_extract(value,'$.structureNodeId')=?)";
+      params.push(message.structureNodeId);
+    }
+    if (message.topic!==undefined) {
+      sql+=" AND (mv.title LIKE ? OR mv.content LIKE ?)";
+      params.push(`%${message.topic}%`,`%${message.topic}%`);
+    }
+    sql+=" ORDER BY mv.created_at DESC, mv.id LIMIT ?";
+    params.push(limit);
+    return execute(sql, params).map(v=>({
+      id:v.id,memoryId:v.memory_id,version:v.version,previousVersionId:v.previous_version_id,changeKind:v.change_kind,
+      content:v.content,title:v.title,viewpoint:v.viewpoint,confidence:v.confidence,ambiguity:v.ambiguity,evaluationScore:v.evaluation_score,
+      sourceMessageIds:parseJson(v.source_message_ids),sourceReferences:parseJson(v.source_references),createdAt:v.created_at,
+    }));
+  }
   if (type === "getMemoryVersions") {
     return execute("SELECT * FROM memory_version WHERE dataset_id=? AND memory_id=? ORDER BY version", [message.datasetId,message.memoryId]).map(v=>({
       id:v.id,memoryId:v.memory_id,version:v.version,previousVersionId:v.previous_version_id,changeKind:v.change_kind,

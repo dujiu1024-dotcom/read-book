@@ -34,10 +34,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install prototype dependencies from lockfile
+        working-directory: prototypes/pc-reading
+        run: npm ci
       - name: Check prototype JavaScript syntax
         run: node --check prototypes/pc-reading/app.js
-      - name: Run BookContentProvider contract tests
-        run: node --test prototypes/pc-reading/book-content-provider.test.mjs prototypes/pc-reading/public-book-content-provider.test.mjs
+      - name: Run all prototype unit tests
+        run: node --experimental-strip-types --test prototypes/pc-reading/*.test.mjs
       - name: Check public provider JavaScript syntax
         run: node --check prototypes/pc-reading/public-book-content-provider.js
       - name: Install pinned browser test dependency
