@@ -5,6 +5,7 @@ import {
   createGenerationTurnController,
 } from "../../packages/agent-adapter/src/index.ts";
 import { createHttpGenerationTransport } from "../../packages/agent-adapter/src/http-transport.ts";
+import { runMemoryExtraction, persistAcceptedMemoryCandidates } from "../../packages/agent-adapter/src/memory-extraction.ts";
 
 function uuid() {
   return crypto.randomUUID();
@@ -63,6 +64,83 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     return repository.getMessages(datasetId, thread.id);
   }
 
+  async function loadMemoryState() {
+    const snapshot = await repository.createConsistentSnapshot(datasetId);
+    return {
+      memories: snapshot.memories.filter((item) => item.threadId === thread.id),
+      versions: snapshot.memoryVersions,
+      relations: snapshot.memoryRelations,
+      pendingCandidates: snapshot.memoryCandidates.filter((item) => item.threadId === thread.id),
+      providerConfigured: Boolean(config.memoryExtractionProvider && config.memoryCandidatePolicy),
+      plannerConfigured: typeof config.planMemoryEvolution === "function",
+    };
+  }
+
+  async function extractMemories() {
+    if (!config.memoryExtractionProvider || !config.memoryCandidatePolicy) {
+      return { ...(await loadMemoryState()), extractionStatus: "provider_not_configured", persistedIds: [], acceptedNotPersisted: [] };
+    }
+    const persisted = await loadMessages();
+    const eligible = persisted
+      .map((item) => item.message)
+      .filter((message) => message.content?.trim() && (message.role === "user" || message.status === "completed"))
+      .slice(-40);
+    const userMessages = eligible.filter((message) => message.role === "user");
+    if (!userMessages.length) return { ...(await loadMemoryState()), extractionStatus: "no_user_messages", persistedIds: [], acceptedNotPersisted: [] };
+    const context = {
+      threadId: thread.id,
+      bookRevisionId: bookRevision.bookRevisionId,
+      availableMessageIds: eligible.map((message) => message.id),
+      availableUserMessageIds: userMessages.map((message) => message.id),
+      availableStructureNodeIds: bookRevision.units.map((unit) => unit.id),
+    };
+    const result = await runMemoryExtraction(config.memoryExtractionProvider, {
+      context,
+      messages: eligible.map((message) => ({ id: message.id, role: message.role, content: message.content })),
+      policy: config.memoryCandidatePolicy,
+      modelVersion: config.memoryModelVersion || "configured-provider",
+    });
+    const now = new Date().toISOString();
+    if (result.needsConfirmation.length) {
+      await repository.transaction(datasetId, async (tx) => {
+        for (const item of result.needsConfirmation) {
+          await tx.saveMemoryCandidate({
+            id: item.candidate.id,
+            datasetId,
+            threadId: thread.id,
+            candidate: item.candidate,
+            evaluationScore: item.evaluation.score,
+            status: "needs_confirmation",
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      });
+    }
+    let persistedIds = [];
+    if (result.accepted.length && typeof config.planMemoryEvolution === "function") {
+      const existing = await repository.createConsistentSnapshot(datasetId);
+      const plans = await config.planMemoryEvolution({
+        accepted: result.accepted,
+        existingMemories: existing.memories.filter((item) => item.threadId === thread.id),
+        existingVersions: existing.memoryVersions,
+        existingRelations: existing.memoryRelations,
+        threadId: thread.id,
+        bookRevisionId: bookRevision.bookRevisionId,
+      });
+      persistedIds = await persistAcceptedMemoryCandidates(repository, datasetId, result, plans);
+    }
+    const state = await loadMemoryState();
+    return {
+      ...state,
+      extractionStatus: "completed",
+      persistedIds,
+      acceptedNotPersisted: result.accepted.filter((item) => !persistedIds.includes(item.candidate.id)),
+      needsConfirmation: result.needsConfirmation,
+      rejectedCount: result.rejected.length,
+    };
+  }
+
   async function savePosition(state, units) {
     const current = units[state.mainlineIndex];
     const displayed = state.displayedUnit;
@@ -104,7 +182,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         response_preferences: { language: "zh-CN" },
       },
     };
-    return controller.send({
+    const result = await controller.send({
       datasetId,
       userMessage: { id: userMessageId, threadId: thread.id, content },
       assistantMessageId,
@@ -114,6 +192,10 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       onPersisted: callbacks.onPersisted,
       onDelta: callbacks.onDelta,
     });
+    if (config.memoryExtractionProvider && config.memoryCandidatePolicy) {
+      void extractMemories().then((memoryState) => callbacks.onMemoryUpdate?.(memoryState)).catch((error) => callbacks.onMemoryError?.(error));
+    }
+    return result;
   }
 
   async function resumePending(callbacks = {}) {
@@ -167,6 +249,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     readingPosition,
     backupStatus,
     loadMessages,
+    loadMemoryState,
+    extractMemories,
     savePosition,
     send,
     stop: () => controller.stop(),
