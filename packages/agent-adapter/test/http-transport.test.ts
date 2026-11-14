@@ -100,7 +100,10 @@ test("aborted SSE stream exits without emitting incomplete data", async () => {
   const stream = new ReadableStream({
     start(ctrl) {
       ctrl.enqueue(new TextEncoder().encode("id: incomplete\nevent: delta\ndata: {"));
+    },
+    pull(ctrl) {
       controller.abort();
+      ctrl.close();
     },
   });
   const transport = createHttpGenerationTransport({
