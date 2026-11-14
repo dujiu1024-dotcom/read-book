@@ -299,3 +299,64 @@ test("SQLite Worker maps quota, integrity and migration failures to typed Reposi
   expect(result[2]).toMatchObject({ name: "RepositoryError", code: "MIGRATION_FAILED" });
   expect(result[3]).toMatchObject({ name: "Error", code: null });
 });
+
+
+test("backup acknowledgement advances only through the uploaded snapshot and preserves later dirty writes", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({
+        id: ids.threadId, datasetId: ids.datasetA, bookRevisionId: ids.revision,
+        createdAt: "2026-11-14T00:00:00.000Z",
+      });
+      await tx.appendUserMessage({
+        id: ids.messageA, threadId: ids.threadId, content: "snapshot v1",
+        createdAt: "2026-11-14T00:00:01.000Z", sourceReferences: [],
+      });
+    });
+    const snapshot = await repository.transaction(
+      ids.datasetA, (tx) => tx.createConsistentSnapshot(),
+    );
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.appendUserMessage({
+        id: ids.messageB, threadId: ids.threadId, content: "written after snapshot",
+        createdAt: "2026-11-14T00:00:02.000Z", sourceReferences: [],
+      });
+    });
+    await repository.transaction(ids.datasetA, (tx) =>
+      tx.acknowledgeBackup(snapshot.dirtySequence, "backup-001", "2026-11-14T00:01:00.000Z"),
+    );
+    const afterAck = await repository.getDataSet(ids.datasetA);
+    let staleRejected = false;
+    let futureRejected = false;
+    try {
+      await repository.transaction(ids.datasetA, (tx) =>
+        tx.acknowledgeBackup(0, "backup-stale", "2026-11-14T00:02:00.000Z"),
+      );
+    } catch { staleRejected = true; }
+    try {
+      await repository.transaction(ids.datasetA, (tx) =>
+        tx.acknowledgeBackup(99, "backup-future", "2026-11-14T00:03:00.000Z"),
+      );
+    } catch { futureRejected = true; }
+    const finalDataset = await repository.getDataSet(ids.datasetA);
+    await repository.close();
+    return { snapshotSequence: snapshot.dirtySequence, afterAck, finalDataset, staleRejected, futureRejected };
+  }, {
+    datasetA: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    revision: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    threadId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    messageA: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    messageB: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+  });
+  expect(result.snapshotSequence).toBe(1);
+  expect(result.afterAck.dirtySequence).toBe(2);
+  expect(result.afterAck.lastAckedSequence).toBe(1);
+  expect(result.afterAck.lastBackupId).toBe("backup-001");
+  expect(result.finalDataset.dirtySequence).toBe(2);
+  expect(result.finalDataset.lastAckedSequence).toBe(1);
+  expect(result.staleRejected).toBe(true);
+  expect(result.futureRejected).toBe(true);
+});
