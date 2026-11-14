@@ -76,6 +76,7 @@ export function createHttpEncryptedBackupPort({
 
   async function preparePendingUpload(snapshot, state) {
     const forceFull = !state.lastSnapshot || !state.lastBackupId ||
+      state.lastSnapshot.schemaVersion !== snapshot.schemaVersion ||
       shouldCreateFullCheckpoint(state.backupCountSinceFull || 0, checkpointInterval);
     const backup = await encryptBackup(snapshot, {
       dataKey: state.dataKey,
@@ -275,6 +276,16 @@ export function createHttpEncryptedBackupPort({
     });
     try {
       await repository.restoreSnapshot(datasetId, restored.snapshot, restored.backupId, new Date().toISOString());
+      const migratedSnapshot = await repository.createConsistentSnapshot(datasetId);
+      await keyStore.put(datasetId, {
+        dataKey: restored.dataKey,
+        keyEnvelope: restored.keyEnvelope,
+        lastSnapshot: migratedSnapshot,
+        lastBackupId: restored.backupId,
+        backupCountSinceFull: restored.backupsSinceFull,
+        keyVersion: restored.keyVersion || keyVersion,
+        pendingUpload: null,
+      });
     } catch (error) {
       if (previousKeyState) await keyStore.put(datasetId, previousKeyState);
       else await keyStore.delete(datasetId);
