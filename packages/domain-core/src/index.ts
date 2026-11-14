@@ -347,13 +347,24 @@ export function validateMemoryExtractionResult(
   if (output.candidates.length > 10) {
     throw new DomainRuleError("One extraction result may contain at most 10 candidates.");
   }
+  if (!context || !Array.isArray(context.availableMessageIds) ||
+      !Array.isArray(context.availableUserMessageIds) || !Array.isArray(context.availableStructureNodeIds)) {
+    throw new DomainRuleError("Extraction context scopes must be arrays.");
+  }
   const availableMessages = new Set(context.availableMessageIds);
   const availableUsers = new Set(context.availableUserMessageIds);
   const availableNodes = new Set(context.availableStructureNodeIds);
-  if (!availableMessages.size || [...availableUsers].some((id) => !availableMessages.has(id))) {
-    throw new DomainRuleError("Extraction context message scopes are invalid.");
+  if (!availableMessages.size ||
+      [...availableMessages].some((id) => typeof id !== "string" || !id.trim()) ||
+      availableMessages.size !== context.availableMessageIds.length ||
+      [...availableUsers].some((id) => !availableMessages.has(id)) ||
+      availableUsers.size !== context.availableUserMessageIds.length ||
+      [...availableNodes].some((id) => typeof id !== "string" || !id.trim()) ||
+      availableNodes.size !== context.availableStructureNodeIds.length) {
+    throw new DomainRuleError("Extraction context message/source scopes are invalid.");
   }
-  if (!context.threadId.trim() || !context.bookRevisionId.trim()) {
+  if (typeof context.threadId !== "string" || !context.threadId.trim() ||
+      typeof context.bookRevisionId !== "string" || !context.bookRevisionId.trim()) {
     throw new DomainRuleError("Extraction context requires a Thread and BookRevision.");
   }
 
@@ -433,6 +444,9 @@ export function validateMemoryRelation(relation: MemoryRelation): MemoryRelation
   }
   if (relation.fromVersionId === relation.toVersionId) {
     throw new DomainRuleError("A MemoryRelation cannot point to itself.");
+  }
+  if (typeof relation.createdAt !== "string" || !Number.isFinite(Date.parse(relation.createdAt))) {
+    throw new DomainRuleError("MemoryRelation createdAt must be a valid date-time.");
   }
   if (!["supports", "contradicts", "extends", "supersedes", "retracts", "duplicate_of"].includes(relation.relationType)) {
     throw new DomainRuleError("MemoryRelation type is invalid.");
