@@ -71,6 +71,15 @@ window.READ_BOOK_CONFIG = {
 若没有配置公共 API，页面明确使用 Demo Provider；若配置了真实书籍，页面不会展示演示讨论消息或固定演示回复，讨论输入暂时禁用，等待 #26/#27 接入。
 
 
+
+## 多节点原文证据
+
+正式阅读运行时会基于当前用户输入，在当前 BookRevision 的全部阅读单元中执行本地词项检索（中文二元/三元词组 + 英文词项，BM25 风格排序），排除当前原文单元后最多选择 7 个候选来源。只发送命中的原文摘录，不发送整本书或完整用户历史。
+
+GenerationRequest.context.additional_sources 是可选的有界证据包。服务端引用必须匹配本次请求提供的 BookRevision、结构节点、定位和原文摘录；未提供或无法在原文中找到的引用不会写入本地 SourceReference/CitationRecord。阅读界面逐条展示通过校验的引用卡片，并支持分别回跳原文。
+
+当前检索是可解释的词项检索基线，不等同于语义向量检索；后续可替换为受控的相关来源 Provider，但仍必须受同一证据白名单和原文校验约束。对应纯函数测试：`source-retrieval.test.mjs`，本目录命令：`npm run test:source-retrieval`。
+
 ## 本地运行（正式阅读客户端）
 
 本目录现由 Vite 构建，生产模式会接入 SQLite WASM + OPFS 本地 Repository、公共书籍 API Provider 和 HTTP/SSE Agent Transport，不再使用固定演示回复。
@@ -131,8 +140,8 @@ window.READ_BOOK_CONFIG = {
 - 阅读页顶部书目选择器可切换六本书；五卷分别使用独立 BookRevision ID，不会拼接。
 - 原文卡片显示章节/段落定位，并提供对应 GitHub 原始文件链接。
 - 当前为公开来源只读模式：正文直接从来源仓库读取，不复制进 read-book 仓库；不声称来源仓库已授予再分发许可。可通过“导入书籍”入口选择符合 v1.0.0 的本地书籍包，进入独立的本地持久化阅读模式。
-- 已接入 SQLite WASM + OPFS 本地阅读位置持久化；来源正文使用 Cache Storage 在线优先缓存。真实 Agent 对话、认知沉淀和加密云端备份仍未接入。
-- GitHub API 或 Raw 内容读取失败时优先使用本机已有来源缓存；无缓存时显示错误，不回退到演示正文。
+- 该模式尚未接入本地阅读位置持久化、真实 Agent 对话和认知沉淀；这些能力不会显示为已保存或已完成。
+- GitHub API 或 Raw 内容读取失败时显示错误，不回退到演示正文。
 
 启动方式：
 
@@ -144,7 +153,7 @@ npm run dev
 
 ## GitHub 语料的本地阅读位置
 
-公开语料模式会使用与本地导入书籍相同的 localDataSetId 和 SQLite WASM + OPFS Repository 保存阅读主线、临时查看位置和 Thread；默认数据集标识保存在 read-book:local-dataset-id。书籍版本 ID 根据本次读取的 Git blob SHA 集合计算指纹；来源文件变化后会形成新的 BookRevision，不会把新版本误当成旧版本。
+公开语料模式会使用与正式阅读器相同的 SQLite WASM + OPFS Repository 保存阅读主线、临时查看位置和 Thread。书籍版本 ID 根据本次读取的 Git blob SHA 集合计算指纹；来源文件变化后会形成新的 BookRevision，不会把新版本误当成旧版本。
 
 此模式只在本机保存阅读位置。启动时创建本地一致性快照，但没有配置加密备份服务时不会上传；界面明确显示“备份未配置”。Agent 消息和认知数据仍未接入。
 
