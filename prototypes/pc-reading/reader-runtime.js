@@ -18,13 +18,66 @@ function required(value, name) {
 }
 
 export async function createProductionReaderRuntime(config, bookRevision) {
-  const datasetId = required(config.localDataSetId, "READ_BOOK_CONFIG.localDataSetId");
-  const apiBaseUrl = required(config.generationApiBaseUrl || config.apiBaseUrl, "READ_BOOK_CONFIG.generationApiBaseUrl");
+  let datasetId = required(config.localDataSetId, "READ_BOOK_CONFIG.localDataSetId");
   const getAccessToken = config.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken;
   if (typeof getAccessToken !== "function") throw new Error("缺少登录令牌提供器。");
 
   const repository = new SqliteOpfsRepository();
   await repository.initialize();
+  const makeBackupPort = (targetDatasetId) => {
+    if (typeof config.createEncryptedBackupPort === "function") return config.createEncryptedBackupPort(targetDatasetId);
+    if (config.encryptedBackupPort && targetDatasetId === config.localDataSetId) return config.encryptedBackupPort;
+    return createHttpEncryptedBackupPort({
+      baseUrl: config.apiBaseUrl,
+      datasetId: targetDatasetId,
+      getAccessToken,
+      onRecoveryCredential: config.onRecoveryCredential,
+      keyStore: config.backupKeyStore,
+      kdfIterations: config.backupKdfIterations,
+      chunkBytes: config.backupChunkBytes,
+      checkpointInterval: config.backupCheckpointInterval,
+    });
+  };
+  let encryptedBackupPort = makeBackupPort(datasetId);
+  let backupStatus = {
+    label: "备份：检查中",
+    detail: "正在检查本地数据与云端备份状态。",
+  };
+
+  let initialSnapshot = await repository.createConsistentSnapshot(datasetId);
+  const hasLocalData = initialSnapshot.threads.length > 0 || initialSnapshot.messages.length > 0 || initialSnapshot.dirtySequence > 0;
+  if (!hasLocalData) {
+    if (typeof encryptedBackupPort.listBackups !== "function") {
+      throw new Error("新设备首次打开必须支持查询云端备份清单，不能在未知远端状态下直接创建新数据。");
+    }
+    const remoteBackups = await encryptedBackupPort.listBackups();
+    if (remoteBackups.length) {
+      const shouldRestore = typeof config.confirmRestore === "function"
+        ? await config.confirmRestore({ datasetId, backups: remoteBackups })
+        : window.confirm("检测到该数据集已有 " + remoteBackups.length + " 份云端备份。是否恢复阅读记录和认知数据？");
+      if (shouldRestore) {
+        const recoveryCredential = typeof config.getRecoveryCredential === "function"
+          ? await config.getRecoveryCredential()
+          : window.prompt("请输入独立恢复凭证。该凭证只用于本地解密，不会发送给服务器。");
+        if (!recoveryCredential) throw new Error("恢复已取消；为避免误建空数据，暂不打开此数据集。");
+        if (typeof encryptedBackupPort.restoreToRepository !== "function") {
+          throw new Error("当前备份端口不支持将备份恢复到本地 Repository。");
+        }
+        await encryptedBackupPort.restoreToRepository(repository, recoveryCredential);
+        initialSnapshot = await repository.createConsistentSnapshot(datasetId);
+        backupStatus = { label: "备份：已恢复", detail: "已从云端备份恢复本地数据和设备密钥。" };
+      } else {
+        if (typeof config.createNewDataSet !== "function") {
+          throw new Error("已选择不恢复。要开始全新数据集，宿主必须先创建新的数据集 ID；不会覆盖原有云端备份。");
+        }
+        const newDatasetId = required(await config.createNewDataSet({ previousDatasetId: datasetId }), "createNewDataSet result");
+        if (newDatasetId === datasetId) throw new Error("全新数据集必须使用新的 datasetId。");
+        datasetId = newDatasetId;
+        encryptedBackupPort = makeBackupPort(datasetId);
+        initialSnapshot = await repository.createConsistentSnapshot(datasetId);
+      }
+    }
+  }
 
   let thread;
   let readingPosition = null;
@@ -268,21 +321,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     return results;
   }
 
-  let backupStatus = {
-    label: "备份：未配置",
-    detail: "本地数据已保存在浏览器 OPFS。云端加密备份尚未配置；没有上传明文数据。",
-  };
   const snapshot = await repository.createConsistentSnapshot(datasetId);
-  const encryptedBackupPort = config.encryptedBackupPort || createHttpEncryptedBackupPort({
-    baseUrl: config.apiBaseUrl,
-    datasetId,
-    getAccessToken,
-    onRecoveryCredential: config.onRecoveryCredential,
-    keyStore: config.backupKeyStore,
-    kdfIterations: config.backupKdfIterations,
-    chunkBytes: config.backupChunkBytes,
-    checkpointInterval: config.backupCheckpointInterval,
-  });
   if (encryptedBackupPort && typeof encryptedBackupPort.uploadSnapshot === "function") {
     try {
       const receipt = await encryptedBackupPort.uploadSnapshot(snapshot);
@@ -291,7 +330,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       }
       const backedUpAt = new Date().toISOString();
       await repository.acknowledgeBackup(datasetId, snapshot.dirtySequence, receipt.backupId, backedUpAt);
-      backupStatus = { label: "备份：已完成", detail: "启动前快照已由外部加密备份端确认。" };
+      backupStatus = { label: "备份：已完成", detail: "启动前快照已由远端加密备份端确认。" };
     } catch (error) {
       backupStatus = { label: "备份：失败", detail: "启动前加密备份失败，数据仍保留在本地，未确认备份序号：" + error.message };
     }
