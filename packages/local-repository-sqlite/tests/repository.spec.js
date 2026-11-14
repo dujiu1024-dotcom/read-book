@@ -195,7 +195,7 @@ test("message source references cannot cross immutable BookRevision boundaries",
 });
 
 
-test("schema v2 migration preserves a legacy v1 dataset and advances its schema marker", async ({ page }) => {
+test("schema v1 to v5 migration preserves legacy dataset cursors and creates candidate storage", async ({ page }) => {
   await page.goto("/");
   const seeded = await page.evaluate(async () => {
     const worker = new Worker("/tests/legacy-db.worker.js", { type: "module" });
@@ -211,13 +211,16 @@ test("schema v2 migration preserves a legacy v1 dataset and advances its schema 
     const { SqliteOpfsRepository } = await import("/src/index.ts");
     const repository = new SqliteOpfsRepository();
     const dataset = await repository.getDataSet("legacy-v1-dataset");
+    // Querying the v5 table verifies the final migration created it, not only the version marker.
+    const candidates = await repository.getMemoryCandidates("legacy-v1-dataset", "no-thread-yet");
     await repository.close();
-    return dataset;
+    return { dataset, candidates };
   });
-  expect(migrated.id).toBe("legacy-v1-dataset");
-  expect(migrated.schemaVersion).toBe(5);
-  expect(migrated.dirtySequence).toBe(7);
-  expect(migrated.lastAckedSequence).toBe(2);
+  expect(migrated.dataset.id).toBe("legacy-v1-dataset");
+  expect(migrated.dataset.schemaVersion).toBe(5);
+  expect(migrated.dataset.dirtySequence).toBe(7);
+  expect(migrated.dataset.lastAckedSequence).toBe(2);
+  expect(migrated.candidates).toEqual([]);
 });
 
 test("MemoryRelation persists only when both versions and source provenance belong to the dataset", async ({ page }) => {
@@ -289,7 +292,7 @@ test("SQLite Worker maps quota, integrity and migration failures to typed Reposi
   await page.goto("/");
   const result = await page.evaluate(async () => {
     const { mapWorkerError } = await import("/src/index.ts");
-    return ["QUOTA_EXCEEDED", "INTEGRITY_FAILED", "MIGRATION_FAILED", "UNKNOWN"].map((code) => {
+    return ["QUOTA_EXCEEDED", "INTEGRITY_FAILED", "MIGRATION_FAILED", "WRITER_LOCK_UNAVAILABLE", "UNKNOWN"].map((code) => {
       const error = mapWorkerError({ code, message: "simulated storage failure" });
       return { name: error.name, code: error.code ?? null, message: error.message };
     });
@@ -297,7 +300,8 @@ test("SQLite Worker maps quota, integrity and migration failures to typed Reposi
   expect(result[0]).toMatchObject({ name: "RepositoryError", code: "QUOTA_EXCEEDED" });
   expect(result[1]).toMatchObject({ name: "RepositoryError", code: "INTEGRITY_FAILED" });
   expect(result[2]).toMatchObject({ name: "RepositoryError", code: "MIGRATION_FAILED" });
-  expect(result[3]).toMatchObject({ name: "Error", code: null });
+  expect(result[3]).toMatchObject({ name: "RepositoryError", code: "WRITER_LOCK_UNAVAILABLE" });
+  expect(result[4]).toMatchObject({ name: "Error", code: null });
 });
 
 
@@ -512,4 +516,116 @@ test("SQLite OPFS persists CitationRecord with the completed Assistant message",
   expect(result.message.sourceReferences).toHaveLength(1);
   expect(result.citation.messageId).toBe("99999999-9999-4999-8999-999999999999");
   expect(result.citation.excerpt).toBe("原文片段");
+});
+
+
+
+test("snapshot restore uses the same dataset writer lock and fails closed when another writer owns it", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    const datasetId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const outcome = await navigator.locks.request(
+      "read-book-dataset:" + datasetId,
+      { mode: "exclusive" },
+      async () => {
+        try {
+          await repository.restoreSnapshot(datasetId, {
+            datasetId,
+            schemaVersion: 5,
+            dirtySequence: 1,
+            threads: [],
+            messages: [],
+            readingRounds: [],
+            readingPositions: [],
+            citations: [],
+            notes: [],
+            memories: [],
+            memoryVersions: [],
+            memoryRelations: [],
+            memoryCandidates: [],
+            generationDeliveries: [],
+          }, "backup-locked", "2026-11-14T03:00:00.000Z");
+          return { rejected: false, name: null, code: null };
+        } catch (error) {
+          return { rejected: true, name: error.name, code: error.code ?? null };
+        }
+      },
+    );
+    const dataset = await repository.getDataSet(datasetId);
+    await repository.close();
+    return { ...outcome, dataset };
+  });
+  expect(result.rejected).toBe(true);
+  expect(result.name).toBe("RepositoryError");
+  expect(result.code).toBe("WRITER_LOCK_UNAVAILABLE");
+  expect(result.dataset).toBeNull();
+});
+
+
+test("Note writes cannot cross Thread or dataset boundaries or overwrite an older revision", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    const datasetA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const datasetB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const threadA = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const threadB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    const revisionA = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const revisionB = "77777777-7777-4777-8777-777777777777";
+    const noteId = "note-boundary-1";
+    await repository.transaction(datasetA, async (tx) => {
+      await tx.createThread({ id: threadA, datasetId: datasetA, bookRevisionId: revisionA, createdAt: "2026-11-14T00:00:00.000Z" });
+      await tx.createThread({ id: threadB, datasetId: datasetA, bookRevisionId: revisionB, createdAt: "2026-11-14T00:00:01.000Z" });
+      await tx.createReadingRound({
+        id: "round-thread-b", threadId: threadB, roundNumber: 1, status: "active",
+        startedAt: "2026-11-14T00:00:02.000Z",
+      });
+    });
+    let crossThreadRoundRejected = false;
+    try {
+      await repository.transaction(datasetA, (tx) => tx.saveNote({
+        id: noteId, datasetId: datasetA, threadId: threadA, readingRoundId: "round-thread-b",
+        content: "错误关联", sourceMessageIds: [], sourceReferences: [],
+        createdAt: "2026-11-14T00:00:03.000Z", updatedAt: "2026-11-14T00:00:03.000Z", revision: 1,
+      }));
+    } catch { crossThreadRoundRejected = true; }
+    await repository.transaction(datasetA, (tx) => tx.saveNote({
+      id: noteId, datasetId: datasetA, threadId: threadA, readingRoundId: null,
+      content: "原始笔记", sourceMessageIds: [], sourceReferences: [],
+      createdAt: "2026-11-14T00:00:04.000Z", updatedAt: "2026-11-14T00:00:04.000Z", revision: 1,
+    }));
+    await repository.transaction(datasetB, (tx) => tx.createThread({
+      id: "thread-dataset-b", datasetId: datasetB, bookRevisionId: revisionA, createdAt: "2026-11-14T00:00:05.000Z",
+    }));
+    let crossDatasetIdRejected = false;
+    try {
+      await repository.transaction(datasetB, (tx) => tx.saveNote({
+        id: noteId, datasetId: datasetB, threadId: "thread-dataset-b", readingRoundId: null,
+        content: "跨数据集覆盖", sourceMessageIds: [], sourceReferences: [],
+        createdAt: "2026-11-14T00:00:06.000Z", updatedAt: "2026-11-14T00:00:06.000Z", revision: 1,
+      }));
+    } catch { crossDatasetIdRejected = true; }
+    let staleRevisionRejected = false;
+    try {
+      await repository.transaction(datasetA, (tx) => tx.saveNote({
+        id: noteId, datasetId: datasetA, threadId: threadA, readingRoundId: null,
+        content: "旧版本覆盖", sourceMessageIds: [], sourceReferences: [],
+        createdAt: "2026-11-14T00:00:07.000Z", updatedAt: "2026-11-14T00:00:07.000Z", revision: 1,
+      }));
+    } catch { staleRevisionRejected = true; }
+    const snapshot = await repository.createConsistentSnapshot(datasetA);
+    await repository.close();
+    return {
+      crossThreadRoundRejected, crossDatasetIdRejected, staleRevisionRejected,
+      savedNote: snapshot.notes.find((note) => note.id === noteId),
+    };
+  });
+  expect(result.crossThreadRoundRejected).toBe(true);
+  expect(result.crossDatasetIdRejected).toBe(true);
+  expect(result.staleRevisionRejected).toBe(true);
+  expect(result.savedNote.content).toBe("原始笔记");
+  expect(result.savedNote.revision).toBe(1);
 });

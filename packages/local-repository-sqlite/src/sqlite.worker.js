@@ -227,7 +227,6 @@ async function initialize() {
       throw new Error("数据库 Schema v4 迁移失败，已回滚", { cause: error });
     }
   }
-}
   if (storedVersion < 5) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -238,6 +237,29 @@ async function initialize() {
       throw new Error("数据库 Schema v5 迁移失败，已回滚", { cause: error });
     }
   }
+  assertDatabaseIntegrity();
+}
+
+function assertDatabaseIntegrity() {
+  try {
+    const quickCheck = first("PRAGMA quick_check");
+    const result = quickCheck ? Object.values(quickCheck)[0] : null;
+    if (result !== "ok") {
+      throw new Error("database integrity check failed: " + String(result ?? "no result"));
+    }
+    const foreignKeyFailures = execute("PRAGMA foreign_key_check");
+    if (foreignKeyFailures.length) {
+      throw new Error("database integrity check failed: foreign key violations detected");
+    }
+  } catch (error) {
+    const message = error?.message || String(error);
+    if (/integrity check failed|SQLITE_CORRUPT|SQLITE_NOTADB|malformed|not a database/i.test(message)) {
+      throw new Error("数据库完整性检查失败，已阻止读写；请保留本地数据并进入恢复流程", { cause: error });
+    }
+    throw error;
+  }
+}
+
 function assertDataset(datasetId) {
   if (!activeDatasetId || datasetId !== activeDatasetId) throw new Error("事务 datasetId 不匹配");
 }
@@ -347,8 +369,25 @@ function txOperation(datasetId, operation, input) {
     }
     case "saveNote": {
       const n=input.note;
+      if (!n || n.datasetId !== datasetId || typeof n.id !== "string" || !n.id.trim() ||
+          typeof n.threadId !== "string" || !n.threadId.trim() ||
+          typeof n.content !== "string" || !n.content.trim() ||
+          !Number.isSafeInteger(n.revision) || n.revision < 1 ||
+          !Number.isFinite(Date.parse(n.createdAt)) || !Number.isFinite(Date.parse(n.updatedAt)) ||
+          !Array.isArray(n.sourceMessageIds) || !Array.isArray(n.sourceReferences)) {
+        throw new Error("Note 字段或数据集归属非法");
+      }
       if (!first("SELECT id FROM thread WHERE id=? AND dataset_id=?", [n.threadId,datasetId])) throw new Error("Note Thread 不属于当前数据集");
-      if (n.readingRoundId && !first("SELECT id FROM reading_round WHERE id=? AND dataset_id=?", [n.readingRoundId,datasetId])) throw new Error("Note ReadingRound 不属于当前数据集");
+      if (n.readingRoundId && !first("SELECT id FROM reading_round WHERE id=? AND dataset_id=? AND thread_id=?", [n.readingRoundId,datasetId,n.threadId])) {
+        throw new Error("Note ReadingRound 必须属于同一数据集和 Thread");
+      }
+      const existingNote = first("SELECT dataset_id,thread_id,revision FROM note WHERE id=?", [n.id]);
+      if (existingNote && (existingNote.dataset_id !== datasetId || existingNote.thread_id !== n.threadId)) {
+        throw new Error("Note ID 已属于其他数据集或 Thread");
+      }
+      if (existingNote && n.revision <= existingNote.revision) {
+        throw new Error("Note revision 必须严格递增");
+      }
       const noteThread = assertSourceReferences(datasetId,n.threadId,n.sourceReferences);
       for (const messageId of n.sourceMessageIds || []) {
         const source = first("SELECT thread_id FROM message WHERE id=? AND dataset_id=?", [messageId,datasetId]);
@@ -583,7 +622,7 @@ function txOperation(datasetId, operation, input) {
 function classifyRepositoryError(error) {
   const message = error?.message || String(error);
   if (/SQLITE_FULL|database or disk is full|quota.*exceed|exceed.*quota|storage quota|no space left/i.test(message)) return "QUOTA_EXCEEDED";
-  if (/SQLITE_CORRUPT|SQLITE_NOTADB|database disk image is malformed|file is not a database/i.test(message)) return "INTEGRITY_FAILED";
+  if (/SQLITE_CORRUPT|SQLITE_NOTADB|database disk image is malformed|file is not a database|integrity check failed|完整性检查失败/i.test(message)) return "INTEGRITY_FAILED";
   if (/Schema v\d+ 迁移失败|数据库版本高于当前客户端/i.test(message)) return "MIGRATION_FAILED";
   return null;
 }

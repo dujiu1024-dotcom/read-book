@@ -78,11 +78,25 @@ export class SqliteOpfsRepository implements LocalRepository {
 
   private async ensureReady(): Promise<void> { await this.initialize(); }
 
+  private async withDatasetWriteLock<T>(datasetId: string, operation: () => Promise<T>): Promise<T> {
+    if (!navigator.locks?.request) {
+      throw new RepositoryError("WRITER_LOCK_UNAVAILABLE", "Web Locks 不可用，已阻止写入。");
+    }
+    return navigator.locks.request(
+      "read-book-dataset:" + datasetId,
+      { mode: "exclusive", ifAvailable: true },
+      async (lock) => {
+        if (!lock) {
+          throw new RepositoryError("WRITER_LOCK_UNAVAILABLE", "当前标签页未获得数据集写锁，已阻止写入。");
+        }
+        return operation();
+      },
+    );
+  }
+
   async transaction<T>(datasetId: string, operation: (tx: LocalRepositoryTransaction) => Promise<T>): Promise<T> {
     await this.ensureReady();
-    if (!navigator.locks?.request) throw new Error("Web Locks 不可用，已阻止写入并降级只读");
-    return navigator.locks.request("read-book-dataset:" + datasetId, { mode: "exclusive", ifAvailable: true }, async (lock) => {
-      if (!lock) throw new Error("当前标签页未获得数据集写锁，已阻止写入");
+    return this.withDatasetWriteLock(datasetId, async () => {
       await this.request("begin", { datasetId });
       const call = <R>(name: string, input: Record<string, unknown> = {}) =>
         this.request<R>("tx", { datasetId, operation: name, input });
@@ -122,14 +136,15 @@ export class SqliteOpfsRepository implements LocalRepository {
       }
     });
   }
-
   async createConsistentSnapshot(datasetId: string): Promise<RepositorySnapshot> {
     return this.transaction(datasetId, (tx) => tx.createConsistentSnapshot());
   }
 
   async restoreSnapshot(datasetId: string, snapshot: RepositorySnapshot, backupId: string, restoredAt: string): Promise<void> {
     await this.ensureReady();
-    await this.request("restoreSnapshot", { datasetId, snapshot, backupId, restoredAt });
+    await this.withDatasetWriteLock(datasetId, () =>
+      this.request("restoreSnapshot", { datasetId, snapshot, backupId, restoredAt }),
+    );
   }
 
   async acknowledgeBackup(datasetId: string, snapshotSequence: number, backupId: string, backedUpAt: string): Promise<void> {
