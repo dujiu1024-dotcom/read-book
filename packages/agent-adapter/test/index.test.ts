@@ -450,6 +450,81 @@ test("generation turn persists only service-verified citations for its current s
 });
 
 
+test("accepts citations from multiple explicitly supplied source nodes and rejects unprovided nodes", () => {
+  const secondNode = "55555555-5555-4555-8555-555555555555";
+  const multiRequest: GenerationRequest = {
+    ...request,
+    context: {
+      ...request.context,
+      additional_sources: [{
+        structure_node_id: secondNode,
+        locator: "chapter-2:unit-4",
+        excerpt: "另一个章节中的可核验原文。",
+      }],
+    },
+  };
+  assert.doesNotThrow(() => validateGenerationRequest(multiRequest));
+  const result = {
+    content: "综合两个章节的回答",
+    citations: [
+      {
+        book_revision_id: request.book_revision_id,
+        structure_node_id: request.context.current_source.structure_node_id,
+        locator: request.context.current_source.locator,
+        excerpt: "当前原文片段",
+      },
+      {
+        book_revision_id: request.book_revision_id,
+        structure_node_id: secondNode,
+        locator: "chapter-2:unit-4",
+        excerpt: "另一个章节中的可核验原文",
+      },
+      {
+        book_revision_id: request.book_revision_id,
+        structure_node_id: "66666666-6666-4666-8666-666666666666",
+        locator: "not-in-request",
+        excerpt: "伪造来源",
+      },
+    ],
+  };
+  assert.deepEqual(verifiedGenerationSourceReferences(result, multiRequest), [
+    {
+      bookRevisionId: request.book_revision_id,
+      structureNodeId: request.context.current_source.structure_node_id,
+      locator: request.context.current_source.locator,
+    },
+    {
+      bookRevisionId: request.book_revision_id,
+      structureNodeId: secondNode,
+      locator: "chapter-2:unit-4",
+    },
+  ]);
+  const records = verifiedGenerationCitationRecords(
+    result, multiRequest, "assistant-multi-source", request.thread_id, "2026-11-14T00:00:00.000Z",
+  );
+  assert.equal(records.length, 2);
+  assert.deepEqual(records.map((item) => item.structureNodeId), [
+    request.context.current_source.structure_node_id,
+    secondNode,
+  ]);
+  assert.throws(() => validateGenerationRequest({
+    ...multiRequest,
+    context: { ...multiRequest.context, additional_sources: Array.from({ length: 8 }, (_, index) => ({
+      structure_node_id: "77777777-7777-4777-8777-" + String(index).padStart(12, "0"),
+      locator: "locator-" + index,
+      excerpt: "原文",
+    })) },
+  }), GenerationProtocolError);
+  assert.throws(() => validateGenerationRequest({
+    ...multiRequest,
+    context: { ...multiRequest.context, additional_sources: [{
+      structure_node_id: request.context.current_source.structure_node_id,
+      locator: request.context.current_source.locator,
+      excerpt: "重复来源",
+    }] },
+  }), GenerationProtocolError);
+});
+
 test("citation records require a quoted excerpt found in the current source text", () => {
   const result = {
     content: "回答",

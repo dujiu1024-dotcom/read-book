@@ -719,6 +719,18 @@ components:
                 structure_node_id: { type: string, format: uuid }
                 locator: { type: string, minLength: 1, maxLength: 512 }
                 excerpt: { type: string, maxLength: 30000 }
+            additional_sources:
+              type: array
+              maxItems: 7
+              description: 当前原文之外、由客户端明确提供的同版本书籍原文证据；服务端只能引用这些来源或 current_source。
+              items:
+                type: object
+                additionalProperties: false
+                required: [structure_node_id, locator, excerpt]
+                properties:
+                  structure_node_id: { type: string, format: uuid }
+                  locator: { type: string, minLength: 1, maxLength: 512 }
+                  excerpt: { type: string, maxLength: 30000 }
             recent_messages:
               type: array
               maxItems: 30

@@ -15,6 +15,7 @@ export interface GenerationRequest {
   user_message: { local_message_id: string; content: string };
   context: {
     current_source: { structure_node_id: string; locator: string; excerpt: string };
+    additional_sources?: Array<{ structure_node_id: string; locator: string; excerpt: string }>;
     recent_messages: Array<{ role: "user" | "assistant"; content: string }>;
     relevant_memory?: Array<Record<string, unknown>>;
     response_preferences?: { language?: string };
@@ -147,6 +148,30 @@ export function validateGenerationRequest(value: GenerationRequest): void {
   if (typeof value.context.current_source.excerpt !== "string" || value.context.current_source.excerpt.length > 30_000) {
     throw new GenerationProtocolError("context.current_source.excerpt must be a string up to 30000 characters.");
   }
+  if (value.context.additional_sources !== undefined) {
+    if (!Array.isArray(value.context.additional_sources) || value.context.additional_sources.length > 7) {
+      throw new GenerationProtocolError("context.additional_sources must contain at most 7 source nodes.");
+    }
+    const seen = new Set([
+      value.context.current_source.structure_node_id + ":" + value.context.current_source.locator,
+    ]);
+    let sourceCharacters = value.context.current_source.excerpt.length;
+    for (const [index, source] of value.context.additional_sources.entries()) {
+      if (!source || typeof source !== "object" || Array.isArray(source)) {
+        throw new GenerationProtocolError("Every additional_sources item must be an object.");
+      }
+      requiredUuid(source.structure_node_id, `context.additional_sources[${index}].structure_node_id`);
+      boundedString(source.locator, `context.additional_sources[${index}].locator`, 1, 512);
+      if (typeof source.excerpt !== "string" || source.excerpt.length > 30_000) {
+        throw new GenerationProtocolError("Each additional source excerpt must be a string up to 30000 characters.");
+      }
+      const key = source.structure_node_id + ":" + source.locator;
+      if (seen.has(key)) throw new GenerationProtocolError("context.additional_sources contains a duplicate source node.");
+      seen.add(key);
+      sourceCharacters += source.excerpt.length;
+    }
+    if (sourceCharacters > 120_000) throw new GenerationProtocolError("Total source context exceeds 120000 characters.");
+  }
   if (!Array.isArray(value.context.recent_messages) || value.context.recent_messages.length > 30) {
     throw new GenerationProtocolError("context.recent_messages must contain at most 30 messages.");
   }
@@ -240,24 +265,43 @@ export function validateGenerationSnapshot(value: unknown): GenerationSnapshot {
   };
 }
 
+function generationSourceMap(request: GenerationRequest): Map<string, { bookRevisionId: string; structureNodeId: string; locator: string; excerpt: string }> {
+  const sources = [request.context.current_source, ...(request.context.additional_sources || [])];
+  return new Map(sources.map((source) => [
+    source.structure_node_id + ":" + source.locator,
+    {
+      bookRevisionId: request.book_revision_id,
+      structureNodeId: source.structure_node_id,
+      locator: source.locator,
+      excerpt: source.excerpt.replace(/\s+/g, " ").trim(),
+    },
+  ]));
+}
+
+function citationMatchesSource(
+  citation: GenerationCitation,
+  source: { bookRevisionId: string; structureNodeId: string; locator: string; excerpt: string } | undefined,
+): boolean {
+  if (!source || citation.book_revision_id !== source.bookRevisionId ||
+      citation.structure_node_id !== source.structureNodeId || citation.locator !== source.locator ||
+      !citation.excerpt?.trim()) return false;
+  return source.excerpt.includes(citation.excerpt.replace(/\s+/g, " ").trim());
+}
+
 export function verifiedGenerationSourceReferences(
   result: GenerationResult,
   request: GenerationRequest,
 ): Array<{ bookRevisionId: string; structureNodeId: string; locator: string }> {
-  const expectedRevision = request.book_revision_id;
-  const expectedNode = request.context.current_source.structure_node_id;
-  const sourceText = request.context.current_source.excerpt.replace(/\s+/g, " ").trim();
+  const sources = generationSourceMap(request);
   const references = new Map<string, { bookRevisionId: string; structureNodeId: string; locator: string }>();
   for (const citation of result.citations || []) {
-    if (citation.book_revision_id !== expectedRevision || citation.structure_node_id !== expectedNode || citation.locator !== request.context.current_source.locator) continue;
-    if (!citation.excerpt?.trim()) continue;
-    const excerpt = citation.excerpt.replace(/\s+/g, " ").trim();
-    if (!sourceText.includes(excerpt)) continue;
-    const key = citation.book_revision_id + ":" + citation.structure_node_id + ":" + citation.locator;
+    const key = citation.structure_node_id + ":" + citation.locator;
+    const source = sources.get(key);
+    if (!citationMatchesSource(citation, source)) continue;
     references.set(key, {
-      bookRevisionId: citation.book_revision_id,
-      structureNodeId: citation.structure_node_id,
-      locator: citation.locator,
+      bookRevisionId: source!.bookRevisionId,
+      structureNodeId: source!.structureNodeId,
+      locator: source!.locator,
     });
   }
   return [...references.values()];
@@ -280,16 +324,12 @@ export function verifiedGenerationCitationRecords(
   excerptHash: string | null;
   createdAt: string;
 }> {
+  const sources = generationSourceMap(request);
   const references = verifiedGenerationSourceReferences(result, request);
-  const sourceText = request.context.current_source.excerpt.replace(/\s+/g, " ").trim();
   return references.flatMap((reference) => {
-    const citation = (result.citations || []).find((item) =>
-      item.book_revision_id === reference.bookRevisionId &&
-      item.structure_node_id === reference.structureNodeId &&
-      item.locator === reference.locator &&
-      Boolean(item.excerpt?.trim()) &&
-      sourceText.includes(item.excerpt.replace(/\s+/g, " ").trim())
-    );
+    const key = reference.structureNodeId + ":" + reference.locator;
+    const source = sources.get(key);
+    const citation = (result.citations || []).find((item) => citationMatchesSource(item, source));
     if (!citation?.excerpt) return [];
     return [{
       id: crypto.randomUUID(),
