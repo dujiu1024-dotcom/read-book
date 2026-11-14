@@ -40,7 +40,7 @@ export function mapWorkerError(payload: { message: string; code?: string }): Err
 
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
-  readonly schemaVersion = 5;
+  readonly schemaVersion = 6;
   private worker: Worker;
   private nextId = 0;
   private pending = new Map<number, Pending>();
@@ -95,6 +95,9 @@ export class SqliteOpfsRepository implements LocalRepository {
         transitionAssistantMessage: (messageId: string, status: AssistantMessageStatus, content?: string) =>
           call("transitionAssistantMessage", { messageId, status, content }),
         createReadingRound: (round: ReadingRoundRecord) => call("createReadingRound", { round }),
+        updateReadingRound: (roundId, status, completedAt) => call("updateReadingRound", { roundId, status, completedAt }),
+        createPresentedSource: (source: PresentedSource) => call("createPresentedSource", { source }),
+        saveReadingUnitProgress: (progress: ReadingUnitProgress) => call("saveReadingUnitProgress", { progress }),
         saveReadingPosition: (position: ReadingPositionRecord) => call("saveReadingPosition", { position }),
         saveCitation: (citation: CitationRecord) => call("saveCitation", { citation }),
         saveNote: (note: NoteRecord) => call("saveNote", { note }),
@@ -143,6 +146,10 @@ export class SqliteOpfsRepository implements LocalRepository {
   async getMessages(datasetId: string, threadId: string, afterSequence = 0): Promise<PersistedMessage[]> {
     await this.ensureReady();
     return this.request("getMessages", { datasetId, threadId, afterSequence });
+  }
+  async getReadingUnitProgress(datasetId: string, readingRoundId: string): Promise<ReadingUnitProgress[]> {
+    await this.ensureReady();
+    return this.request("getReadingUnitProgress", { datasetId, readingRoundId });
   }
   async getGenerationDelivery(datasetId: string, clientGenerationId: string): Promise<GenerationDeliveryRecord | null> {
     await this.ensureReady();
