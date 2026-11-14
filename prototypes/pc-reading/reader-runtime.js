@@ -21,6 +21,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   let datasetId = required(config.localDataSetId, "READ_BOOK_CONFIG.localDataSetId");
   const getAccessToken = config.getAccessToken || window.READ_BOOK_AUTH?.getAccessToken;
   if (typeof getAccessToken !== "function") throw new Error("缺少登录令牌提供器。");
+  const apiBaseUrl = required(config.apiBaseUrl || config.generationApiBaseUrl, "READ_BOOK_CONFIG.apiBaseUrl");
 
   const repository = new SqliteOpfsRepository();
   await repository.initialize();
@@ -81,6 +82,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
 
   let thread;
   let readingPosition = null;
+  let readingRound = null;
   await repository.transaction(datasetId, async (tx) => {
     thread = await tx.getThreadByRevision(bookRevision.bookRevisionId);
     if (!thread) {
@@ -92,7 +94,42 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       });
     }
     const snapshot = await tx.createConsistentSnapshot();
-    readingPosition = snapshot.readingPositions.find((item) => item.threadId === thread.id) || null;
+    const rounds = snapshot.readingRounds.filter((item) => item.threadId === thread.id).sort((a, b) => a.roundNumber - b.roundNumber);
+    const activeRound = rounds.find((item) => item.status === "active");
+    const latestRound = rounds.at(-1) || null;
+    if (activeRound) readingRound = activeRound;
+    else if (latestRound?.status === "completed") readingRound = latestRound;
+    else {
+      readingRound = {
+        id: uuid(),
+        threadId: thread.id,
+        roundNumber: (latestRound?.roundNumber || 0) + 1,
+        status: "active",
+        startedAt: new Date().toISOString(),
+        completedAt: null,
+      };
+      await tx.createReadingRound(readingRound);
+    }
+    if (readingRound.status === "active") {
+      const progressByNode = new Map(snapshot.readingUnitProgress
+        .filter((item) => item.readingRoundId === readingRound.id)
+        .map((item) => [item.structureNodeId, item]));
+      for (const unit of bookRevision.units) {
+        if (!progressByNode.has(unit.id)) {
+          await tx.saveReadingUnitProgress({
+            readingRoundId: readingRound.id,
+            structureNodeId: unit.id,
+            status: "not_presented",
+            firstPresentedSourceId: null,
+            lastActivityMessageId: null,
+            completedAt: null,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+    }
+    const currentSnapshot = await tx.createConsistentSnapshot();
+    readingPosition = currentSnapshot.readingPositions.find((item) => item.threadId === thread.id) || null;
     if (!readingPosition) {
       readingPosition = {
         threadId: thread.id,
