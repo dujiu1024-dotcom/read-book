@@ -49,7 +49,7 @@ export interface LocalDataSet {
 
 export interface AccountDataSetBinding {
   id: string;
-  accountId: string;
+  accountId: string | null;
   localDataSetId: string;
   status: "active" | "inactive" | "revoked";
   boundAt: string;
