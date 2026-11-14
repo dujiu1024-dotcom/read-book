@@ -344,7 +344,8 @@ export interface GenerationTurnRepository {
     transitionAssistantMessage(messageId: string, status: "completed" | "failed" | "cancelled", content?: string): Promise<unknown>;
     saveGenerationDelivery(delivery: { clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }): Promise<unknown>;
   }) => Promise<T>): Promise<T>;
-  getGenerationDelivery(clientGenerationId: string): Promise<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string } | null>;  listPendingGenerationDeliveries(): Promise<Array<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }>>;
+  getGenerationDelivery(clientGenerationId: string): Promise<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string } | null>;
+  listPendingGenerationDeliveries(): Promise<Array<{ clientGenerationId: string; generationId: string | null; threadId: string; userMessageId: string; assistantMessageId: string; idempotencyKey: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" | "expired"; lastSequence: number; lastEventId: string | null; expiresAt: string | null; updatedAt: string }>>;
 }
 
 export interface GenerationTurnInput {
@@ -377,6 +378,20 @@ export async function runGenerationTurn(
   if (input.userMessage.threadId !== input.request.thread_id || input.userMessage.id !== input.request.user_message.local_message_id) {
     throw new GenerationProtocolError("Conversation turn message does not match generation request.");
   }
+  // Repeated submit must reuse the durable delivery instead of appending a second pair of messages.
+  const existing = await repository.getGenerationDelivery(input.request.client_generation_id);
+  if (existing) {
+    if (existing.idempotencyKey !== input.idempotencyKey || existing.userMessageId !== input.userMessage.id || existing.assistantMessageId !== input.assistantMessageId || existing.threadId !== input.userMessage.threadId) {
+      throw new GenerationProtocolError("A generation delivery already exists with different message or idempotency identity.");
+    }
+    if (existing.status === "queued" || existing.status === "running") {
+      return recoverGenerationTurn(repository, client, { datasetId: input.datasetId, clientGenerationId: input.request.client_generation_id, request: input.request, signal: input.signal, now: input.now, onDelta: input.onDelta, onStatus: input.onStatus });
+    }
+    if (!existing.generationId) throw new GenerationProtocolError("Terminal generation delivery has no server generation identity.");
+    const snapshot = await client.get(existing.generationId);
+    const accepted: GenerationAccepted = { generation_id: existing.generationId, status: "running", expires_at: existing.expiresAt ?? snapshot.expires_at };
+    return { accepted, snapshot, assistantMessageId: existing.assistantMessageId, lastCursor: { generationId: existing.generationId, lastSequence: existing.lastSequence, lastEventId: existing.lastEventId } };
+  }
   await repository.transaction(input.datasetId, async (tx) => {
     await tx.appendUserMessage({ ...input.userMessage, createdAt: now(), sourceReferences: input.sourceReferences, idempotencyKey: input.idempotencyKey });
     await tx.appendAssistantMessage({ id: input.assistantMessageId, threadId: input.userMessage.threadId, content: "", status: "generating", createdAt: now(), sourceReferences: [], idempotencyKey: input.idempotencyKey + ":assistant" });
@@ -386,10 +401,8 @@ export async function runGenerationTurn(
   try {
     accepted = await client.create(input.request, input.idempotencyKey);
   } catch (error) {
-    await repository.transaction(input.datasetId, async (tx) => {
-      await tx.transitionAssistantMessage(input.assistantMessageId, "failed");
-      await tx.saveGenerationDelivery({ clientGenerationId: input.request.client_generation_id, generationId: null, threadId: input.userMessage.threadId, userMessageId: input.userMessage.id, assistantMessageId: input.assistantMessageId, idempotencyKey: input.idempotencyKey, status: "failed", lastSequence: 0, lastEventId: null, expiresAt: null, updatedAt: now() });
-    });
+    // The request may have reached the server even if the response was lost. Keep the queued receipt
+    // and retry create with the same idempotency key during recovery; do not mark an ambiguous outcome failed.
     throw error;
   }
   // If this local write fails, leave the queued receipt intact. Recovery retries create with the same idempotency key.
@@ -410,6 +423,11 @@ export async function runGenerationTurn(
     await persistEvents;
   } catch (error) {
     streamError = error;
+  }
+  try {
+    await persistEvents;
+  } catch (error) {
+    streamError ??= error;
   }
   if (input.signal.aborted) {
     await client.cancel(accepted.generation_id, input.idempotencyKey + ":cancel").catch(() => undefined);
