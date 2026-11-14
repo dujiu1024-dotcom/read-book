@@ -74,6 +74,9 @@ async function readEntries(inputPath, limits) {
   if (stat.size > limits.maxTotalBytes) throw new Error("ZIP file exceeds maximum compressed size");
   return preflightZip(new Uint8Array(await readFile(inputPath)), limits);
 }
+function requirePrefix(value, prefix, label, issues) {
+  if (typeof value === "string" && !value.startsWith(prefix)) issues.push(issue("PACKAGE_PATH_NAMESPACE_INVALID", label + " must be under " + prefix, { artifact: value }));
+}
 function checkPackagePath(value, label, files, issues, required = true) {
   if (value === null && !required) return;
   if (!validRelativePath(value)) { issues.push(issue("PACKAGE_PATH_INVALID", label + " is not a safe relative path", { artifact: String(value) })); return; }
@@ -106,6 +109,8 @@ function validateChunks(files, filePath, chapters, issues) {
   if (!bytes) return [];
   const lines = new TextDecoder("utf-8", { fatal: true }).decode(bytes).split(/\r?\n/);
   const ids = new Set();
+  const orderKeys = new Set();
+  const chapterMap = new Map(chapters.map((chapter) => [chapter.chapter_id, chapter]));
   const chapterIds = new Set(chapters.map((chapter) => chapter.chapter_id));
   const chunks = [];
   for (let index = 0; index < lines.length; index += 1) {
@@ -116,7 +121,11 @@ function validateChunks(files, filePath, chapters, issues) {
     if (!checkSchema(validators.chunk, chunk, filePath + ":" + (index + 1), issues, "CHUNK_SCHEMA_INVALID")) continue;
     if (ids.has(chunk.chunk_id)) issues.push(issue("CHUNK_ID_DUPLICATE", "Duplicate chunk_id: " + chunk.chunk_id, { artifact: filePath, record_id: chunk.chunk_id }));
     ids.add(chunk.chunk_id);
+    const orderKey = chunk.chapter_id + ":" + chunk.order_index;
+    if (orderKeys.has(orderKey)) issues.push(issue("CHUNK_ORDER_DUPLICATE", "Duplicate chunk order_index within chapter", { artifact: filePath, record_id: chunk.chunk_id, chapter_id: chunk.chapter_id }));
+    orderKeys.add(orderKey);
     if (!chapterIds.has(chunk.chapter_id)) issues.push(issue("CHUNK_CHAPTER_MISSING", "Chunk references an unknown chapter", { artifact: filePath, record_id: chunk.chunk_id, chapter_id: chunk.chapter_id }));
+    else if (chunk.chapter_title !== chapterMap.get(chunk.chapter_id).title) issues.push(issue("CHUNK_CHAPTER_TITLE_MISMATCH", "Chunk chapter_title does not match chapters.json", { artifact: filePath, record_id: chunk.chunk_id, chapter_id: chunk.chapter_id }));
     if (sha256(Buffer.from(chunk.content, "utf8")) !== chunk.content_sha256.toLowerCase()) issues.push(issue("CHUNK_CONTENT_HASH_MISMATCH", "Chunk content hash does not match", { artifact: filePath, record_id: chunk.chunk_id, chapter_id: chunk.chapter_id }));
     chunks.push(chunk);
   }
@@ -137,6 +146,12 @@ export async function validatePackage(inputPath, options = {}) {
   for (const filePath of files.keys()) if (!allowedRoots.has(filePath.split("/")[0])) issues.push(issue("PACKAGE_ROOT_ENTRY_UNEXPECTED", "Unexpected top-level package path: " + filePath, { artifact: filePath }));
   const manifest = parseJson(files, "manifest.json", issues);
   if (!manifest || !checkSchema(validators.manifest, manifest, "manifest.json", issues, "MANIFEST_SCHEMA_INVALID")) return { status: "invalid", summary: { error_count: issues.length, warning_count: 0 }, counts: null, issues };
+  requirePrefix(manifest.source.file, "source/", "manifest.source.file", issues);
+  requirePrefix(manifest.artifacts.book, "content/", "manifest.artifacts.book", issues);
+  requirePrefix(manifest.artifacts.chapters, "content/", "manifest.artifacts.chapters", issues);
+  requirePrefix(manifest.artifacts.chunks, "content/", "manifest.artifacts.chunks", issues);
+  if (manifest.artifacts.embeddings) requirePrefix(manifest.artifacts.embeddings, "embeddings/", "manifest.artifacts.embeddings", issues);
+  if (manifest.artifacts.local_report) requirePrefix(manifest.artifacts.local_report, "validation/", "manifest.artifacts.local_report", issues);
   for (const [value, label, required] of [
     [manifest.source.file, "manifest.source.file", true], [manifest.artifacts.book, "manifest.artifacts.book", true],
     [manifest.artifacts.chapters, "manifest.artifacts.chapters", true], [manifest.artifacts.chunks, "manifest.artifacts.chunks", true],
@@ -161,6 +176,7 @@ export async function validatePackage(inputPath, options = {}) {
     const embedding = parseJson(files, manifest.artifacts.embeddings, issues);
     if (embedding && checkSchema(validators.embedding, embedding, manifest.artifacts.embeddings, issues, "EMBEDDING_SCHEMA_INVALID")) {
       checkPackagePath(embedding.vector_file, "embedding.vector_file", files, issues);
+      requirePrefix(embedding.vector_file, "embeddings/", "embedding.vector_file", issues);
       if (files.has(embedding.vector_file) && sha256(files.get(embedding.vector_file)) !== embedding.sha256.toLowerCase()) issues.push(issue("EMBEDDING_HASH_MISMATCH", "Embedding vector file hash does not match", { artifact: embedding.vector_file }));
       const chunkIds = new Set(chunks.map((chunk) => chunk.chunk_id));
       for (const chunkId of embedding.chunk_ids) if (!chunkIds.has(chunkId)) issues.push(issue("EMBEDDING_CHUNK_MISSING", "Embedding manifest references unknown chunk_id: " + chunkId, { record_id: chunkId }));
@@ -179,10 +195,24 @@ export async function validatePackage(inputPath, options = {}) {
 export function validateProcessingContract(contract) {
   const issues = [];
   if (!checkSchema(validators.processing, contract, "processing-contract.json", issues, "PROCESSING_CONTRACT_INVALID")) return issues;
+  const expectedStages = ["package_inspection","source_verification","metadata_normalization","parse","normalize","structure","chunk","embedding","index_build","quality_check","rights_review","publish"];
   const stages = new Map(contract.stages.map((stage) => [stage.stage, stage]));
+  for (const expected of expectedStages) if (!stages.has(expected)) issues.push(issue("PROCESSING_STAGE_MISSING", "Required processing stage is missing: " + expected, { artifact: "processing-contract.json" }));
   for (const stage of contract.stages) {
+    if (!stage.retry_scope.includes(stage.stage)) issues.push(issue("PROCESSING_RETRY_SCOPE_INVALID", stage.stage + " retry scope must include itself", { artifact: "processing-contract.json" }));
     for (const dependency of stage.depends_on) if (!stages.has(dependency)) issues.push(issue("PROCESSING_DEPENDENCY_UNKNOWN", stage.stage + " depends on unknown stage " + dependency, { artifact: "processing-contract.json" }));
     for (const target of stage.retry_scope) if (!stages.has(target)) issues.push(issue("PROCESSING_RETRY_SCOPE_UNKNOWN", stage.stage + " retry scope contains unknown stage " + target, { artifact: "processing-contract.json" }));
   }
+  const visiting = new Set();
+  const visited = new Set();
+  function visit(stageName) {
+    if (visiting.has(stageName)) { issues.push(issue("PROCESSING_DEPENDENCY_CYCLE", "Processing stage dependency graph contains a cycle at " + stageName, { artifact: "processing-contract.json" })); return; }
+    if (visited.has(stageName)) return;
+    visiting.add(stageName);
+    for (const dependency of stages.get(stageName)?.depends_on || []) if (stages.has(dependency)) visit(dependency);
+    visiting.delete(stageName);
+    visited.add(stageName);
+  }
+  for (const stageName of stages.keys()) visit(stageName);
   return issues;
 }
