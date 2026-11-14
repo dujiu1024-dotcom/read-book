@@ -143,7 +143,10 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
       const citedUnit = units.find(item => item.id === structureNodeId);
       label.textContent = "引用 · " + (citedUnit?.chapter || "原文来源");
       const quote = document.createElement("p");
-      quote.textContent = citedUnit ? "“" + citedUnit.text.slice(0, 55) + "……”" : "引用来源暂不可用。";
+      const citedExcerpt = typeof reference === "object" && reference.excerpt
+        ? reference.excerpt
+        : citedUnit?.text;
+      quote.textContent = citedExcerpt ? "“" + citedExcerpt.slice(0, 90) + "……”" : "引用来源暂不可用。";
       const link = document.createElement("button");
       link.type = "button";
       link.className = "text-button citation-link";
@@ -558,7 +561,13 @@ import { createLocalBookPackageProvider, importBookPackageFile } from "./local-b
         time: message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "刚刚",
         saved: message.role === "user",
         failed: message.status === "failed" || message.status === "cancelled",
-        citations: message.sourceReferences || [],
+        citations: message.citationRecords?.length
+          ? message.citationRecords.map((citation) => ({
+              structureNodeId: citation.structureNodeId,
+              locator: citation.locator,
+              excerpt: citation.excerpt,
+            }))
+          : message.sourceReferences || [],
       });
     }
   }
