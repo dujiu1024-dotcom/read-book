@@ -121,3 +121,27 @@ test("device backup key is a non-extractable HKDF CryptoKey", async () => {
   assert.equal(bundle.dataKey.algorithm.name, "HKDF");
   assert.equal(bundle.dataKey.extractable, false);
 });
+
+
+test("incremental backup preserves PresentedSource and ReadingUnitProgress", async () => {
+  const bundle = await createRecoveryBundle("dataset-1", undefined, { iterations: 100_000 });
+  const firstSnapshot = snapshot(1, "first");
+  const first = await encryptBackup(firstSnapshot, { dataKey: bundle.dataKey, keyEnvelope: bundle.keyEnvelope, chunkBytes: 1024 });
+  const nextSnapshot = snapshot(2, "second");
+  nextSnapshot.presentedSources = [{
+    id: "source-1", threadId: "thread-1", bookRevisionId: "book-1", structureNodeId: "node-1",
+    chunkId: null, presentationType: "mainline", readingRoundId: "round-1",
+    presentedAt: "2026-11-14T00:00:01.000Z", sourceLocator: { locator: "epubcfi(/6/2)" },
+  }];
+  nextSnapshot.readingUnitProgress = [{
+    readingRoundId: "round-1", structureNodeId: "node-1", status: "awaiting_user",
+    firstPresentedSourceId: "source-1", lastActivityMessageId: null,
+    completedAt: null, updatedAt: "2026-11-14T00:00:02.000Z",
+  }];
+  const second = await encryptBackup(nextSnapshot, {
+    dataKey: bundle.dataKey, keyEnvelope: bundle.keyEnvelope,
+    parentBackupId: first.manifest.backupId, previousSnapshot: firstSnapshot, chunkBytes: 1024,
+  });
+  const restored = await restoreBackupChain([first, second], bundle.recoveryCredential);
+  assert.deepEqual(restored, nextSnapshot);
+});
