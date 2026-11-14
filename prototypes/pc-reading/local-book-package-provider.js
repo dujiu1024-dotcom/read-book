@@ -106,7 +106,7 @@ function chapterPath(chapter, chaptersById) {
   return names.reverse().join(" / ") || "正文";
 }
 
-export async function parseBookPackage(input) {
+export async function parseBookPackage(input, identity = {}) {
   const archiveBytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   if (!archiveBytes.length || archiveBytes.length > MAX_ARCHIVE_BYTES) {
     throw new RangeError("书籍包为空或超过 256 MiB 限制。");
@@ -131,8 +131,11 @@ export async function parseBookPackage(input) {
   if (manifest.schema_name !== "read-book-package" || manifest.schema_version !== "1.0.0") {
     throw new Error("不支持的书籍包协议版本。");
   }
-  const revisionId = requiredText(manifest.package_id, "manifest.package_id");
-  if (!UUID.test(revisionId)) throw new Error("manifest.package_id 必须是 UUID。");
+  const packageId = requiredText(manifest.package_id, "manifest.package_id");
+  if (!UUID.test(packageId)) throw new Error("manifest.package_id 必须是 UUID。");
+  const bookId = identity.bookId || crypto.randomUUID();
+  const bookRevisionId = identity.bookRevisionId || crypto.randomUUID();
+  if (!UUID.test(bookId) || !UUID.test(bookRevisionId)) throw new Error("本地 Book/BookRevision 标识必须是 UUID。");
   const bookPath = requiredText(manifest.artifacts?.book, "manifest.artifacts.book");
   const chaptersPath = requiredText(manifest.artifacts?.chapters, "manifest.artifacts.chapters");
   const chunksPath = requiredText(manifest.artifacts?.chunks, "manifest.artifacts.chunks");
@@ -155,6 +158,7 @@ export async function parseBookPackage(input) {
   for (const chapter of chapters) {
     requiredText(chapter.chapter_id, "chapter.chapter_id");
     requiredText(chapter.title, "chapter.title");
+    if (!Number.isInteger(chapter.order_index) || chapter.order_index < 0) throw new Error("章节必须提供非负整数 order_index。");
     if (chaptersById.has(chapter.chapter_id)) throw new Error("书籍包存在重复章节 ID。");
     chaptersById.set(chapter.chapter_id, chapter);
   }
@@ -174,8 +178,17 @@ export async function parseBookPackage(input) {
     requiredText(chunk.chunk_id, `chunks[${index}].chunk_id`);
     requiredText(chunk.chapter_id, `chunks[${index}].chapter_id`);
     requiredText(chunk.content, `chunks[${index}].content`);
+    requiredText(chunk.locator_type, `chunks[${index}].locator_type`);
+    requiredText(chunk.start_locator, `chunks[${index}].start_locator`);
+    requiredText(chunk.end_locator, `chunks[${index}].end_locator`);
+    if (!Number.isInteger(chunk.order_index) || chunk.order_index < 0) throw new Error("正文切片必须提供非负整数 order_index。");
+    if (typeof chunk.content_sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(chunk.content_sha256)) throw new Error("正文切片必须提供有效 content_sha256。");
     if (!chaptersById.has(chunk.chapter_id)) throw new Error("正文切片引用了不存在的章节：" + chunk.chapter_id);
     return chunk;
+  });
+  chunks.sort((left, right) => {
+    const chapterOrder = chaptersById.get(left.chapter_id).order_index - chaptersById.get(right.chapter_id).order_index;
+    return chapterOrder || left.order_index - right.order_index;
   });
   const ids = new Set();
   const units = [];
@@ -190,7 +203,9 @@ export async function parseBookPackage(input) {
       id: chunk.chunk_id,
       chapter: chapterPath(chapter, chaptersById),
       title: chapter.title,
-      locator: chunk.start_locator || (chunk.page_number ? `第${chunk.page_number}页` : `正文单元 ${units.length + 1}`),
+      locator: chunk.start_locator,
+      endLocator: chunk.end_locator,
+      locatorType: chunk.locator_type,
       text: chunk.content,
     });
   }
@@ -198,15 +213,15 @@ export async function parseBookPackage(input) {
     throw new Error("书籍包清单中的章节或正文数量与实际内容不一致。");
   }
   return {
-    bookRevisionId: revisionId,
-    bookId: revisionId,
+    bookRevisionId,
+    bookId,
     title: book.title,
     author,
     language: book.language || "zh-CN",
     initialMainlineUnitId: units[0].id,
     units,
     packageMetadata: {
-      packageId: revisionId,
+      packageId,
       createdAt: manifest.created_at,
       sourceFormat: manifest.source.format,
       sourceSha256: manifest.source.sha256,
@@ -252,6 +267,8 @@ export async function importBookPackageFile(file, options = {}) {
   const revision = await parseBookPackage(bytes);
   await withStore("readwrite", (store) => store.put({
     bookRevisionId: revision.bookRevisionId,
+    bookId: revision.bookId,
+    packageId: revision.packageMetadata.packageId,
     title: revision.title,
     author: revision.author,
     importedAt: new Date().toISOString(),
@@ -290,7 +307,7 @@ export function createLocalBookPackageProvider(options = {}) {
         });
       } finally { db.close(); }
       if (!record) throw new Error("本地书籍包不存在或尚未导入：" + bookRevisionId);
-      return parseBookPackage(new Uint8Array(record.archive));
+      return parseBookPackage(new Uint8Array(record.archive), { bookId: record.bookId, bookRevisionId: record.bookRevisionId });
     },
   });
 }
