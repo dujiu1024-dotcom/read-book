@@ -231,7 +231,7 @@ async function initialize() {
   if (storedVersion < 5) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
-      db.exec({ sql: "CREATE TABLE IF NOT EXISTS memory_candidate (id TEXT PRIMARY KEY,dataset_id TEXT NOT NULL REFERENCES local_dataset(id),thread_id TEXT NOT NULL REFERENCES thread(id),candidate_json TEXT NOT NULL,evaluation_score REAL NOT NULL CHECK(evaluation_score >= 0 AND evaluation_score <= 1),status TEXT NOT NULL CHECK(status='needs_confirmation'),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(dataset_id,thread_id,id)); CREATE INDEX IF NOT EXISTS idx_memory_candidate_pending ON memory_candidate(dataset_id,thread_id,status,created_at); UPDATE local_dataset SET schema_version=5; PRAGMA user_version=5;" });
+      db.exec({ sql: "CREATE TABLE IF NOT EXISTS memory_candidate (id TEXT PRIMARY KEY,dataset_id TEXT NOT NULL REFERENCES local_dataset(id),thread_id TEXT NOT NULL REFERENCES thread(id),candidate_json TEXT NOT NULL,evaluation_score REAL NOT NULL CHECK(evaluation_score >= 0 AND evaluation_score <= 1),status TEXT NOT NULL CHECK(status IN ('needs_confirmation','accepted','rejected')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(dataset_id,thread_id,id)); CREATE INDEX IF NOT EXISTS idx_memory_candidate_pending ON memory_candidate(dataset_id,thread_id,status,created_at); UPDATE local_dataset SET schema_version=5; PRAGMA user_version=5;" });
       db.exec({ sql: "COMMIT" });
     } catch (error) {
       db.exec({ sql: "ROLLBACK" });
@@ -430,6 +430,20 @@ function txOperation(datasetId, operation, input) {
         [record.id,datasetId,record.threadId,serialized,record.evaluationScore,record.status,record.createdAt,record.updatedAt]);
       transactionDirty=true;
       return record;
+    }
+    case "resolveMemoryCandidate": {
+      const status=input.status;
+      const updatedAt=input.updatedAt;
+      if (!["accepted","rejected"].includes(status) || !Number.isFinite(Date.parse(updatedAt))) {
+        throw new Error("MemoryCandidate resolution is invalid");
+      }
+      const old=first("SELECT status FROM memory_candidate WHERE id=? AND dataset_id=?",[input.candidateId,datasetId]);
+      if (!old) return false;
+      if (old.status===status) return true;
+      if (old.status!=="needs_confirmation") throw new Error("MemoryCandidate has already been resolved");
+      execute("UPDATE memory_candidate SET status=?,updated_at=? WHERE id=? AND dataset_id=?",[status,updatedAt,input.candidateId,datasetId]);
+      transactionDirty=true;
+      return true;
     }
     case "appendMemoryRelation": {
       const r=input.relation;
