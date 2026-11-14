@@ -15,7 +15,25 @@
         "txt",
         "pdf"
       ],
-      "rights_check": "Confirm exact base text; distinguish public-domain original from modern annotated editions."
+      "rights_check": "Confirm exact base text; distinguish public-domain original from modern annotated editions.",
+      "source_records": [
+        {
+          "volume": "上",
+          "url": "https://zh.wikisource.org/zh-hans/王阳明集/卷01",
+          "source": "维基文库"
+        },
+        {
+          "volume": "中",
+          "url": "https://zh.wikisource.org/zh-hans/王阳明集/卷02",
+          "source": "维基文库"
+        },
+        {
+          "volume": "下",
+          "url": "https://zh.wikisource.org/zh-hans/王阳明集/卷03",
+          "source": "维基文库"
+        }
+      ],
+      "source_note": "维基文库所载王阳明集卷一至卷三中的《传习录》上、中、下。需核对文本版本、缺文及标点；现代点校版不自动视为公版。"
     },
     {
       "key": "maoxuan-1",
@@ -112,4 +130,4 @@
     "recordParserAndSourceVersions": true,
     "rightsReviewBeforePublication": true
   }
-}\n
+}
