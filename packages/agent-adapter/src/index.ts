@@ -31,7 +31,7 @@ export interface GenerationCitation {
   book_revision_id: string;
   structure_node_id: string;
   locator: string;
-  excerpt?: string;
+  excerpt: string;
 }
 
 export interface GenerationResult {
@@ -210,14 +210,14 @@ export function validateGenerationSnapshot(value: unknown): GenerationSnapshot {
       citations = raw.citations.map((value, index) => {
         const citation = record(value);
         const excerpt = citation.excerpt;
-        if (excerpt !== undefined && (typeof excerpt !== "string" || excerpt.length > 2000)) {
-          throw new GenerationProtocolError("Generation citation excerpt must be a string up to 2000 characters.");
+        if (typeof excerpt !== "string" || !excerpt.trim() || excerpt.length > 2000) {
+          throw new GenerationProtocolError("Generation citation excerpt must be a non-empty string up to 2000 characters.");
         }
         return {
           book_revision_id: requiredUuid(citation.book_revision_id, "result.citations[" + index + "].book_revision_id"),
           structure_node_id: requiredUuid(citation.structure_node_id, "result.citations[" + index + "].structure_node_id"),
           locator: boundedString(citation.locator, "result.citations[" + index + "].locator", 1, 512),
-          ...(typeof excerpt === "string" ? { excerpt } : {}),
+          excerpt,
         };
       });
     }
