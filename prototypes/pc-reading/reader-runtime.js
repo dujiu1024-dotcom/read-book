@@ -322,7 +322,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     await lastPresentationPromise;
     const progress = (await repository.getReadingUnitProgress(datasetId, readingRound.id)).find((item) => item.structureNodeId === unit.id);
     if (!progress || ["discussed", "skipped"].includes(progress.status)) return;
-    if (!["awaiting_user", "presented", "discussion_active"].includes(progress.status)) {
+    if (!["awaiting_user", "discussion_active"].includes(progress.status)) {
       throw new Error("当前主线单元尚未完成原文呈现，不能启动讨论状态。");
     }
     const now = new Date().toISOString();
@@ -350,7 +350,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       return { status: progress.status, roundCompleted: round?.status === "completed" };
     }
     const nextStatus = skipped ? "skipped" : "discussed";
-    if (skipped && !["presented", "awaiting_user"].includes(progress.status)) {
+    if (skipped && progress.status !== "awaiting_user") {
       throw new Error("只有已呈现且尚未开始讨论的单元可以确认略读。");
     }
     if (!skipped && progress.status !== "discussion_active") {
