@@ -428,6 +428,24 @@ export interface MemoryCandidatePersistenceRepository {
  * needsConfirmation/rejected candidates are never written. The repository transaction
  * appends immutable versions and their typed cross-memory relations atomically.
  */
+export async function planAndPersistAcceptedMemoryCandidates(
+  repository: MemoryCandidatePersistenceRepository & MemoryEvolutionPlanningRepository,
+  datasetId: string,
+  result: MemoryExtractionPipelineResult,
+  planner?: MemoryEvolutionPlanner,
+  now: () => string = () => new Date().toISOString(),
+  idFactory: () => string = () => crypto.randomUUID(),
+): Promise<{ persistedIds: string[]; alreadyPersistedCandidateIds: string[] }> {
+  const planning = await planAcceptedMemoryCandidates(repository, datasetId, result, planner, now, idFactory);
+  const already = new Set(planning.alreadyPersistedCandidateIds);
+  const pendingResult: MemoryExtractionPipelineResult = {
+    ...result,
+    accepted: result.accepted.filter(({ candidate }) => !already.has(candidate.id)),
+  };
+  const persistedIds = await persistAcceptedMemoryCandidates(repository, datasetId, pendingResult, planning.plans, now);
+  return { persistedIds, alreadyPersistedCandidateIds: planning.alreadyPersistedCandidateIds };
+}
+
 export async function persistAcceptedMemoryCandidates(
   repository: MemoryCandidatePersistenceRepository,
   datasetId: string,
