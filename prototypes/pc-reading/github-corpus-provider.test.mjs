@@ -17,6 +17,8 @@ test("loads Chuanxi Lu into ordered units with volume labels and source locators
   }});
   const revision = await provider.loadBookRevision("github-corpus-chuanxilu");
   assert.equal(revision.title, "传习录");
+  assert.match(revision.bookRevisionId, /^github-corpus-chuanxilu-[a-f0-9]{20}$/);
+  assert.equal(revision.sourceMetadata.sourceSnapshotSha256.length, 64);
   assert.ok(revision.units.length >= 4);
   assert.equal(revision.units[0].chapter, "卷上");
   assert.ok(revision.units.some((unit) => unit.chapter === "卷中"));
@@ -37,6 +39,7 @@ test("loads a Mao Xuan volume independently and preserves article order", async 
   }});
   const revision = await provider.loadBookRevision("github-corpus-maoxuan-2");
   assert.equal(revision.title, "毛泽东选集 第二卷");
+  assert.match(revision.bookRevisionId, /^github-corpus-maoxuan-2-[a-f0-9]{20}$/);
   assert.ok(revision.units.every((unit) => unit.chapter.startsWith("第二卷 / ")));
   assert.match(revision.units[0].chapter, /第一篇/);
   assert.ok(revision.units.some((unit) => /第二篇/.test(unit.chapter)));
