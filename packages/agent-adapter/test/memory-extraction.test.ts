@@ -139,7 +139,7 @@ test("persists accepted candidates only when an explicit immutable version plan 
   const ids = await persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, [{
     candidateId: accepted.accepted[0].candidate.id, memoryId: "memory-1", version: 1, previousVersionId: null, changeKind: "new",
   }], () => "2026-11-14T00:00:00.000Z");
-  assert.deepEqual(ids, ["candidate-1"]);
+  assert.deepEqual(ids, [accepted.accepted[0].candidate.id]);
   assert.equal(writes.length, 1);
   assert.equal((writes[0] as any).version.viewpoint, "user");
   assert.equal((writes[0] as any).version.evaluationScore, accepted.accepted[0].evaluation.score);
@@ -171,7 +171,7 @@ test("memory persistence revalidates the evolution relation before writing", asy
   };
   await assert.rejects(
     persistAcceptedMemoryCandidates(repository, "dataset-1", accepted, [{
-      candidateId: "candidate-1", memoryId: "memory-1", version: 2,
+      candidateId: accepted.accepted[0].candidate.id, memoryId: "memory-1", version: 2,
       previousVersionId: "version-1", previousVersion, changeKind: "conflict",
     }]),
     /requires a "contradicts" relation/,
