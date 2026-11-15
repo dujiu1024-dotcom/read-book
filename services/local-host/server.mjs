@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyAnswerQuotes } from "./answer-quotes.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(here, "../..");
@@ -298,13 +299,20 @@ async function streamModel(task) {
         break;
       }
       task.status = "completed";
+      const sources = [task.request.context.current_source, ...(Array.isArray(task.request.context.additional_sources) ? task.request.context.additional_sources : [])];
+      const audit = verifyAnswerQuotes(text.trim(), sources);
       task.result = {
-        content: text.trim(),
-        content_hash: createHash("sha256").update(text.trim(), "utf8").digest("hex"),
+        content: audit.content,
+        content_hash: createHash("sha256").update(audit.content, "utf8").digest("hex"),
         citations: buildCitations(task.request),
+        quote_audit: { checked: audit.checked, blocked: audit.blocked, samples: audit.samples },
         usage,
       };
-      log("model_completed", { generationId: task.id, model: MODEL, characters: text.length, citations: task.result.citations.length });
+      log("model_completed", {
+        generationId: task.id, model: MODEL, characters: text.length,
+        citations: task.result.citations.length,
+        quotesChecked: audit.checked, quotesBlocked: audit.blocked,
+      });
       nextEvent(task, "completed", { result_available: true });
       return;
     } catch (error) {
