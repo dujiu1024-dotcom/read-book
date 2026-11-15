@@ -37,12 +37,28 @@ for (const phrase of FRAMING_PHRASES) {
   }
 }
 
+// 叙事/提问里的通用词：它们在长篇书里到处都是，单独命中不能证明“书里有依据”。
+// 只按整词排除，术语内部的同形片段（如“出现心猿”里的“心猿”）仍然保留。
+const GENERIC_TERMS = new Set([
+  "一回", "回目", "章回", "情节", "出现", "故事", "章节", "本章", "这段", "那段",
+  "讲述", "发生", "描写", "描述", "表现", "体现", "作用", "意义", "影响", "一段",
+]);
+
+// 以虚词开头/结尾的 2/3-gram 多是跨词碎片（“的情节”“花的”“过林”），不能当关键词证据。
+const FUNCTION_CHARACTERS = new Set(
+  "的了着过吗呢吧啊呀嘛是在有和与及或也都就又很这那你我他她它们把被给对从而且但如所以因为什么怎样哪".split(""),
+);
+
+
 export const CHUNK_MIN_CHARACTERS = 300;
 export const CHUNK_MAX_CHARACTERS = 600;
 export const CHUNK_OVERLAP_RATIO = 0.15;
 export const RRF_K = 60;
 /** 没有关键词命中时，向量余弦必须达到该阈值才算“书里有依据”。 */
 export const MIN_VECTOR_SCORE = 0.58;
+/** 关键词命中很多、语义分却很低：基本是通用词噪声，不构成依据。 */
+export const KEYWORD_NOISE_HIT_COUNT = 12;
+export const KEYWORD_NOISE_VECTOR_SCORE = 0.45;
 
 export function normalizeText(value) {
   return String(value ?? "").normalize("NFKC").toLocaleLowerCase("zh-CN");
@@ -58,7 +74,10 @@ export function tokenize(value) {
       for (let size = 2; size <= 3; size += 1) {
         for (let index = 0; index + size <= segment.length; index += 1) {
           const token = segment.slice(index, index + size);
-          if (!STOPWORDS.has(token) && !FRAMING_TOKENS.has(token)) tokens.push(token);
+          if (!STOPWORDS.has(token) && !FRAMING_TOKENS.has(token) && !GENERIC_TERMS.has(token) &&
+              !FUNCTION_CHARACTERS.has(token[0]) && !FUNCTION_CHARACTERS.has(token[token.length - 1])) {
+            tokens.push(token);
+          }
         }
       }
     } else if (segment.length > 1 && !STOPWORDS.has(segment)) {
@@ -334,13 +353,28 @@ export function needsCurrentContext(question, termCount, specificTermCount = 0) 
 }
 
 /**
- * 无结果判定：关键词有命中即有依据；只有向量时必须过阈值。
+ * 无结果判定：关键词有具体命中即有依据；只有向量时必须过阈值。
+ * 但“关键词命中很多、向量分很低”说明命中的是通用词噪声，也判无证据。
  * 返回 hasEvidence=false 时调用方必须明说“书里没找到”，不能让模型凭先验作答。
  */
-export function evaluateEvidence({ keywordHits, vectorHits, minimumVectorScore = MIN_VECTOR_SCORE }) {
+export function evaluateEvidence({
+  keywordHits,
+  vectorHits,
+  minimumVectorScore = MIN_VECTOR_SCORE,
+  noiseHitCount = KEYWORD_NOISE_HIT_COUNT,
+  noiseVectorScore = KEYWORD_NOISE_VECTOR_SCORE,
+}) {
   const keywordCount = Array.isArray(keywordHits) ? keywordHits.length : 0;
-  if (keywordCount > 0) return { hasEvidence: true, reason: "keyword", topVectorScore: vectorHits?.[0]?.score ?? 0 };
+  const vectorCount = Array.isArray(vectorHits) ? vectorHits.length : 0;
   const topVectorScore = Array.isArray(vectorHits) && vectorHits.length ? vectorHits[0].score : 0;
+  if (keywordCount > 0) {
+    if (topVectorScore >= minimumVectorScore) return { hasEvidence: true, reason: "keyword_vector", topVectorScore };
+    // 向量通道可用时才做噪声判定：向量不可用时不能凭“分数为 0”否定关键词证据。
+    if (vectorCount > 0 && keywordCount >= noiseHitCount && topVectorScore < noiseVectorScore) {
+      return { hasEvidence: false, reason: "keyword_noise", topVectorScore };
+    }
+    return { hasEvidence: true, reason: "keyword", topVectorScore };
+  }
   if (topVectorScore >= minimumVectorScore) return { hasEvidence: true, reason: "vector", topVectorScore };
   return { hasEvidence: false, reason: "no_match", topVectorScore };
 }

@@ -117,6 +117,30 @@ test("keywordTerms keeps Chinese bigrams and trigrams without a dictionary", () 
   assert.ok(!terms.includes("什么"));
 });
 
+test("keywordTerms drops generic narrative words that cannot prove evidence alone", () => {
+  const terms = keywordTerms("第一回里出现过哪些情节？");
+  assert.ok(!terms.includes("一回"));
+  assert.ok(!terms.includes("出现"));
+  assert.ok(!terms.includes("情节"));
+});
+
+test("evaluateEvidence refuses vector-only guesses below the threshold", () => {
+  assert.equal(evaluateEvidence({ keywordHits: [{ chunk: { id: "x" } }], vectorHits: [] }).hasEvidence, true);
+  assert.equal(evaluateEvidence({ keywordHits: [], vectorHits: [{ id: "x", score: 0.64 }] }).hasEvidence, true);
+  assert.equal(evaluateEvidence({ keywordHits: [], vectorHits: [{ id: "x", score: 0.41 }] }).hasEvidence, false);
+});
+
+test("evaluateEvidence treats many weak keyword hits as noise, not evidence", () => {
+  const manyHits = Array.from({ length: 24 }, (_, index) => ({ chunk: { id: "c" + index } }));
+  const weak = [{ id: "x", score: 0.32 }];
+  assert.equal(evaluateEvidence({ keywordHits: manyHits, vectorHits: weak }).hasEvidence, false);
+  assert.equal(evaluateEvidence({ keywordHits: manyHits, vectorHits: weak }).reason, "keyword_noise");
+  // 关键词很少但确实具体时，仍以关键词为准。
+  assert.equal(evaluateEvidence({ keywordHits: manyHits.slice(0, 2), vectorHits: weak }).hasEvidence, true);
+  // 向量通道不可用时不能凭 0 分否定关键词证据。
+  assert.equal(evaluateEvidence({ keywordHits: manyHits, vectorHits: [] }).hasEvidence, true);
+});
+
 test("rrfFuse prefers chunks recalled by both channels", () => {
   const scores = rrfFuse([["a", "b", "c"], ["c", "d"]]);
   assert.ok(scores.get("c") > scores.get("a"));
