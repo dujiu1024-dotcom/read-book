@@ -7,6 +7,8 @@ import { createLocalBookPackageProvider, importBookPackageFile, inspectBookPacka
 import { createBundledBookContentProvider, BUNDLED_BOOK_REVISION_ID } from "./bundled-book-content-provider.js";
 import { hasGenerationService } from "./reader-capabilities.js";
 import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./memory-proxy-provider.js";
+import { createKnowledgeProxyProvider } from "./knowledge-proxy-provider.js";
+import { KNOWLEDGE_TYPE_LABELS, knowledgeProgressText } from "./knowledge-extraction.js";
 
 (() => {
   let units = [];
@@ -116,6 +118,12 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
       config.planMemoryEvolution = (input) => provider.propose(input);
       config.memoryCandidatePolicy = readerConfig.memoryCandidatePolicy || DEFAULT_MEMORY_CANDIDATE_POLICY;
       config.memoryModelVersion = readerConfig.memoryModelVersion || "sensenova-proxy";
+    }
+    // 知识抽取同样只走本地宿主代理，模型密钥不出本机。
+    const knowledgeProxyUrl = readerConfig.knowledgeProxyUrl || readerConfig.memoryProxyUrl || readerConfig.generationApiBaseUrl;
+    if (knowledgeProxyUrl && typeof getAccessToken === "function") {
+      config.knowledgeExtractionProvider = config.knowledgeExtractionProvider ||
+        createKnowledgeProxyProvider({ baseUrl: knowledgeProxyUrl, getAccessToken });
     }
     return config;
   }
@@ -1001,6 +1009,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
       active?.scrollIntoView({ block: "start", behavior: "auto" });
     }
     if (name === "notes") refreshNotes();
+    if (name === "knowledge") void refreshKnowledge();
   }
 
   for (const tab of document.querySelectorAll(".pane-tab")) {
@@ -1146,6 +1155,216 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
       saveNoteFromDialog();
     }
   });
+  let knowledgeItems = [];
+  let knowledgeStates = [];
+  let knowledgeBusy = false;
+
+  function knowledgeTypeLabel(type) {
+    return KNOWLEDGE_TYPE_LABELS[type] || type || "知识";
+  }
+
+  function knowledgeStatusLabel(status) {
+    if (status === "accepted") return "已接受";
+    if (status === "rejected") return "已驳回";
+    return "待审核";
+  }
+
+  async function refreshKnowledge() {
+    if (!productionRuntime || typeof productionRuntime.loadKnowledge !== "function") return;
+    const statusEl = $("knowledgeStatus");
+    try {
+      const reviewStatus = $("knowledgeStatusFilter")?.value || "pending";
+      const itemType = $("knowledgeTypeFilter")?.value || "all";
+      const query = {};
+      if (reviewStatus !== "all") query.reviewStatus = reviewStatus;
+      if (itemType !== "all") query.itemType = itemType;
+      const [items, states, pending] = await Promise.all([
+        productionRuntime.loadKnowledge(query),
+        productionRuntime.loadKnowledgeState(),
+        productionRuntime.loadKnowledge({ reviewStatus: "pending" }),
+      ]);
+      knowledgeItems = items || [];
+      knowledgeStates = states || [];
+      renderKnowledge((pending || []).length);
+    } catch (error) {
+      if (statusEl) statusEl.textContent = "知识读取失败：" + errorText(error) + "。";
+    }
+  }
+
+  function renderKnowledge(pendingCount) {
+    const list = $("knowledgeList");
+    const empty = $("knowledgeEmpty");
+    const badge = $("knowledgePendingCount");
+    const statusEl = $("knowledgeStatus");
+    if (!list) return;
+    if (badge) {
+      badge.textContent = String(pendingCount);
+      badge.hidden = pendingCount === 0;
+    }
+    list.replaceChildren();
+    if (empty) empty.hidden = knowledgeItems.length > 0;
+    if (statusEl) {
+      const progress = knowledgeStates.map(knowledgeProgressText).filter(Boolean).join("；");
+      statusEl.textContent = (progress ? progress + "。" : "") +
+        "待审核 " + pendingCount + " 条 · 只有已接受的知识会进入对话。";
+    }
+    for (const item of knowledgeItems) list.append(createKnowledgeCard(item));
+  }
+
+  function createKnowledgeCard(item) {
+    const card = document.createElement("article");
+    card.className = "knowledge-card";
+    const head = document.createElement("div");
+    head.className = "knowledge-card-head";
+    const type = document.createElement("span");
+    type.className = "knowledge-type " + item.itemType;
+    type.textContent = knowledgeTypeLabel(item.itemType);
+    const source = document.createElement("button");
+    source.type = "button";
+    source.className = "knowledge-source";
+    source.textContent = item.sourceLocator || item.chapter;
+    source.title = "查看这条知识的来源原文";
+    source.addEventListener("click", () => showCitation(item.structureNodeId));
+    const review = document.createElement("span");
+    review.className = "knowledge-review " + item.reviewStatus;
+    review.textContent = knowledgeStatusLabel(item.reviewStatus);
+    head.append(type, source, review);
+
+    const content = document.createElement("p");
+    content.className = "knowledge-content";
+    content.textContent = item.content;
+
+    card.append(head, content);
+    if (item.itemType === "concept" && item.definitionQuote) {
+      const quote = document.createElement("blockquote");
+      quote.className = "knowledge-quote";
+      quote.textContent = "「" + item.definitionQuote + "」";
+      card.append(quote);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "knowledge-actions";
+    const accept = document.createElement("button");
+    accept.type = "button";
+    accept.className = "text-button";
+    accept.textContent = "接受";
+    accept.disabled = item.reviewStatus === "accepted";
+    accept.addEventListener("click", () => reviewKnowledgeItem(item.id, { reviewStatus: "accepted" }));
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.className = "text-button";
+    reject.textContent = "驳回";
+    reject.disabled = item.reviewStatus === "rejected";
+    reject.addEventListener("click", () => reviewKnowledgeItem(item.id, { reviewStatus: "rejected" }));
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "text-button";
+    edit.textContent = "编辑";
+    edit.addEventListener("click", () => openKnowledgeEditor(item));
+    actions.append(accept, reject, edit);
+    card.append(actions);
+    return card;
+  }
+
+  async function reviewKnowledgeItem(id, patch) {
+    if (!productionRuntime || typeof productionRuntime.reviewKnowledge !== "function") return;
+    try {
+      await productionRuntime.reviewKnowledge(id, patch);
+      await refreshKnowledge();
+      toast(patch.reviewStatus === "accepted" ? "已接受，这条知识可以进入对话。"
+        : patch.reviewStatus === "rejected" ? "已驳回，这条知识不会进入对话。" : "条目已更新。");
+    } catch (error) {
+      toast("审核失败：" + errorText(error));
+    }
+  }
+
+  function openKnowledgeEditor(item) {
+    $("knowledgeEditId").value = item.id;
+    $("knowledgeInput").value = item.content;
+    $("knowledgeDialogSource").textContent = knowledgeTypeLabel(item.itemType) +
+      " · 来源：" + (item.sourceLocator || item.chapter);
+    $("knowledgeDialogStatus").textContent = item.reviewStatus === "accepted"
+      ? "修改内容不会改变已接受状态；来源切片保持不变。"
+      : "修改内容后仍需你手动接受才会进入对话。";
+    $("knowledgeSaveButton").disabled = false;
+    $("knowledgeDialog").showModal();
+    setTimeout(() => $("knowledgeInput").focus(), 30);
+  }
+
+  async function saveKnowledgeEdit() {
+    if (!productionRuntime) return;
+    const id = $("knowledgeEditId").value;
+    const content = $("knowledgeInput").value.trim();
+    if (!id) return;
+    if (!content) {
+      $("knowledgeDialogStatus").textContent = "条目内容不能为空。";
+      return;
+    }
+    const button = $("knowledgeSaveButton");
+    button.disabled = true;
+    $("knowledgeDialogStatus").textContent = "正在保存…";
+    try {
+      await productionRuntime.reviewKnowledge(id, { content });
+      $("knowledgeDialog").close();
+      await refreshKnowledge();
+      toast("条目已更新，来源仍然指向原切片。");
+    } catch (error) {
+      $("knowledgeDialogStatus").textContent = errorText(error) + "。";
+      button.disabled = false;
+    }
+  }
+
+  async function extractKnowledgeForCurrentChapter() {
+    if (!productionRuntime || typeof productionRuntime.runKnowledgeExtraction !== "function") {
+      toast("当前是只读阅读模式，暂时不能抽取知识。");
+      return;
+    }
+    if (knowledgeBusy) return;
+    const unit = state.displayedUnit || units[state.mainlineIndex];
+    if (!unit?.chapter) {
+      toast("当前没有可抽取的章节。");
+      return;
+    }
+    const button = $("extractKnowledgeButton");
+    const statusEl = $("knowledgeStatus");
+    knowledgeBusy = true;
+    button.disabled = true;
+    statusEl.textContent = "正在抽取 " + unit.chapter + "：准备分批…";
+    try {
+      const result = await productionRuntime.runKnowledgeExtraction({
+        chapter: unit.chapter,
+        onProgress: (progress) => {
+          const stage = progress.stage === "concept" ? "补抽概念："
+            : progress.stage === "intent" ? "补抽章节意图："
+              : "";
+          statusEl.textContent = "正在抽取 " + progress.chapter + "：" + stage +
+            progress.done + "/" + progress.total + " 批，已入库 " + progress.itemCount + " 条";
+        },
+      });
+      toast(result?.skipped ? "本章之前已经抽取完成。" : "已抽取 " + (result?.itemCount || 0) + " 条待审核知识。");
+      if (result?.skipped) button.textContent = "重新抽取本章";
+      await refreshKnowledge();
+    } catch (error) {
+      statusEl.textContent = "抽取中断：" + errorText(error) + "。再点按钮会从上次成功的批次继续。";
+      button.textContent = "继续抽取本章";
+    } finally {
+      knowledgeBusy = false;
+      button.disabled = false;
+    }
+  }
+
+  $("extractKnowledgeButton")?.addEventListener("click", extractKnowledgeForCurrentChapter);
+  $("knowledgeStatusFilter")?.addEventListener("change", () => void refreshKnowledge());
+  $("knowledgeTypeFilter")?.addEventListener("change", () => void refreshKnowledge());
+  $("knowledgeCancelButton")?.addEventListener("click", () => $("knowledgeDialog").close());
+  $("knowledgeSaveButton")?.addEventListener("click", saveKnowledgeEdit);
+  $("knowledgeInput")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      saveKnowledgeEdit();
+    }
+  });
+
   $("railMemoryButton").addEventListener("click", () => activatePanel("memory"));
   $("extractMemoryButton").addEventListener("click", async () => {
     if (!productionRuntime) { toast("当前是只读阅读模式，暂时不能整理认知。"); return; }
@@ -1487,6 +1706,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
             : (activeSource === "github" ? "GitHub 原文" : "内置读物") + " · 本地阅读";
           await refreshPersistedMessages({ forceScroll: true });
           await refreshNotes();
+          await refreshKnowledge();
           renderMemoryState(await productionRuntime.loadMemoryState());
           updateRetrievalBar(productionRuntime.retrievalStatus?.() || {});
           renderSource();
@@ -1573,6 +1793,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
       renderSource();
       await refreshPersistedMessages({ forceScroll: true });
       await refreshNotes();
+      await refreshKnowledge();
       renderMemoryState(await productionRuntime.loadMemoryState());
       updateRetrievalBar(productionRuntime.retrievalStatus?.() || {});
       $("messageInput").disabled = !productionRuntime.generationConfigured;

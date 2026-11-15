@@ -110,6 +110,7 @@
           <button class="pane-tab active" type="button" role="tab" aria-selected="true" data-panel="discussion">讨论</button>
           <button class="pane-tab" type="button" role="tab" aria-selected="false" data-panel="notes">笔记 <span class="tab-count" id="noteCount" hidden>0</span></button>
           <button class="pane-tab" type="button" role="tab" aria-selected="false" data-panel="memory">认知</button>
+          <button class="pane-tab" type="button" role="tab" aria-selected="false" data-panel="knowledge">知识 <span class="tab-count" id="knowledgePendingCount" hidden>0</span></button>
         </div>
 
         <div class="panel-stack">
@@ -148,6 +149,37 @@
             <p class="memory-status" id="memoryStatus" role="status">认知状态加载中…</p>
             <div class="memory-list" id="memoryList"></div>
             <div class="pending-memory-list" id="pendingMemoryList" hidden></div>
+          </section>
+
+          <section class="panel" id="knowledgePanel" data-panel="knowledge" aria-labelledby="knowledgeHeading">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">公共书籍知识 · 需人工审核</div>
+                <h2 id="knowledgeHeading">知识条目</h2>
+              </div>
+              <button class="soft-button primary-soft" id="extractKnowledgeButton" type="button">抽取本章</button>
+            </div>
+            <p class="memory-status" id="knowledgeStatus" role="status">知识库尚未抽取。</p>
+            <div class="knowledge-filters">
+              <label>审核状态
+                <select id="knowledgeStatusFilter">
+                  <option value="pending">待审核</option>
+                  <option value="accepted">已接受</option>
+                  <option value="rejected">已驳回</option>
+                  <option value="all">全部</option>
+                </select>
+              </label>
+              <label>类型
+                <select id="knowledgeTypeFilter">
+                  <option value="all">全部</option>
+                  <option value="chapter_intent">章节意图</option>
+                  <option value="thesis">作者主张</option>
+                  <option value="concept">概念</option>
+                </select>
+              </label>
+            </div>
+            <p class="panel-empty" id="knowledgeEmpty">还没有知识条目。点“抽取本章”从当前章节的原文切片里抽取。</p>
+            <div class="knowledge-list" id="knowledgeList"></div>
           </section>
         </div>
 
@@ -196,6 +228,24 @@
       </div>
       <input type="hidden" id="noteId" value="">
       <input type="hidden" id="noteBaseRevision" value="">
+    </form>
+  </dialog>
+
+  <dialog id="knowledgeDialog" class="dialog note-dialog">
+    <form method="dialog" id="knowledgeForm">
+      <div class="dialog-head">
+        <div><div class="eyebrow">审核知识条目</div><h2>修改条目内容</h2></div>
+        <button class="icon-button" value="cancel" aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-description" id="knowledgeDialogSource">—</p>
+      <label class="sr-only" for="knowledgeInput">条目内容</label>
+      <textarea id="knowledgeInput" rows="5" placeholder="把条目改写成一句准确、可追溯的话。"></textarea>
+      <p class="note-dialog-status" id="knowledgeDialogStatus" role="status"></p>
+      <div class="dialog-actions">
+        <button class="soft-button" id="knowledgeCancelButton" type="button">取消</button>
+        <button class="send-button" id="knowledgeSaveButton" type="button">保存修改</button>
+      </div>
+      <input type="hidden" id="knowledgeEditId" value="">
     </form>
   </dialog>
 

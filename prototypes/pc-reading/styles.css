@@ -244,6 +244,28 @@ h1, h2, h3, p { overflow-wrap: anywhere; }
 .memory-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .memory-actions button { min-height: 34px; }
 
+/* ---------- Knowledge review ---------- */
+.knowledge-filters { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 12px; }
+.knowledge-filters label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.knowledge-filters select { border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); padding: 5px 8px; font-size: 12px; }
+.knowledge-list { display: flex; flex-direction: column; gap: 10px; }
+.knowledge-card { border: 1px solid var(--line); border-radius: 10px; background: var(--soft); padding: 12px 13px; }
+.knowledge-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.knowledge-type { border-radius: 6px; padding: 2px 6px; font-size: 10px; font-weight: 650; background: var(--accent-soft); color: var(--accent); }
+.knowledge-type.thesis { background: #eef4ec; color: #3c6b4b; }
+.knowledge-type.concept { background: #f4f0e6; color: #7a5c26; }
+.knowledge-source { flex: 1 1 auto; min-width: 0; border: 0; background: none; padding: 0; color: var(--accent); font-size: 11px; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-source:hover { text-decoration: underline; }
+.knowledge-review { margin-left: auto; font-size: 10px; color: var(--faint); white-space: nowrap; }
+.knowledge-review.pending { color: #8a6d1f; }
+.knowledge-review.accepted { color: #3c6b4b; }
+.knowledge-review.rejected { color: var(--faint); }
+.knowledge-content { margin: 8px 0 0; font-size: 13px; line-height: 1.75; white-space: pre-wrap; }
+.knowledge-quote { margin: 8px 0 0; padding: 7px 10px; border-left: 2px solid var(--line); color: var(--muted); font-family: var(--serif); font-size: 12px; line-height: 1.7; }
+.knowledge-actions { display: flex; gap: 12px; margin-top: 9px; }
+.knowledge-actions .text-button { font-size: 11px; }
+.knowledge-actions .text-button:disabled { opacity: .4; cursor: default; }
+
 /* ---------- Dialogs / toast ---------- */
 .dialog { width: min(92vw, 420px); max-height: 88vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; padding: 20px; box-shadow: 0 18px 60px #0002; background: var(--paper); }
 .dialog::backdrop { background: #18221d55; backdrop-filter: blur(2px); }

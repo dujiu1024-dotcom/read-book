@@ -13,6 +13,8 @@ import { selectThreadMemoryState } from "./memory-thread-scope.js";
 import { hasEncryptedBackupService } from "./reader-capabilities.js";
 import { planPromptBudget } from "./book-retrieval.js";
 import { createBookRetriever, createEmbeddingClient } from "./retrieval-runtime.js";
+import { createKnowledgeRuntime } from "./knowledge-runtime.js";
+import { selectKnowledgeForPrompt } from "./knowledge-extraction.js";
 
 function uuid() {
   return crypto.randomUUID();
@@ -177,6 +179,18 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       });
     });
   }
+
+  // 知识库：只抽取、只取用“已接受”的条目；抽取请求同样经本地宿主代理。
+  const knowledgeRuntime = createKnowledgeRuntime({
+    repository,
+    datasetId,
+    bookRevision,
+    chunksProvider: async () => {
+      await retriever.ensureIndex();
+      return retriever.getChunks();
+    },
+    provider: config.knowledgeExtractionProvider || null,
+  });
 
   async function loadMessages() {
     return repository.getMessages(datasetId, thread.id);
@@ -608,6 +622,11 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       structureNodeId: sourceUnit.id,
       locator: sourceUnit.locator,
     }));
+    // 只有已接受的知识进 prompt，每层最多 2 条，压成一句并带出处。
+    const knowledgeSelection = selectKnowledgeForPrompt({
+      items: await knowledgeRuntime.acceptedKnowledge(),
+      currentUnit: unit,
+    });
     const request = attachMemory({
       client_generation_id: clientGenerationId,
       thread_id: thread.id,
@@ -618,6 +637,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         ...(sourceBundle.additional_sources.length ? { additional_sources: sourceBundle.additional_sources } : {}),
         recent_messages: budget.messages,
         response_preferences: { language: "zh-CN" },
+        ...(knowledgeSelection.lines.length ? { knowledge: knowledgeSelection.lines } : {}),
         ...(retrieval ? {
           retrieval: {
             mode: retrieval.scope?.mode || "book",
@@ -876,6 +896,18 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     rebuildRetrievalIndex: () => retriever.rebuild(),
     searchBook: (question, options) => retriever.search(question, options),
     debugRetrievalChunks: () => retriever.getChunks(),
+    knowledgeChapters: () => knowledgeRuntime.chapters(),
+    runKnowledgeExtraction: ({ chapter, force = false, onProgress } = {}) => {
+      if (chapter) return knowledgeRuntime.extractChapter(chapter, { force, onProgress });
+      return knowledgeRuntime.extractAll({ onProgress });
+    },
+    loadKnowledge: (query) => knowledgeRuntime.list(query),
+    reviewKnowledge: (id, patch) => knowledgeRuntime.review(id, patch),
+    loadKnowledgeState: () => knowledgeRuntime.state(),
+    knowledgePromptFor: async (unit) => selectKnowledgeForPrompt({
+      items: await knowledgeRuntime.acceptedKnowledge(),
+      currentUnit: unit,
+    }),
     stop: () => controller?.stop(),
     resumePending,
     close: () => repository.close(),
