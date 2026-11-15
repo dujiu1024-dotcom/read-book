@@ -571,6 +571,7 @@ function validateKnowledgeRequest(body) {
   if (typeof body.chapter !== "string" || !body.chapter.trim()) throw new Error("chapter 必须是非空字符串。");
   if (!Array.isArray(body.chunks) || body.chunks.length < 1 || body.chunks.length > 12) throw new Error("chunks 必须是长度 1..12 的数组。");
   if (body.focus !== undefined && body.focus !== "chapter_intent" && body.focus !== "concept") throw new Error("focus 只支持 chapter_intent 或 concept。");
+  if (body.genre !== undefined && body.genre !== "narrative" && body.genre !== "expository") throw new Error("genre 只支持 narrative 或 expository。");
   if (body.model !== undefined && !KNOWLEDGE_MODELS.has(body.model)) throw new Error("model 不在允许列表中。");
   const chunks = body.chunks.map((chunk) => {
     if (!chunk || typeof chunk !== "object" || Array.isArray(chunk)) throw new Error("chunks 中的每一项必须是对象。");
@@ -588,7 +589,7 @@ function validateKnowledgeRequest(body) {
       text: chunk.text,
     };
   });
-  return { book_revision_id: body.book_revision_id, chapter: body.chapter, chunks, focus: body.focus || null, model: body.model || null };
+  return { book_revision_id: body.book_revision_id, chapter: body.chapter, chunks, focus: body.focus || null, model: body.model || null, genre: body.genre || null };
 }
 
 async function handleKnowledgeExtract(req, res) {
@@ -603,7 +604,11 @@ async function handleKnowledgeExtract(req, res) {
       : request.focus === "concept"
         ? " 本次只输出 concept，最多 4 条；只抽原文中出现逐字解释句的术语，term 与 definition_quote 必须齐全，不要输出 thesis 或 chapter_intent。"
         : "";
-    parsed = await callModelJson(KNOWLEDGE_INSTRUCTION + focusInstruction, {
+    // 叙事文体不产“作者主张”：剧情概括不是作者观点，宁可少一条也不冒充。
+    const genreInstruction = request.genre === "narrative"
+      ? " 本章是叙事文体（小说/章回）：禁止输出 thesis。只允许 chapter_intent（本章要讲的事件脉络，不超过 1 条）与 concept（专名与术语：人名、地名、法宝、官职、称谓，或原文中确有解释句的词语）。concept 不得复述情节，content 只写“该专名指什么”，definition_quote 必须能在切片中逐字找到。"
+      : "";
+    parsed = await callModelJson(KNOWLEDGE_INSTRUCTION + focusInstruction + genreInstruction, {
       book_revision_id: request.book_revision_id,
       chapter: request.chapter,
       chunks: request.chunks,
@@ -613,6 +618,11 @@ async function handleKnowledgeExtract(req, res) {
     return apiError(res, code === "rate_limited" ? 429 : 502, code, error.message, code === "rate_limited");
   }
   let filtered = filterKnowledgeItems(parsed, request.chunks);
+  if (request.genre === "narrative") {
+    // 双保险：模型偶尔仍会返回 thesis，服务端直接拦掉。
+    const onlyAllowed = filtered.items.filter((item) => item.item_type !== "thesis");
+    filtered = { items: onlyAllowed, dropped: filtered.dropped + filtered.items.length - onlyAllowed.length };
+  }
   if (request.focus) {
     const onlyFocused = filtered.items.filter((item) => item.item_type === request.focus);
     filtered = { items: onlyFocused, dropped: filtered.dropped + filtered.items.length - onlyFocused.length };

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   KNOWLEDGE_BATCH_CHUNKS,
   consolidateConcepts,
+  detectChapterGenre,
   groupChunksByChapter,
   knowledgeProgressText,
   planKnowledgeBatches,
@@ -203,4 +204,22 @@ test("knowledgeProgressText reports resumable progress", () => {
   assert.match(knowledgeProgressText({ chapter: "卷上", status: "running", doneBatches: 2, totalBatches: 5, itemCount: 4 }), /卷上：正在抽取 2\/5 批/);
   assert.match(knowledgeProgressText({ chapter: "卷上", status: "failed", doneBatches: 2, totalBatches: 5, itemCount: 4 }), /可续跑/);
   assert.match(knowledgeProgressText({ chapter: "卷上", status: "completed", doneBatches: 5, totalBatches: 5, itemCount: 9 }), /已完成，9 条待审核/);
+});
+
+test("detectChapterGenre separates chapter-novel narrative from expository prose", () => {
+  const narrative = [
+    "卻說那猴王領了旨意，歡歡喜喜，徑回花果山。",
+    "只見那洞門外，群猴羅列，齊聲叫道：「大王來了！」",
+    "行者道：「你等不必驚慌，老孫自有主張。」",
+    "正說間，忽見一朵祥雲自東而來，原來是太白金星。",
+    "畢竟不知此去如何，且聽下回分解。",
+  ].join("");
+  assert.equal(detectChapterGenre(narrative.repeat(3)), "narrative");
+  const expository = [
+    "先生曰：「心即理也。天下又有心外之事、心外之理乎？」",
+    "愛曰：「如事父之孝，事君之忠，其間有許多理在。」",
+    "所謂致知格物者，致吾心之良知於事事物物也。",
+    "知是行之始，行是知之成。",
+  ].join("");
+  assert.equal(detectChapterGenre(expository.repeat(3)), "expository");
 });

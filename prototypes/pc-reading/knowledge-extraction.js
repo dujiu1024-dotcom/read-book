@@ -37,6 +37,21 @@ export function hasUnbalancedBrackets(value) {
     (text.split(close).length - 1) !== (text.split(open).length - 1));
 }
 
+/**
+ * 粗粒度文体识别：章回体叙事（回目、話說/卻說/只見、成片对白）不强行抽“作者主张”。
+ * 说明/论说类文本里“作者明确表达的观点”才可追溯；叙事文本的概括很容易变成剧情复述。
+ */
+export function detectChapterGenre(text) {
+  const source = String(text ?? "");
+  if (source.length < 200) return "expository";
+  const chapterHeading = /第[〇零一二三四五六七八九十百千两兩0-9]+回/.test(source);
+  const narration = (source.match(/卻說|却说|話說|话说|話表|話說|只見|只见|忽見|忽见|當下|当下|不一時|不一时|畢竟|毕竟|且聽下回|且听下回|原來|原来/g) || []).length;
+  const definitional = (source.match(/[^，。；]{1,8}者[，,][^。；]{1,24}也[。；，,]/g) || []).length;
+  const quotedDialogue = (source.match(/[道曰問答][：:]?[「“][^」”]{2,}/g) || []).length;
+  const narrativeScore = narration * 2 + (chapterHeading ? 4 : 0) + Math.min(quotedDialogue, 8);
+  return narrativeScore >= 6 && narrativeScore > definitional * 2 ? "narrative" : "expository";
+}
+
 /** 按章节分组切片，保持书内顺序。 */
 export function groupChunksByChapter(chunks) {
   const groups = new Map();

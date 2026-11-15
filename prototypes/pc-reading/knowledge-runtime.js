@@ -1,5 +1,6 @@
 import {
   consolidateConcepts,
+  detectChapterGenre,
   groupChunksByChapter,
   planKnowledgeBatches,
   validateKnowledgeItems,
@@ -92,6 +93,8 @@ export function createKnowledgeRuntime({
     const group = groupChunksByChapter(all).get(chapter) || [];
     if (!group.length) throw new Error("「" + chapter + "」没有可抽取的原文切片。");
     const batches = planKnowledgeBatches(group);
+    // 叙事类只抽章意图与专名概念：概括剧情很容易被当成“作者主张”，宁可不产。
+    const genre = detectChapterGenre(group.map((chunk) => chunk.text).join("\n"));
     const existing = (await stateMap()).get(chapter);
     let done = 0;
     let itemCount = 0;
@@ -117,7 +120,7 @@ export function createKnowledgeRuntime({
       }
     }
     await saveState(chapter, "running", done, batches.length, itemCount, null);
-    report?.({ chapter, done, total: batches.length, itemCount, status: "running", skipped });
+    report?.({ chapter, done, total: batches.length, itemCount, status: "running", skipped, genre });
     let dropped = 0;
     for (let index = done; index < batches.length; index += 1) {
       const batch = batches[index];
@@ -126,6 +129,7 @@ export function createKnowledgeRuntime({
           bookRevisionId,
           chapter,
           chunks: batch.chunks.map(toPayload),
+          genre,
           ...(model ? { model } : {}),
         });
         const validated = await validateKnowledgeItems(response?.items, batch.chunks, {
@@ -179,6 +183,7 @@ export function createKnowledgeRuntime({
           chapter,
           chunks: batch.chunks.map(toPayload),
           focus: "concept",
+          genre,
           ...(model ? { model } : {}),
         });
         const validated = await validateKnowledgeItems(response?.items, batch.chunks, {
@@ -217,6 +222,7 @@ export function createKnowledgeRuntime({
           chapter,
           chunks: representatives.map(toPayload),
           focus: "chapter_intent",
+          genre,
           ...(model ? { model } : {}),
         });
         const validated = await validateKnowledgeItems(response?.items, representatives, {
@@ -256,9 +262,10 @@ export function createKnowledgeRuntime({
     const group = groupChunksByChapter(all).get(chapter) || [];
     if (!group.length) throw new Error("「" + chapter + "」没有可抽取的原文切片。");
     const batches = planKnowledgeBatches(group);
+    const genre = detectChapterGenre(group.map((chunk) => chunk.text).join("\n"));
     let added = 0;
     let dropped = 0;
-    report?.({ chapter, done: 0, total: batches.length, itemCount: 0, status: "running", stage: "concept" });
+    report?.({ chapter, done: 0, total: batches.length, itemCount: 0, status: "running", stage: "concept", genre });
     for (let index = 0; index < batches.length; index += 1) {
       const batch = batches[index];
       const response = await provider.extract({
@@ -266,6 +273,7 @@ export function createKnowledgeRuntime({
         chapter,
         chunks: batch.chunks.map(toPayload),
         focus: "concept",
+        genre,
         ...(model ? { model } : {}),
       });
       const validated = await validateKnowledgeItems(response?.items, batch.chunks, {
