@@ -2,8 +2,10 @@ import {
   assessKeywordSpecificity,
   buildChunks,
   cosineSimilarity,
+  decideScope,
   evaluateEvidence,
   keywordTerms,
+  needsCurrentContext,
   rrfFuse,
   selectRetrievalPassages,
 } from "./book-retrieval.js";
@@ -171,14 +173,39 @@ export function createBookRetriever({
   async function vectorize() {
     if (!embeddingClient || !chunks?.length) return;
     const total = chunks.length;
-    let done = 0;
-    let model = null;
+    let model = embeddingClient.model;
     let dimensions = 0;
+    let reusable = new Map();
+    let done = 0;
     try {
-      for (let offset = 0; offset < total; offset += EMBED_BATCH_SIZE) {
-        const batch = chunks.slice(offset, offset + EMBED_BATCH_SIZE);
+      // 增量：内容未变的切片直接复用已有向量，只补缺失部分。
+      const existing = await repository.getRetrievalEmbeddings(datasetId, revisionId);
+      if (existing.length && existing.every((record) => record.model === embeddingClient.model && record.dimensions > 0)) {
+        dimensions = existing[0].dimensions;
+        reusable = new Map(existing
+          .filter((record) => record.dimensions === dimensions)
+          .map((record) => [record.chunkId, record.vector]));
+      }
+      const missing = chunks.filter((chunk) => !reusable.has(chunk.id));
+      done = total - missing.length;
+      const reused = done;
+      if (!missing.length) {
+        await repository.saveRetrievalEmbeddings(datasetId, {
+          bookRevisionId: revisionId,
+          model,
+          dimensions,
+          embeddings: [],
+        });
+        state = { ...state, model, dimensions, chunkCount: total, status: "ready", updatedAt: new Date().toISOString() };
+        await loadVectors();
+        emit({ phase: "ready", done: total, total, reused: done });
+        return;
+      }
+      emit({ phase: "embedding", done, total, reused: done });
+      for (let offset = 0; offset < missing.length; offset += EMBED_BATCH_SIZE) {
+        const batch = missing.slice(offset, offset + EMBED_BATCH_SIZE);
         const result = await embeddingClient.embed(batch.map((chunk) => chunk.text));
-        if (!model) {
+        if (!dimensions) {
           model = result.model;
           dimensions = result.dimensions;
           if (!Number.isSafeInteger(dimensions) || dimensions <= 0) throw new Error("向量维度非法");
@@ -196,7 +223,7 @@ export function createBookRetriever({
           })),
         });
         done += batch.length;
-        emit({ phase: "embedding", done, total });
+        emit({ phase: "embedding", done, total, reused });
       }
       state = {
         ...state,
@@ -257,19 +284,26 @@ export function createBookRetriever({
     return status();
   }
 
-  async function search(question, { limit = 8 } = {}) {
+  async function search(question, { limit = 8, currentUnit = null } = {}) {
     await ensureIndex();
     const terms = keywordTerms(question);
     const keywordHits = await repository.searchRetrievalKeyword(datasetId, revisionId, terms, KEYWORD_CANDIDATES);
+    // 只用“具体词”命中作为关键词证据：高频通用 2-gram 不能把无关问题误判为书里有依据。
+    const specificity = assessKeywordSpecificity(question, chunks || [], terms);
     let vectorHits = [];
     let notice = null;
+    // 指代型追问（“这个说法/它”）且自身没有足够实词时，才用当前段原文补全语义查询；
+    // 已经引用了具体词句的追问必须和普通问法得到一致的检索结果。
+    const semanticInput = needsCurrentContext(question, terms.length, specificity.strongTerms.length) && currentUnit?.text
+      ? question + "\n" + String(currentUnit.text).slice(0, 240)
+      : question;
 
     const modelMismatch = Boolean(state && embeddingClient && state.status === "ready" && state.model !== embeddingClient.model);
     if (modelMismatch) {
       notice = "向量模型与索引不一致（索引 " + state.model + " / 当前 " + embeddingClient.model + "），本次只用关键词检索；请重建全书索引。";
     } else if (vectors && embeddingClient) {
       try {
-        const result = await embeddingClient.embed([question]);
+        const result = await embeddingClient.embed([semanticInput]);
         if (result.model !== state.model || result.dimensions !== state.dimensions) {
           notice = "向量模型或维度与索引不一致，本次只用关键词检索；请重建全书索引。";
         } else {
@@ -291,9 +325,9 @@ export function createBookRetriever({
     }
 
     // 只用“具体词”命中作为关键词证据：高频通用 2-gram 不能把无关问题误判为书里有依据。
-    const specificity = assessKeywordSpecificity(question, chunks || [], terms);
     const specificKeywordHits = keywordHits.filter((hit) =>
       specificity.strongTerms.some((term) => String(hit.chunk.text || "").includes(term)));
+    const presentTermCount = terms.filter((term) => (specificity.documentFrequency.get(term) || 0) > 0).length;
     const evidence = evaluateEvidence({
       keywordHits: specificKeywordHits.map((hit) => hit.chunk),
       vectorHits,
@@ -302,10 +336,19 @@ export function createBookRetriever({
       return {
         hasEvidence: false,
         hits: [],
+        hitCount: 0,
         keywordCount: 0,
         vectorTopScore: evidence.topVectorScore,
         notice,
         reason: evidence.reason,
+        scope: decideScope({
+          hits: [],
+          currentUnitId: currentUnit?.id,
+          currentChapter: currentUnit?.chapter,
+          hasEvidence: false,
+          presentTermCount,
+          keywordChapters: [],
+        }),
         status: status(),
       };
     }
@@ -314,26 +357,39 @@ export function createBookRetriever({
       specificKeywordHits.map((hit) => hit.chunk.id),
       vectorHits.map((hit) => hit.chunkId),
     ]);
+    const vectorScoreById = new Map(vectorHits.map((hit) => [hit.chunkId, hit.score]));
     const hits = [...fused.entries()]
       .map(([chunkId, score]) => ({ chunk: chunksById.get(chunkId), score }))
       .filter((hit) => hit.chunk)
       .sort((left, right) => right.score - left.score)
       .map((hit) => ({
         ...hit,
+        // RRF 只用于排序；范围判断必须看原始余弦，否则名次相近的片段无法区分强弱。
+        vectorScore: vectorScoreById.get(hit.chunk.id) ?? 0,
         unit: unitsById.get(hit.chunk.structureNodeId) || null,
         chapter: hit.chunk.chapter,
         locator: hit.chunk.locator,
       }));
+    const scope = decideScope({
+      hits,
+      currentUnitId: currentUnit?.id,
+      currentChapter: currentUnit?.chapter,
+      hasEvidence: true,
+      presentTermCount,
+      keywordChapters: specificKeywordHits.map((hit) => hit.chunk.chapter),
+    });
     const selection = selectRetrievalPassages(hits, { limit });
     return {
       hasEvidence: true,
       hits,
+      hitCount: hits.length,
       passages: selection.passages,
       omitted: selection.omitted,
       keywordCount: specificKeywordHits.length,
       vectorTopScore: vectorHits[0]?.score ?? 0,
       notice,
       reason: evidence.reason,
+      scope,
       status: status(),
     };
   }

@@ -5,14 +5,12 @@ import { createLocalCorpusRuntime } from "./local-corpus-runtime.js";
 import { createProductionReaderRuntime } from "./reader-runtime.js";
 import { createLocalBookPackageProvider, importBookPackageFile, inspectBookPackageFile, listImportedBookPackages } from "./local-book-package-provider.js";
 import { createBundledBookContentProvider, BUNDLED_BOOK_REVISION_ID } from "./bundled-book-content-provider.js";
-import { createSourceRetriever } from "./source-retriever.js";
 import { hasGenerationService } from "./reader-capabilities.js";
 import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./memory-proxy-provider.js";
 
 (() => {
   let units = [];
   let bookRevision = null;
-  let sourceRetriever = null;
   const readerConfig = window.READ_BOOK_CONFIG || {};
   const queryParams = new URLSearchParams(window.location.search);
   const explicitBookId = queryParams.get("book");
@@ -56,6 +54,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
   };
 
   const $ = (id) => document.getElementById(id);
+  if (queryParams.has("debugRetrieval")) window.__rbReadState = state;
   const messageList = $("messageList");
   const panelStack = document.querySelector(".panel-stack");
   let nearBottom = true;
@@ -142,7 +141,11 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
     } else if (phase === "error") {
       text.textContent = "全书索引不可用：" + (status?.error || "未知错误") + "；本轮只用关键词检索。";
     } else if (phase === "embedding") {
-      text.textContent = "正在建立全书向量索引 " + (status.done || 0) + "/" + (status.total || 0) + " 段，关键词检索已可用…";
+      text.textContent = "正在建立全书向量索引：已建 " + (status.done || 0) + "/" + (status.total || 0) + " 个片段（关键词检索已可用）…";
+    } else if (phase === "indexing") {
+      text.textContent = status?.chunkCount
+        ? "正在建立全书索引：已切分 " + status.chunkCount + " 个片段，正在计算向量（关键词检索已可用）…"
+        : "正在切分全书并建立索引，稍后即可先用关键词检索阅读…";
     } else if (phase === "ready") {
       text.textContent = "全书索引已就绪 · " + status.chunkCount + " 个片段 · " + (status.model || "");
     } else if (phase === "keyword_only") {
@@ -158,14 +161,20 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
   function createRetrievalCard(retrieval) {
     const card = document.createElement("div");
     card.className = "retrieval-card";
+    const scope = retrieval.scope?.mode || retrieval.scope || (retrieval.hasEvidence ? "book" : "none");
+    const hitCount = Number.isFinite(retrieval.hitCount) ? retrieval.hitCount : (retrieval.hits?.length || 0);
     const head = document.createElement("div");
     head.className = "retrieval-card-head";
     const title = document.createElement("strong");
     title.textContent = "全书检索";
     const count = document.createElement("span");
-    count.textContent = retrieval.hasEvidence
-      ? "命中 " + retrieval.hits.length + " 段，带入 " + (retrieval.passages?.length || 0) + " 段"
-      : "没有命中原文";
+    if (scope === "none") {
+      count.textContent = "没有命中原文";
+    } else if (scope === "current") {
+      count.textContent = "命中 " + hitCount + " 段 · 证据集中在当前段";
+    } else {
+      count.textContent = "命中 " + hitCount + " 段，带入 " + (retrieval.passages?.length || 0) + " 段";
+    }
     head.append(title, count);
     card.append(head);
     const passages = Array.isArray(retrieval.passages) ? retrieval.passages : [];
@@ -194,6 +203,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
     const notices = [
       ...(retrieval.notice ? [retrieval.notice] : []),
       ...(Array.isArray(retrieval.budgetNotices) ? retrieval.budgetNotices : []),
+      ...(scope === "current" ? ["证据集中在当前段，本轮未额外带入全书片段。"] : []),
       ...(retrieval.hasEvidence ? [] : ["没有可引用的原文片段，本轮不会让模型凭先验知识作答。"]),
     ];
     for (const noticeText of notices) {
@@ -463,17 +473,19 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
       setGenerationStatus("正在将消息保存到本地…");
       let retrievalForThisTurn = null;
       try {
-        const additionalUnits = sourceRetriever?.retrieve(value, state.displayedUnit?.id, 7) || [];
         const result = await productionRuntime.send(value, state.displayedUnit, {
-          additionalUnits,
+          additionalUnits: [],
           onRetrieval(retrieval) {
             retrievalForThisTurn = retrieval;
-            if (retrieval.hasEvidence) {
-              setGenerationStatus("全书检索命中 " + retrieval.hits.length + " 段"
+            const scopeMode = retrieval.scope?.mode || (retrieval.hasEvidence ? "book" : "none");
+            if (scopeMode === "none") {
+              setGenerationStatus("全书中没有检索到相关原文；本轮不会让模型凭先验作答。");
+            } else if (scopeMode === "book") {
+              setGenerationStatus("全书检索命中 " + retrieval.hitCount + " 段，带入 " + (retrieval.passages?.length || 0) + " 段"
                 + (retrieval.notice ? "；" + retrieval.notice : "")
                 + "，正在按相关度组织回答…");
             } else {
-              setGenerationStatus("全书中没有检索到相关原文；本轮不会让模型凭先验作答。");
+              setGenerationStatus("证据集中在当前段（命中 " + retrieval.hitCount + " 段），不额外带入全书片段，正在组织回答…");
             }
           },
           onPersisted() {
@@ -482,7 +494,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
             const label = userArticle.querySelector(".saved-label");
             if (label) label.textContent = "本地已保存";
             if (!retrievalForThisTurn) {
-              setGenerationStatus("本地已保存 · 已附带 " + additionalUnits.length + " 条关联原文证据 · Agent 正在生成");
+              setGenerationStatus("本地已保存 · Agent 正在生成");
             }
           },
           onDelta(text) {
@@ -503,10 +515,12 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
         const terminalStatus = result.snapshot?.status;
         if (stopRequested || terminalStatus === "cancelled" || terminalStatus === "cancel_requested") {
           setGenerationStatus("已取消，可重试：原始输入已保存，可对这条回复点“重试”重新生成。");
-        } else if (retrievalForThisTurn && !retrievalForThisTurn.hasEvidence) {
+        } else if (retrievalForThisTurn?.scope?.mode === "none") {
           setGenerationStatus("全书检索未命中：已明确说明找不到，没有让模型凭先验回答。");
+        } else if (retrievalForThisTurn?.scope?.mode === "book") {
+          setGenerationStatus("回复已完成并保存 · 全书检索命中 " + retrievalForThisTurn.hitCount + " 段，来源已标注。");
         } else if (retrievalForThisTurn) {
-          setGenerationStatus("回复已完成并保存 · 全书检索命中 " + retrievalForThisTurn.hits.length + " 段，来源已标注。");
+          setGenerationStatus("回复已完成并保存 · 证据集中在当前段，未额外带入全书片段。");
         } else {
           setGenerationStatus("回复已完成并保存。");
         }
@@ -930,11 +944,15 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
 
   async function refreshPersistedMessages({ forceScroll = false } = {}) {
     if (!productionRuntime) return;
-    const [persisted, citationRecords] = await Promise.all([
+    const [persisted, citationRecords, retrievalRecords] = await Promise.all([
       productionRuntime.loadMessages(),
       productionRuntime.loadCitations(),
+      typeof productionRuntime.loadMessageRetrieval === "function"
+        ? productionRuntime.loadMessageRetrieval()
+        : Promise.resolve(new Map()),
     ]);
     const citations = citationRecords || [];
+    const retrievals = retrievalRecords || new Map();
     state.messages = [];
     messageList.replaceChildren();
     for (const item of persisted) {
@@ -963,7 +981,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
           locator: item.locator,
           excerpt: item.excerpt,
         })),
-        retrieval: retrievalByMessage.get(message.id) || null,
+        retrieval: retrievals.get(message.id) || retrievalByMessage.get(message.id) || null,
       });
     }
     scrollIfFollowing(forceScroll);
@@ -1433,7 +1451,6 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
         bookRevision = await bookContentProvider.loadBookRevision(requestedBookRevisionId);
       }
       units = bookRevision.units;
-      sourceRetriever = createSourceRetriever(units);
       state.mainlineIndex = units.findIndex(unit => unit.id === bookRevision.initialMainlineUnitId);
       if (state.mainlineIndex < 0) throw new Error("书籍主线起始单元不存在。");
       state.displayedUnit = units[state.mainlineIndex];

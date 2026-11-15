@@ -26,6 +26,7 @@ const FRAMING_PHRASES = [
   "有没有", "是否", "哪些", "哪里", "如何", "怎样", "怎么", "什么", "为什么",
   "请问", "告诉我", "提到", "谈到", "讨论", "关系", "内容", "观点", "看法",
   "意思", "解释", "介绍", "知道", "理解", "一下", "地方", "地方吗", "吗",
+  "这个说法", "这种说法", "说法", "后面", "前面", "这样", "那样",
 ];
 const FRAMING_TOKENS = new Set();
 for (const phrase of FRAMING_PHRASES) {
@@ -42,10 +43,6 @@ export const CHUNK_OVERLAP_RATIO = 0.15;
 export const RRF_K = 60;
 /** 没有关键词命中时，向量余弦必须达到该阈值才算“书里有依据”。 */
 export const MIN_VECTOR_SCORE = 0.58;
-
-const BOOK_SCOPE_MARKERS = /(全书|整本书|整部书|通篇|贯穿|哪些章节|哪几章|所有章节|各章|书里|书中|全文|前后文|全书范围)/;
-const CURRENT_SCOPE_MARKERS = /(这一段|这段|这一句|这句|这段话|这句话|当前段|当前单元|此处|本段|本文|上面这段)/;
-const EVIDENCE_MARKERS = /(证据|原文|出处|在哪里|在哪|哪里提到|有没有提到|找一?找|列举|归纳|梳理|比较|对照|脉络|主张)/;
 
 export function normalizeText(value) {
   return String(value ?? "").normalize("NFKC").toLocaleLowerCase("zh-CN");
@@ -279,21 +276,61 @@ export function rrfFuse(rankings, k = RRF_K) {
 }
 
 /**
- * 自动判断问题范围。只有明确的“全书/书中/哪些章节/找证据”等信号才升级为全书检索，
- * 其余保持当前段讨论，避免破坏既有阅读节奏。
+ * 证据驱动的范围判断（不看“全书/章节/找证据”等提问措辞）：
+ * - 任何其他章节的片段达到相关性门限 → 主题确实在全书展开，带入全书片段；
+ * - 当前段不达标但其他片段达标 → 也应带入；
+ * - 只有同章邻近片段、且向量普遍偏弱 → 证据集中在当前段，不额外带入；
+ * - 没有证据时，若问题里的词在书中存在，说明是在讨论当前内容 → 当前段；
+ * - 没有证据且问题里的词在书中完全不存在 → 书里没有。
  */
-export function analyzeQuestion(question) {
-  const text = String(question || "").trim();
-  if (!text) return { mode: "current", reason: "empty" };
-  if (CURRENT_SCOPE_MARKERS.test(text)) return { mode: "current", reason: "explicit_current" };
-  if (BOOK_SCOPE_MARKERS.test(text)) return { mode: "book", reason: "explicit_book" };
-  if (EVIDENCE_MARKERS.test(text) && /(作者|书|章|篇|篇目)/.test(text)) {
-    return { mode: "book", reason: "evidence_request" };
+export function decideScope({
+  hits,
+  currentUnitId,
+  currentChapter,
+  hasEvidence,
+  presentTermCount,
+  keywordChapters = [],
+}) {
+  if (!hasEvidence) {
+    if (presentTermCount > 0) return { mode: "current", reason: "conversation" };
+    return { mode: "none", reason: "no_evidence" };
   }
-  if (text.length >= 18 && /(作者|贯穿|思想|体系|核心观点|整体)/.test(text)) {
-    return { mode: "book", reason: "long_scope_question" };
+  const usable = (hits || []).filter((hit) => hit?.chunk && hit.chunk.structureNodeId);
+  const others = usable.filter((hit) => hit.chunk.structureNodeId !== currentUnitId);
+  if (!others.length) return { mode: "current", reason: "only_current" };
+  const currentHits = usable.filter((hit) => hit.chunk.structureNodeId === currentUnitId);
+  if (!currentHits.length) return { mode: "book", reason: "no_current_match" };
+  const currentTop = Math.max(...currentHits.map((hit) => hit.vectorScore || 0));
+  const otherTop = Math.max(...others.map((hit) => hit.vectorScore || 0));
+  const crossChapterTop = Math.max(0, ...others
+    .filter((hit) => hit.chapter && hit.chapter !== currentChapter)
+    .map((hit) => hit.vectorScore || 0));
+  // 其他章节有真正相关的片段：这是全书层面的讨论，带入并标注来源。
+  if (crossChapterTop >= MIN_VECTOR_SCORE) return { mode: "book", reason: "cross_chapter_evidence" };
+  // 当前段本身不够相关，但别处有达标片段（可能是同章更远处）。
+  if (currentTop < MIN_VECTOR_SCORE && otherTop >= MIN_VECTOR_SCORE) {
+    return { mode: "book", reason: "broader_evidence" };
   }
-  return { mode: "current", reason: "default_current" };
+  // 向量都偏弱时，跨章节的关键词命中仍然说明该术语在全书出现。
+  const crossChapterKeywords = (keywordChapters || []).filter((chapter) => chapter && chapter !== currentChapter);
+  if (crossChapterKeywords.length && otherTop < MIN_VECTOR_SCORE) {
+    return { mode: "book", reason: "cross_chapter_keyword" };
+  }
+  return { mode: "current", reason: "current_dominant" };
+}
+
+/**
+ * 是否需要把当前段原文补进语义查询：
+ * - 完全没有实词时才必须补；
+ * - “这个说法/这句话/这段/它”这类指代，只有在自身没有足够具体词时才补；
+ *   已经引用具体词句的追问（如“这段的‘扑人逐块’怎么理解”）不能补，
+ *   否则同一类问题换个问法会得到不同的检索结果。
+ */
+export function needsCurrentContext(question, termCount, specificTermCount = 0) {
+  const text = String(question || "");
+  const anaphoric = /(这个说法|这种说法|这句话|这段|上面|它)/.test(text);
+  if (!anaphoric) return termCount === 0;
+  return specificTermCount < 2;
 }
 
 /**

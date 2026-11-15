@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  analyzeQuestion,
   assessKeywordSpecificity,
   buildChunks,
+  decideScope,
   evaluateEvidence,
   keywordTerms,
   planPromptBudget,
@@ -66,11 +66,48 @@ test("buildChunks is deterministic for the same revision and units", async () =>
   assert.deepEqual(first.map((chunk) => chunk.id), second.map((chunk) => chunk.id));
 });
 
-test("analyzeQuestion routes explicit whole-book questions to retrieval", () => {
-  assert.equal(analyzeQuestion("全书里作者如何论述知行合一？").mode, "book");
-  assert.equal(analyzeQuestion("作者在书中哪些地方谈到心即理？").mode, "book");
-  assert.equal(analyzeQuestion("这段话里的“行”是什么意思？").mode, "current");
-  assert.equal(analyzeQuestion("我不同意这个说法，行不是知的结果。").mode, "current");
+test("decideScope uses evidence strength instead of explicit book words", () => {
+  // 其他章节有达标片段 → 全书。
+  assert.equal(decideScope({
+    hits: [
+      { chunk: { id: "c1", structureNodeId: "current" }, chapter: "卷中", vectorScore: 0.61 },
+      { chunk: { id: "c2", structureNodeId: "other" }, chapter: "卷上", vectorScore: 0.68 },
+    ],
+    currentUnitId: "current", currentChapter: "卷中", hasEvidence: true, presentTermCount: 3,
+    keywordChapters: ["卷中"],
+  }).mode, "book");
+  // 只有当前段命中 → 当前段。
+  assert.equal(decideScope({
+    hits: [{ chunk: { id: "c1", structureNodeId: "current" }, chapter: "卷中", vectorScore: 0.61 }],
+    currentUnitId: "current", currentChapter: "卷中", hasEvidence: true, presentTermCount: 3,
+  }).mode, "current");
+  // 同章邻近片段但都未达门限：证据集中在当前段，不额外带入。
+  assert.equal(decideScope({
+    hits: [
+      { chunk: { id: "c1", structureNodeId: "current" }, chapter: "卷中", vectorScore: 0.51 },
+      { chunk: { id: "c2", structureNodeId: "other" }, chapter: "卷中", vectorScore: 0.53 },
+    ],
+    currentUnitId: "current", currentChapter: "卷中", hasEvidence: true, presentTermCount: 3,
+    keywordChapters: ["卷中"],
+  }).mode, "current");
+  // 当前段完全没命中、证据在别处 → 全书。
+  assert.equal(decideScope({
+    hits: [{ chunk: { id: "c2", structureNodeId: "other" }, chapter: "卷上", vectorScore: 0.64 }],
+    currentUnitId: "current", currentChapter: "卷中", hasEvidence: true, presentTermCount: 3,
+  }).mode, "book");
+  // 向量都偏弱，但具体关键词命中别的章节 → 全书。
+  assert.equal(decideScope({
+    hits: [
+      { chunk: { id: "c1", structureNodeId: "current" }, chapter: "卷中", vectorScore: 0.52 },
+      { chunk: { id: "c2", structureNodeId: "other" }, chapter: "卷中", vectorScore: 0.54 },
+    ],
+    currentUnitId: "current", currentChapter: "卷中", hasEvidence: true, presentTermCount: 3,
+    keywordChapters: ["卷中", "卷下"],
+  }).mode, "book");
+  // 没有检索证据但问题词在书里存在：视为对当前段的讨论，而不是“书里没有”。
+  assert.equal(decideScope({ hits: [], currentUnitId: "current", hasEvidence: false, presentTermCount: 2 }).mode, "current");
+  // 问题词在书里完全不存在：明确说找不到。
+  assert.equal(decideScope({ hits: [], currentUnitId: "current", hasEvidence: false, presentTermCount: 0 }).mode, "none");
 });
 
 test("keywordTerms keeps Chinese bigrams and trigrams without a dictionary", () => {

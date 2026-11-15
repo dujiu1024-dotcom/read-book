@@ -11,7 +11,7 @@ import { createHttpEncryptedBackupPort } from "../../poc/encrypted-backup/src/ht
 import { runMemoryExtraction, persistAcceptedMemoryCandidates } from "../../packages/agent-adapter/src/memory-extraction.ts";
 import { selectThreadMemoryState } from "./memory-thread-scope.js";
 import { hasEncryptedBackupService } from "./reader-capabilities.js";
-import { analyzeQuestion, planPromptBudget } from "./book-retrieval.js";
+import { planPromptBudget } from "./book-retrieval.js";
 import { createBookRetriever, createEmbeddingClient } from "./retrieval-runtime.js";
 
 function uuid() {
@@ -223,7 +223,8 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     const eligible = persisted
       .map((item) => item.message)
       .filter((message) => message.content?.trim() && (message.role === "user" || message.status === "completed"))
-      .slice(-40);
+      // 记忆抽取接口只接受 1–30 条消息，超出会被整批拒绝。
+      .slice(-30);
     const userMessages = eligible.filter((message) => message.role === "user");
     if (!userMessages.length) return { ...(await loadMemoryState()), extractionStatus: "no_user_messages", persistedIds: [], acceptedNotPersisted: [] };
     const context = {
@@ -483,6 +484,51 @@ export async function createProductionReaderRuntime(config, bookRevision) {
   }
 
   /**
+   * 检索摘要随消息保存，刷新后仍能重现“命中 N 段 / 带入 M 段”。
+   * 它是可重建的界面元数据，不写 backup journal。
+   */
+  async function persistRetrievalSummary(assistantMessageId, userContent, retrieval) {
+    if (!assistantMessageId || typeof repository.saveMessageRetrieval !== "function") return;
+    const passages = (retrieval.passages || []).map((passage) => ({
+      chunk: {
+        id: passage.chunk.id,
+        structureNodeId: passage.chunk.structureNodeId,
+        locator: passage.chunk.locator,
+        chapter: passage.chunk.chapter,
+        title: passage.chunk.title,
+      },
+      excerpt: passage.excerpt,
+      truncated: Boolean(passage.truncated),
+      score: Number(passage.score || 0),
+    }));
+    try {
+      await repository.saveMessageRetrieval(datasetId, {
+        messageId: assistantMessageId,
+        threadId: thread.id,
+        query: userContent,
+        scope: retrieval.scope?.mode || (retrieval.hasEvidence ? "book" : "none"),
+        hasEvidence: Boolean(retrieval.hasEvidence),
+        hitCount: Number(retrieval.hitCount ?? retrieval.hits?.length ?? 0),
+        includedCount: passages.length,
+        keywordCount: Number(retrieval.keywordCount || 0),
+        vectorTopScore: Number(retrieval.vectorTopScore || 0),
+        omitted: Number(retrieval.omitted || 0),
+        notice: retrieval.notice || null,
+        budgetNotices: Array.isArray(retrieval.budgetNotices) ? retrieval.budgetNotices : [],
+        passages,
+      });
+    } catch (error) {
+      console.warn("[retrieval] 检索摘要保存失败", error);
+    }
+  }
+
+  async function loadMessageRetrieval() {
+    if (typeof repository.listMessageRetrieval !== "function") return new Map();
+    const records = await repository.listMessageRetrieval(datasetId, thread.id);
+    return new Map(records.map((record) => [record.messageId, record]));
+  }
+
+  /**
    * 全书检索无命中时，不调用模型：直接落一条“书里没找到”的明确回答。
    * 这样不会让模型用先验知识硬答。
    */
@@ -514,6 +560,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         sourceReferences: [],
       });
     });
+    await persistRetrievalSummary(assistantId, content, retrieval);
     return {
       assistantMessageId: assistantId,
       snapshot: { status: "completed", result: { content: answer, citations: [] } },
@@ -525,17 +572,15 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     if (!controller) throw new Error("真实 Agent 服务尚未配置；当前仅支持本地阅读与历史查看。");
     if (!unit) throw new Error("当前没有可关联的原文单元。");
     const messages = await loadMessages();
-    const scope = analyzeQuestion(content);
-    let retrieval = null;
-    if (scope.mode === "book") {
-      retrieval = await retriever.search(content, { limit: 8 });
-      callbacks.onRetrieval?.(retrieval);
-      if (!retrieval.hasEvidence) {
-        const result = await persistNoEvidenceAnswer(content, unit, retrieval);
-        callbacks.onPersisted?.();
-        return result;
-      }
+    // 默认先做一次全书检索，再由证据强度决定：全书 / 当前段 / 书里没有。
+    let retrieval = await retriever.search(content, { limit: 8, currentUnit: unit });
+    callbacks.onRetrieval?.(retrieval);
+    if (retrieval.scope?.mode === "none") {
+      const result = await persistNoEvidenceAnswer(content, unit, retrieval);
+      callbacks.onPersisted?.();
+      return result;
     }
+    const includePassages = retrieval.scope?.mode === "book" ? (retrieval.passages || []) : [];
     const recentMessages = messages.slice(-12).map(({ message }) => ({
       role: message.role,
       content: message.content,
@@ -543,21 +588,19 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     const memories = await recallRelevantMemories(unit.id);
     const budget = planPromptBudget({
       currentUnit: unit,
-      passages: retrieval?.passages || [],
+      passages: includePassages,
       messages: recentMessages,
       memories,
     });
-    if (retrieval) {
-      retrieval = { ...retrieval, budgetNotices: budget.notices };
-      callbacks.onRetrieval?.(retrieval);
-    }
+    retrieval = { ...retrieval, budgetNotices: budget.notices, passages: budget.passages };
+    callbacks.onRetrieval?.(retrieval);
     const userMessageId = uuid();
     const assistantMessageId = uuid();
     const clientGenerationId = uuid();
     const idempotencyKey = uuid() + "-" + uuid();
     const sourceBundle = createSourceBundle(unit, {
       passages: budget.passages,
-      additionalUnits: retrieval ? [] : callbacks.additionalUnits,
+      additionalUnits: retrieval.scope?.mode === "book" ? [] : callbacks.additionalUnits,
       currentExcerpt: budget.currentExcerpt.text,
     });
     const sourceReferences = sourceBundle.units.map((sourceUnit) => ({
@@ -577,11 +620,11 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         response_preferences: { language: "zh-CN" },
         ...(retrieval ? {
           retrieval: {
-            mode: "book",
-            scope: scope.reason,
-            hit_count: retrieval.hits.length,
+            mode: retrieval.scope?.mode || "book",
+            scope: retrieval.scope?.reason || "",
+            hit_count: retrieval.hitCount ?? retrieval.hits?.length ?? 0,
             keyword_hits: retrieval.keywordCount,
-            vector_top_score: Number(retrieval.vectorTopScore.toFixed(4)),
+            vector_top_score: Number((retrieval.vectorTopScore || 0).toFixed(4)),
           },
         } : {}),
       },
@@ -599,6 +642,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     if (config.memoryExtractionProvider && config.memoryCandidatePolicy) {
       void extractMemories().then((memoryState) => callbacks.onMemoryUpdate?.(memoryState)).catch((error) => callbacks.onMemoryError?.(error));
     }
+    await persistRetrievalSummary(result.assistantMessageId, content, retrieval);
     return { ...result, retrieval };
   }
 
@@ -827,6 +871,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     retryFailedGeneration,
     getRevisionActivity,
     retrievalStatus: () => retriever.status(),
+    loadMessageRetrieval,
     ensureRetrievalIndex: () => retriever.ensureIndex(),
     rebuildRetrievalIndex: () => retriever.rebuild(),
     searchBook: (question, options) => retriever.search(question, options),
