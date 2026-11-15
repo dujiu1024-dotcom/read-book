@@ -23,6 +23,52 @@ import type { Thread, AssistantMessage, AssistantMessageStatus, MemoryVersion, M
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
+export interface RetrievalChunkWrite {
+  id: string;
+  chunkIndex: number;
+  structureNodeId: string;
+  locator: string;
+  chapter: string;
+  title: string;
+  unitIds: string[];
+  text: string;
+  charLength: number;
+}
+
+export interface RetrievalChunkRecord extends RetrievalChunkWrite {
+  bookRevisionId: string;
+}
+
+export interface RetrievalEmbeddingRecord {
+  chunkId: string;
+  dimensions: number;
+  vector: Uint8Array;
+}
+
+export interface RetrievalKeywordHit {
+  chunk: RetrievalChunkRecord;
+  rank: number;
+  matchedTerms: number;
+}
+
+export type RetrievalIndexStatus = "ready" | "keyword_only" | "stale";
+
+export interface RetrievalIndexStateRecord {
+  bookRevisionId: string;
+  model: string;
+  dimensions: number;
+  chunkCount: number;
+  sourceFingerprint: string;
+  status: RetrievalIndexStatus;
+  updatedAt: string;
+}
+
+export interface RetrievalIndexWrite {
+  bookRevisionId: string;
+  chunks: RetrievalChunkWrite[];
+  state: Omit<RetrievalIndexStateRecord, "updatedAt">;
+}
+
 export function mapWorkerError(payload: { message: string; code?: string }): Error {
   switch (payload.code) {
     case "DATASET_NOT_FOUND":
@@ -44,7 +90,7 @@ export function mapWorkerError(payload: { message: string; code?: string }): Err
 
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
-  readonly schemaVersion = 8;
+  readonly schemaVersion = 9;
   private worker: Worker;
   private nextId = 0;
   private pending = new Map<number, Pending>();
@@ -104,8 +150,11 @@ export class SqliteOpfsRepository implements LocalRepository {
       await this.request("begin", { datasetId });
       const call = <R>(name: string, input: Record<string, unknown> = {}) =>
         this.request<R>("tx", { datasetId, operation: name, input });
-      const tx: LocalRepositoryTransaction = {
+      const tx = {
         datasetId,
+        replaceRetrievalIndex: (input: { index: RetrievalIndexWrite }) => call("replaceRetrievalIndex", input),
+        saveRetrievalEmbeddings: (input: { bookRevisionId: string; model: string; dimensions: number; embeddings: Array<{ chunkId: string; vector: Uint8Array }> }) =>
+          call("saveRetrievalEmbeddings", input),
         getThreadByRevision: (bookRevisionId) => call("getThreadByRevision", { bookRevisionId }),
         createThread: (thread) => call("createThread", { thread }),
         appendUserMessage: (message: NewUserMessage) => call("appendUserMessage", { message }),
@@ -135,7 +184,7 @@ export class SqliteOpfsRepository implements LocalRepository {
         acknowledgeBackup: (snapshotSequence: number, backupId: string, backedUpAt: string) =>
           call("acknowledgeBackup", { snapshotSequence, backupId, backedUpAt }),
         saveGenerationDelivery: (delivery: GenerationDeliveryRecord) => call("saveGenerationDelivery", { delivery }),
-      } as LocalRepositoryTransaction;
+      } as unknown as LocalRepositoryTransaction;
       try {
         const result = await operation(tx);
         await this.request("commit", { datasetId });
@@ -211,6 +260,45 @@ export class SqliteOpfsRepository implements LocalRepository {
   async listPresentedSources(datasetId: string, threadId: string): Promise<PresentedSourceRecord[]> {
     await this.ensureReady();
     return this.request("listPresentedSources", { datasetId, threadId });
+  }
+
+  /**
+   * 全书检索索引是“可重建缓存”，不属于备份快照，也不写 backup journal。
+   * 这些方法暂不进入 LocalRepository 合约，由阅读原型按结构类型使用。
+   */
+  async getRetrievalIndexState(datasetId: string, bookRevisionId: string): Promise<RetrievalIndexStateRecord | null> {
+    await this.ensureReady();
+    return this.request("getRetrievalIndexState", { datasetId, bookRevisionId });
+  }
+  async getRetrievalChunks(datasetId: string, bookRevisionId: string): Promise<RetrievalChunkRecord[]> {
+    await this.ensureReady();
+    return this.request("getRetrievalChunks", { datasetId, bookRevisionId });
+  }
+  async getRetrievalEmbeddings(datasetId: string, bookRevisionId: string): Promise<RetrievalEmbeddingRecord[]> {
+    await this.ensureReady();
+    return this.request("getRetrievalEmbeddings", { datasetId, bookRevisionId });
+  }
+  async searchRetrievalKeyword(
+    datasetId: string,
+    bookRevisionId: string,
+    terms: string[],
+    limit = 20,
+  ): Promise<RetrievalKeywordHit[]> {
+    await this.ensureReady();
+    return this.request("searchRetrievalKeyword", { datasetId, bookRevisionId, terms, limit });
+  }
+  async replaceRetrievalIndex(datasetId: string, index: RetrievalIndexWrite): Promise<{ chunkCount: number }> {
+    return this.transaction(datasetId, (tx) => (tx as unknown as {
+      replaceRetrievalIndex(input: { index: RetrievalIndexWrite }): Promise<{ chunkCount: number }>;
+    }).replaceRetrievalIndex({ index }));
+  }
+  async saveRetrievalEmbeddings(
+    datasetId: string,
+    input: { bookRevisionId: string; model: string; dimensions: number; embeddings: Array<{ chunkId: string; vector: Uint8Array }> },
+  ): Promise<{ embedded: number; status: RetrievalIndexStateRecord["status"] }> {
+    return this.transaction(datasetId, (tx) => (tx as unknown as {
+      saveRetrievalEmbeddings(value: typeof input): Promise<{ embedded: number; status: RetrievalIndexStateRecord["status"] }>;
+    }).saveRetrievalEmbeddings(input));
   }
   async close(): Promise<void> {
     if (this.closed) return;

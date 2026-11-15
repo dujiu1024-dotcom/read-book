@@ -217,13 +217,13 @@ test("schema v1 to v6 migration preserves legacy dataset cursors and creates can
     return { dataset, candidates };
   });
   expect(migrated.dataset.id).toBe("legacy-v1-dataset");
-  expect(migrated.dataset.schemaVersion).toBe(8);
+  expect(migrated.dataset.schemaVersion).toBe(9);
   expect(migrated.dataset.dirtySequence).toBe(7);
   expect(migrated.dataset.lastAckedSequence).toBe(2);
   expect(migrated.candidates).toEqual([]);
 });
 
-test("schema v5 to v8 migration keeps chunk-less citations in the legacy table instead of dropping them", async ({ page }) => {
+test("schema v5 to current migration keeps chunk-less citations in the legacy table instead of dropping them", async ({ page }) => {
   await page.goto("/");
   const seeded = await page.evaluate(async () => {
     const worker = new Worker("/tests/legacy-db.worker.js", { type: "module" });
@@ -243,7 +243,7 @@ test("schema v5 to v8 migration keeps chunk-less citations in the legacy table i
     await repository.close();
     return { dataset, messageCount: messages.length };
   });
-  expect(migrated.dataset.schemaVersion).toBe(8);
+  expect(migrated.dataset.schemaVersion).toBe(9);
   // Citations are not cascaded into message deletion; only the chunk-level citation table is rebuilt.
   expect(migrated.messageCount).toBe(2);
 
@@ -256,7 +256,7 @@ test("schema v5 to v8 migration keeps chunk-less citations in the legacy table i
     });
   });
   expect(inspected.ok, inspected.error).toBe(true);
-  expect(inspected.userVersion).toBe(8);
+  expect(inspected.userVersion).toBe(9);
   expect(inspected.newCitationColumns).toEqual(expect.arrayContaining(["chunk_id", "source_hash"]));
   // The rebuilt chunk-level table starts empty: v5 rows carry no chunk_id/source_hash, so no fabricated backfill.
   expect(inspected.newCitationCount).toBe(0);
@@ -788,7 +788,7 @@ test("backup journal records content mutations at the committed dirty sequence a
     datasetA, revision, threadId,
     messageId: "cccccccc-3333-4333-8333-cccccccccccc",
   });
-  expect(result.first.schemaVersion).toBe(8);
+  expect(result.first.schemaVersion).toBe(9);
   expect(result.first.dirtySequence).toBe(1);
   expect(result.first.backupJournal.map((entry) => entry.entityType).sort()).toEqual(["message", "thread"]);
   expect(new Set(result.first.backupJournal.map((entry) => entry.sequence))).toEqual(new Set([1]));
@@ -797,6 +797,58 @@ test("backup journal records content mutations at the committed dirty sequence a
   expect(result.second.backupJournal.find((entry) => entry.entityType === "readingPosition")?.entityId).toBe(threadId);
   expect(result.afterAck.dirtySequence).toBe(2);
   expect(result.afterAck.backupJournal).toEqual([]);
+});
+
+test("retrieval index stays a rebuildable cache outside the backup journal", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    await repository.transaction(ids.datasetA, async (tx) => {
+      await tx.createThread({
+        id: ids.threadId, datasetId: ids.datasetA, bookRevisionId: ids.revision,
+        createdAt: "2026-11-14T00:00:00.000Z",
+      });
+      await tx.appendUserMessage({
+        id: ids.messageId, threadId: ids.threadId, content: "建立索引前的消息",
+        createdAt: "2026-11-14T00:00:01.000Z", sourceReferences: [],
+      });
+    });
+    const before = await repository.createConsistentSnapshot(ids.datasetA);
+    await repository.replaceRetrievalIndex(ids.datasetA, {
+      bookRevisionId: ids.revision,
+      chunks: [{
+        id: "11111111-1111-4111-8111-111111111111",
+        chunkIndex: 0,
+        structureNodeId: "node-1",
+        locator: "txt#line-1",
+        chapter: "卷上",
+        title: "卷上 · 第1段",
+        unitIds: ["node-1"],
+        text: "知行合一，致良知。",
+        charLength: 9,
+      }],
+      state: {
+        bookRevisionId: ids.revision, model: "bge-m3", dimensions: 0,
+        chunkCount: 1, sourceFingerprint: "fingerprint-1", status: "keyword_only",
+      },
+    });
+    const keyword = await repository.searchRetrievalKeyword(ids.datasetA, ids.revision, ["知行", "知行合"], 5);
+    const after = await repository.createConsistentSnapshot(ids.datasetA);
+    const state = await repository.getRetrievalIndexState(ids.datasetA, ids.revision);
+    await repository.close();
+    return { before, after, keyword, state };
+  }, {
+    datasetA, revision, threadId,
+    messageId: "cccccccc-3333-4333-8333-cccccccccccc",
+  });
+  expect(result.keyword).toHaveLength(1);
+  expect(result.keyword[0].chunk.id).toBe("11111111-1111-4111-8111-111111111111");
+  expect(result.state.status).toBe("keyword_only");
+  expect(result.state.chunkCount).toBe(1);
+  // 索引写入是缓存维护，不得推进 dirty_sequence，也不得进入备份 journal。
+  expect(result.after.dirtySequence).toBe(result.before.dirtySequence);
+  expect(result.after.backupJournal).toEqual(result.before.backupJournal);
 });
 
 test("SQLite OPFS persists SM-001 to SM-008 mainline progress and reading rounds", async ({ page }) => {

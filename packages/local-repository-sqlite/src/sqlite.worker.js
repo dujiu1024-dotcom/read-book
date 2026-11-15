@@ -29,7 +29,7 @@ function parseJson(value, fallback = []) {
 function ensureDataset(datasetId) {
   if (typeof datasetId !== "string" || !datasetId.trim()) throw new Error("datasetId 非法");
   execute(
-    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,8,?,?,0,0,'active')",
+    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,9,?,?,0,0,'active')",
     [datasetId, new Date().toISOString(), new Date().toISOString()],
   );
   const dataset = first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
@@ -164,7 +164,7 @@ async function initialize() {
   // Existing installations have the v1 schema and no PRAGMA user_version marker.
   // Treat version 0 as the shipped v1 baseline, then migrate atomically to v2.
   const storedVersion = Number(first("PRAGMA user_version")?.user_version ?? 0);
-  if (storedVersion > 8) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
+  if (storedVersion > 9) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
   if (storedVersion < 2) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -350,6 +350,64 @@ async function initialize() {
       throw new Error("数据库 Schema v8 迁移失败，已回滚", { cause: error });
     }
   }
+  if (storedVersion < 9) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      // 检索索引是可重建缓存：不写 backup_journal，也不推进 dirty_sequence；
+      // 老库在升级后按需补齐索引（缺索引时关键词/向量通道会重新建表并填充）。
+      db.exec({ sql: `
+        CREATE TABLE IF NOT EXISTS retrieval_chunk (
+          id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          book_revision_id TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL,
+          structure_node_id TEXT NOT NULL,
+          locator TEXT NOT NULL,
+          chapter TEXT NOT NULL,
+          title TEXT NOT NULL,
+          unit_ids TEXT NOT NULL,
+          text TEXT NOT NULL,
+          char_length INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(dataset_id,book_revision_id,chunk_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_retrieval_chunk_revision ON retrieval_chunk(dataset_id,book_revision_id,chunk_index);
+        CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_chunk_fts USING fts5(
+          text,
+          chunk_id UNINDEXED,
+          dataset_id UNINDEXED,
+          book_revision_id UNINDEXED,
+          tokenize='trigram'
+        );
+        CREATE TABLE IF NOT EXISTS retrieval_embedding (
+          chunk_id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          book_revision_id TEXT NOT NULL,
+          model TEXT NOT NULL,
+          dimensions INTEGER NOT NULL,
+          vector BLOB NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_retrieval_embedding_revision ON retrieval_embedding(dataset_id,book_revision_id);
+        CREATE TABLE IF NOT EXISTS retrieval_index_state (
+          book_revision_id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          model TEXT NOT NULL,
+          dimensions INTEGER NOT NULL,
+          chunk_count INTEGER NOT NULL,
+          source_fingerprint TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('ready','keyword_only','stale')),
+          updated_at TEXT NOT NULL
+        );
+        UPDATE local_dataset SET schema_version=9;
+        PRAGMA user_version=9;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v9 迁移失败，已回滚", { cause: error });
+    }
+  }
   assertDatabaseIntegrity();
 }
 
@@ -398,6 +456,20 @@ function rowToMessage(row) {
     },
     sequence: row.sequence,
     idempotencyKey: row.idempotency_key,
+  };
+}
+function rowToRetrievalChunk(row) {
+  return {
+    id: row.id,
+    bookRevisionId: row.book_revision_id,
+    chunkIndex: row.chunk_index,
+    structureNodeId: row.structure_node_id,
+    locator: row.locator,
+    chapter: row.chapter,
+    title: row.title,
+    unitIds: parseJson(row.unit_ids),
+    text: row.text,
+    charLength: row.char_length,
   };
 }
 function nextSequence(threadId) {
@@ -801,6 +873,66 @@ function txOperation(datasetId, operation, input) {
       transactionDirty=true;
       return d;
     }
+    case "replaceRetrievalIndex": {
+      const index=input.index;
+      if (!index || typeof index.bookRevisionId!=="string" || !index.bookRevisionId.trim()) throw new Error("检索索引必须绑定 BookRevision");
+      if (!Array.isArray(index.chunks) || index.chunks.length > 20000) throw new Error("检索索引 chunks 必须是数组且不超过 20000 条");
+      const revisionId=index.bookRevisionId;
+      execute("DELETE FROM retrieval_chunk_fts WHERE dataset_id=? AND book_revision_id=?", [datasetId,revisionId]);
+      execute("DELETE FROM retrieval_chunk WHERE dataset_id=? AND book_revision_id=?", [datasetId,revisionId]);
+      execute("DELETE FROM retrieval_embedding WHERE dataset_id=? AND book_revision_id=?", [datasetId,revisionId]);
+      const now=new Date().toISOString();
+      for (const c of index.chunks) {
+        if (!c || typeof c.id!=="string" || !c.id.trim() ||
+            !Number.isSafeInteger(c.chunkIndex) || c.chunkIndex<0 ||
+            typeof c.structureNodeId!=="string" || !c.structureNodeId.trim() ||
+            typeof c.locator!=="string" || !c.locator.trim() ||
+            typeof c.chapter!=="string" || typeof c.title!=="string" ||
+            !Array.isArray(c.unitIds) || !c.unitIds.length ||
+            typeof c.text!=="string" || !c.text.trim() ||
+            !Number.isSafeInteger(c.charLength) || c.charLength<1) {
+          throw new Error("检索切片字段非法：" + String(c?.id || c?.chunkIndex));
+        }
+        execute("INSERT INTO retrieval_chunk(id,dataset_id,book_revision_id,chunk_index,structure_node_id,locator,chapter,title,unit_ids,text,char_length,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+          [c.id,datasetId,revisionId,c.chunkIndex,c.structureNodeId,c.locator,c.chapter,c.title,JSON.stringify(c.unitIds),c.text,c.charLength,now]);
+        execute("INSERT INTO retrieval_chunk_fts(text,chunk_id,dataset_id,book_revision_id) VALUES(?,?,?,?)",
+          [c.text,c.id,datasetId,revisionId]);
+      }
+      const state=index.state;
+      if (!state || !["ready","keyword_only","stale"].includes(state.status) ||
+          typeof state.model!=="string" || !state.model.trim() ||
+          !Number.isSafeInteger(state.dimensions) || state.dimensions<0 ||
+          !Number.isSafeInteger(state.chunkCount) || state.chunkCount!==index.chunks.length ||
+          typeof state.sourceFingerprint!=="string" || !state.sourceFingerprint.trim()) {
+        throw new Error("检索索引状态字段非法");
+      }
+      execute("INSERT INTO retrieval_index_state(book_revision_id,dataset_id,model,dimensions,chunk_count,source_fingerprint,status,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(book_revision_id) DO UPDATE SET dataset_id=excluded.dataset_id,model=excluded.model,dimensions=excluded.dimensions,chunk_count=excluded.chunk_count,source_fingerprint=excluded.source_fingerprint,status=excluded.status,updated_at=excluded.updated_at",
+        [revisionId,datasetId,state.model,state.dimensions,state.chunkCount,state.sourceFingerprint,state.status,now]);
+      // 索引是可重建缓存：不写 backup_journal，也不推进 dirty_sequence。
+      return {chunkCount:index.chunks.length};
+    }
+    case "saveRetrievalEmbeddings": {
+      const revisionId=input.bookRevisionId;
+      const embeddings=input.embeddings;
+      if (typeof revisionId!=="string" || !revisionId.trim()) throw new Error("向量索引必须绑定 BookRevision");
+      if (typeof input.model!=="string" || !input.model.trim() ||
+          !Number.isSafeInteger(input.dimensions) || input.dimensions<1) throw new Error("向量模型或维度非法");
+      if (!Array.isArray(embeddings) || embeddings.length>512) throw new Error("向量批次非法");
+      const now=new Date().toISOString();
+      for (const item of embeddings) {
+        if (!item || typeof item.chunkId!=="string" || !item.chunkId.trim()) throw new Error("向量必须绑定 chunk_id");
+        const vector=item.vector;
+        if (!(vector instanceof Uint8Array) || vector.byteLength!==input.dimensions*4) throw new Error("向量字节长度与维度不一致：" + item.chunkId);
+        if (!first("SELECT id FROM retrieval_chunk WHERE id=? AND dataset_id=? AND book_revision_id=?",[item.chunkId,datasetId,revisionId])) throw new Error("向量对应的检索切片不存在");
+        execute("INSERT INTO retrieval_embedding(chunk_id,dataset_id,book_revision_id,model,dimensions,vector,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(chunk_id) DO UPDATE SET model=excluded.model,dimensions=excluded.dimensions,vector=excluded.vector,updated_at=excluded.updated_at",
+          [item.chunkId,datasetId,revisionId,input.model,input.dimensions,vector,now]);
+      }
+      const counts=first("SELECT COUNT(*) AS total FROM retrieval_embedding WHERE dataset_id=? AND book_revision_id=?",[datasetId,revisionId]);
+      const status = Number(counts.total) >= Number(first("SELECT chunk_count FROM retrieval_index_state WHERE dataset_id=? AND book_revision_id=?",[datasetId,revisionId])?.chunk_count || 0) && Number(counts.total)>0 ? "ready" : "keyword_only";
+      execute("UPDATE retrieval_index_state SET model=?,dimensions=?,status=?,updated_at=? WHERE dataset_id=? AND book_revision_id=?",
+        [input.model,input.dimensions,status,now,datasetId,revisionId]);
+      return {embedded:Number(counts.total), status};
+    }
     case "acknowledgeBackup": {
       const sequence = input.snapshotSequence;
       const backupId = input.backupId;
@@ -900,7 +1032,7 @@ function handle(message) {
     const datasetId=message.datasetId;
     const snapshot=message.snapshot;
     if (!snapshot || snapshot.datasetId!==datasetId || !Number.isSafeInteger(snapshot.schemaVersion) ||
-        snapshot.schemaVersion<1 || snapshot.schemaVersion>8 || !Number.isSafeInteger(snapshot.dirtySequence) ||
+        snapshot.schemaVersion<1 || snapshot.schemaVersion>9 || !Number.isSafeInteger(snapshot.dirtySequence) ||
         snapshot.dirtySequence<1 || typeof message.backupId!=="string" || !message.backupId.trim() ||
         !Number.isFinite(Date.parse(message.restoredAt))) {
       throw new Error("Backup snapshot metadata is invalid");
@@ -955,7 +1087,7 @@ function handle(message) {
       }
       journalSequence=null;
       transactionDirty=false;
-      execute("UPDATE local_dataset SET schema_version=8,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
+      execute("UPDATE local_dataset SET schema_version=9,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
         [snapshot.dirtySequence,snapshot.dirtySequence,message.backupId,message.restoredAt,message.restoredAt,datasetId]);
       db.exec({sql:"COMMIT"});
       activeDatasetId=null;
@@ -996,6 +1128,62 @@ function handle(message) {
   }
   if (type === "listPresentedSources") {
     return execute("SELECT * FROM presented_source WHERE dataset_id=? AND thread_id=? ORDER BY presented_at,id", [message.datasetId,message.threadId]).map(s=>({datasetId:s.dataset_id,id:s.id,threadId:s.thread_id,bookRevisionId:s.book_revision_id,structureNodeId:s.structure_node_id,chunkId:s.chunk_id,presentationType:s.presentation_type,readingRoundId:s.reading_round_id,presentedAt:s.presented_at,sourceLocator:parseJson(s.source_locator,{})}));
+  }
+  if (type === "getRetrievalIndexState") {
+    const r=first("SELECT * FROM retrieval_index_state WHERE dataset_id=? AND book_revision_id=?", [message.datasetId,message.bookRevisionId]);
+    return r ? {
+      bookRevisionId:r.book_revision_id,
+      model:r.model,
+      dimensions:r.dimensions,
+      chunkCount:r.chunk_count,
+      sourceFingerprint:r.source_fingerprint,
+      status:r.status,
+      updatedAt:r.updated_at,
+    } : null;
+  }
+  if (type === "getRetrievalChunks") {
+    return execute("SELECT * FROM retrieval_chunk WHERE dataset_id=? AND book_revision_id=? ORDER BY chunk_index", [message.datasetId,message.bookRevisionId]).map(rowToRetrievalChunk);
+  }
+  if (type === "getRetrievalEmbeddings") {
+    return execute("SELECT chunk_id AS chunkId,dimensions,vector FROM retrieval_embedding WHERE dataset_id=? AND book_revision_id=?", [message.datasetId,message.bookRevisionId]).map((row)=>({
+      chunkId:row.chunkId,
+      dimensions:row.dimensions,
+      vector:row.vector,
+    }));
+  }
+  if (type === "searchRetrievalKeyword") {
+    const terms=(Array.isArray(message.terms)?message.terms:[])
+      .filter((term)=>typeof term==="string" && term.trim())
+      .slice(0,64);
+    const limit=Number.isSafeInteger(message.limit) && message.limit>0 ? Math.min(message.limit,50) : 20;
+    if (!terms.length) return [];
+    const results=new Map();
+    const ftsTerms=[...new Set(terms.filter((term)=>term.length>=3))];
+    if (ftsTerms.length) {
+      const expression=ftsTerms.map((term)=>'"'+term.replace(/"/g,'""')+'"').join(" OR ");
+      let rows=[];
+      try {
+        rows=execute("SELECT c.*, bm25(retrieval_chunk_fts) AS rank FROM retrieval_chunk_fts JOIN retrieval_chunk c ON c.id=retrieval_chunk_fts.chunk_id WHERE retrieval_chunk_fts MATCH ? AND c.dataset_id=? AND c.book_revision_id=? ORDER BY rank LIMIT ?",
+          [expression,message.datasetId,message.bookRevisionId,limit]);
+      } catch {
+        // FTS5 不可用或查询语法不被接受时退回 LIKE，不阻断关键词通道。
+        rows=[];
+      }
+      for (const row of rows) results.set(row.id,{chunk:rowToRetrievalChunk(row),rank:Number(row.rank),matchedTerms:ftsTerms.length});
+    }
+    const shortTerms=terms.filter((term)=>term.length<3);
+    if (shortTerms.length || !results.size) {
+      const scanTerms=shortTerms.length ? [...new Set(shortTerms)] : [...new Set(terms)];
+      const where=scanTerms.map(()=>"instr(c.text, ?) > 0").join(" OR ");
+      const rows=execute("SELECT c.* FROM retrieval_chunk c WHERE c.dataset_id=? AND c.book_revision_id=? AND ("+where+") ORDER BY c.chunk_index LIMIT ?",
+        [message.datasetId,message.bookRevisionId,...scanTerms,limit*3]);
+      for (const row of rows) {
+        if (results.has(row.id)) continue;
+        const matched=scanTerms.filter((term)=>row.text.includes(term)).length;
+        results.set(row.id,{chunk:rowToRetrievalChunk(row),rank:-matched,matchedTerms:matched});
+      }
+    }
+    return [...results.values()].sort((left,right)=>left.rank-right.rank).slice(0,limit);
   }
   if (type === "recallMemoryVersions") {
     const limit=message.limit ?? 5;
