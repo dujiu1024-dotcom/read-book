@@ -181,7 +181,8 @@ async function loadChuanxiLu(fetchImpl) {
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const line = lines[lineIndex].replace(/^[　\s]+|[　\s]+$/g, "");
     if (!line) continue;
-    const heading = line.match(/^卷([上中下])$/);
+    // 原始文本的卷标题有三种写法：“卷上”“传习录卷中”“传习录卷下”。
+    const heading = line.match(/^(?:传习录)?卷([上中下])$/);
     if (heading) { volume = "卷" + heading[1]; continue; }
     for (const part of splitLongParagraph(line, 1200)) {
       const order = units.length;
