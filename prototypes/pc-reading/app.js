@@ -1157,6 +1157,7 @@ import { KNOWLEDGE_TYPE_LABELS, knowledgeProgressText } from "./knowledge-extrac
   });
   let knowledgeItems = [];
   let knowledgeStates = [];
+  let knowledgeAliases = new Map();
   let knowledgeBusy = false;
 
   function knowledgeTypeLabel(type) {
@@ -1178,14 +1179,23 @@ import { KNOWLEDGE_TYPE_LABELS, knowledgeProgressText } from "./knowledge-extrac
       const query = {};
       if (reviewStatus !== "all") query.reviewStatus = reviewStatus;
       if (itemType !== "all") query.itemType = itemType;
-      const [items, states, pending] = await Promise.all([
+      const [items, states, pending, concepts] = await Promise.all([
         productionRuntime.loadKnowledge(query),
         productionRuntime.loadKnowledgeState(),
         productionRuntime.loadKnowledge({ reviewStatus: "pending" }),
+        productionRuntime.loadKnowledge({ itemType: "concept", limit: 500 }),
       ]);
-      knowledgeItems = items || [];
+      // 别名条目统一挂在主条目下展示，待审核列表里不再出现同术语的多张卡片。
+      knowledgeItems = (items || []).filter((item) => !(item.itemType === "concept" && item.aliasOf));
+      knowledgeAliases = new Map();
+      for (const concept of concepts || []) {
+        if (!concept.aliasOf) continue;
+        if (!knowledgeAliases.has(concept.aliasOf)) knowledgeAliases.set(concept.aliasOf, []);
+        knowledgeAliases.get(concept.aliasOf).push(concept);
+      }
       knowledgeStates = states || [];
-      renderKnowledge((pending || []).length);
+      const pendingCount = (pending || []).filter((item) => !(item.itemType === "concept" && item.aliasOf)).length;
+      renderKnowledge(pendingCount);
     } catch (error) {
       if (statusEl) statusEl.textContent = "知识读取失败：" + errorText(error) + "。";
     }
@@ -1263,6 +1273,30 @@ import { KNOWLEDGE_TYPE_LABELS, knowledgeProgressText } from "./knowledge-extrac
     edit.addEventListener("click", () => openKnowledgeEditor(item));
     actions.append(accept, reject, edit);
     card.append(actions);
+
+    const aliases = knowledgeAliases.get(item.id) || [];
+    if (aliases.length) {
+      const details = document.createElement("details");
+      details.className = "knowledge-aliases";
+      const summary = document.createElement("summary");
+      summary.textContent = "同一概念的另 " + aliases.length + " 条（已合并为别名，不进入对话）";
+      details.append(summary);
+      for (const alias of aliases) {
+        const row = document.createElement("div");
+        row.className = "knowledge-alias";
+        const quote = document.createElement("p");
+        quote.textContent = "「" + (alias.definitionQuote || alias.content) + "」";
+        const aliasSource = document.createElement("button");
+        aliasSource.type = "button";
+        aliasSource.className = "knowledge-source";
+        aliasSource.textContent = alias.sourceLocator || alias.chapter;
+        aliasSource.title = "查看这条别名的来源原文";
+        aliasSource.addEventListener("click", () => showCitation(alias.structureNodeId));
+        row.append(quote, aliasSource);
+        details.append(row);
+      }
+      card.append(details);
+    }
     return card;
   }
 
@@ -1353,7 +1387,48 @@ import { KNOWLEDGE_TYPE_LABELS, knowledgeProgressText } from "./knowledge-extrac
     }
   }
 
+  async function rerunConceptRound() {
+    if (!productionRuntime || typeof productionRuntime.rerunConceptRound !== "function") {
+      toast("当前是只读阅读模式，暂时不能重跑概念轮。");
+      return;
+    }
+    if (knowledgeBusy) return;
+    const unit = state.displayedUnit || units[state.mainlineIndex];
+    if (!unit?.chapter) {
+      toast("当前没有可抽取的章节。");
+      return;
+    }
+    const model = $("knowledgeModelSelect")?.value || null;
+    const button = $("rerunConceptButton");
+    const extractButton = $("extractKnowledgeButton");
+    const statusEl = $("knowledgeStatus");
+    knowledgeBusy = true;
+    button.disabled = true;
+    if (extractButton) extractButton.disabled = true;
+    statusEl.textContent = "正在用 " + (model || "默认模型") + " 重跑 " + unit.chapter + " 的概念轮…";
+    try {
+      const result = await productionRuntime.rerunConceptRound({
+        chapter: unit.chapter,
+        model,
+        onProgress: (progress) => {
+          statusEl.textContent = "正在重跑概念轮：" + progress.done + "/" + progress.total +
+            " 批，新增 " + progress.itemCount + " 条";
+        },
+      });
+      toast("概念轮完成（" + (result?.model || "默认模型") + "）：新增 " + (result?.added || 0) +
+        " 条，" + (result?.aliases || 0) + " 条合并为别名。");
+      await refreshKnowledge();
+    } catch (error) {
+      statusEl.textContent = "概念轮中断：" + errorText(error) + "。已审核条目不会被覆盖。";
+    } finally {
+      knowledgeBusy = false;
+      button.disabled = false;
+      if (extractButton) extractButton.disabled = false;
+    }
+  }
+
   $("extractKnowledgeButton")?.addEventListener("click", extractKnowledgeForCurrentChapter);
+  $("rerunConceptButton")?.addEventListener("click", rerunConceptRound);
   $("knowledgeStatusFilter")?.addEventListener("change", () => void refreshKnowledge());
   $("knowledgeTypeFilter")?.addEventListener("change", () => void refreshKnowledge());
   $("knowledgeCancelButton")?.addEventListener("click", () => $("knowledgeDialog").close());

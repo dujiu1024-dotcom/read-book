@@ -1,4 +1,5 @@
 import {
+  consolidateConcepts,
   groupChunksByChapter,
   planKnowledgeBatches,
   validateKnowledgeItems,
@@ -61,7 +62,29 @@ export function createKnowledgeRuntime({
     return [...groupChunksByChapter(await loadChunks()).keys()];
   }
 
-  async function extractChapter(chapter, { force = false, onProgress: report = onProgress } = {}) {
+  /** 同一术语的多条概念合并为“一条主条目 + 若干别名”，已有审核结果的条目不动。 */
+  async function consolidate(chapter) {
+    if (typeof repository.listBookKnowledge !== "function" || typeof repository.updateBookKnowledgeReview !== "function") {
+      return { aliases: 0 };
+    }
+    const items = await repository.listBookKnowledge(datasetId, {
+      bookRevisionId,
+      chapter,
+      itemType: "concept",
+      limit: 500,
+    });
+    const aliases = consolidateConcepts(items);
+    for (const alias of aliases) {
+      await repository.updateBookKnowledgeReview(datasetId, {
+        id: alias.id,
+        aliasOf: alias.aliasOf,
+        updatedAt: now(),
+      });
+    }
+    return { aliases: aliases.length };
+  }
+
+  async function extractChapter(chapter, { force = false, onProgress: report = onProgress, model = null } = {}) {
     if (!provider || typeof provider.extract !== "function") {
       throw new Error("尚未配置知识抽取服务，无法抽取。");
     }
@@ -103,6 +126,7 @@ export function createKnowledgeRuntime({
           bookRevisionId,
           chapter,
           chunks: batch.chunks.map(toPayload),
+          ...(model ? { model } : {}),
         });
         const validated = await validateKnowledgeItems(response?.items, batch.chunks, {
           bookRevisionId,
@@ -155,6 +179,7 @@ export function createKnowledgeRuntime({
           chapter,
           chunks: batch.chunks.map(toPayload),
           focus: "concept",
+          ...(model ? { model } : {}),
         });
         const validated = await validateKnowledgeItems(response?.items, batch.chunks, {
           bookRevisionId,
@@ -192,6 +217,7 @@ export function createKnowledgeRuntime({
           chapter,
           chunks: representatives.map(toPayload),
           focus: "chapter_intent",
+          ...(model ? { model } : {}),
         });
         const validated = await validateKnowledgeItems(response?.items, representatives, {
           bookRevisionId,
@@ -212,9 +238,61 @@ export function createKnowledgeRuntime({
         throw error;
       }
     }
+    const { aliases } = await consolidate(chapter);
     await saveState(chapter, "completed", batches.length, batches.length, itemCount, null);
-    report?.({ chapter, done: batches.length, total: batches.length, itemCount, status: "completed", dropped });
-    return { chapter, done: batches.length, total: batches.length, itemCount, skipped, dropped };
+    report?.({ chapter, done: batches.length, total: batches.length, itemCount, status: "completed", dropped, aliases });
+    return { chapter, done: batches.length, total: batches.length, itemCount, skipped, dropped, aliases };
+  }
+
+  /**
+   * 只用另一模型重跑概念轮：不动章节意图与主张，也不覆盖已审核条目。
+   * 写库仍按内容身份去重，已有条目（含已接受/已驳回）不会被改写。
+   */
+  async function runConceptRound(chapter, { model = null, onProgress: report = onProgress } = {}) {
+    if (!provider || typeof provider.extract !== "function") {
+      throw new Error("尚未配置知识抽取服务，无法抽取。");
+    }
+    const all = await loadChunks();
+    const group = groupChunksByChapter(all).get(chapter) || [];
+    if (!group.length) throw new Error("「" + chapter + "」没有可抽取的原文切片。");
+    const batches = planKnowledgeBatches(group);
+    let added = 0;
+    let dropped = 0;
+    report?.({ chapter, done: 0, total: batches.length, itemCount: 0, status: "running", stage: "concept" });
+    for (let index = 0; index < batches.length; index += 1) {
+      const batch = batches[index];
+      const response = await provider.extract({
+        bookRevisionId,
+        chapter,
+        chunks: batch.chunks.map(toPayload),
+        focus: "concept",
+        ...(model ? { model } : {}),
+      });
+      const validated = await validateKnowledgeItems(response?.items, batch.chunks, {
+        bookRevisionId,
+        chapter,
+        modelVersion: response?.model || model || provider.model || "knowledge-proxy",
+        extractionMethod: "llm",
+        now: now(),
+      });
+      dropped += validated.dropped;
+      const concepts = validated.items.filter((item) => item.itemType === "concept");
+      if (concepts.length && typeof repository.saveBookKnowledge === "function") {
+        const result = await repository.saveBookKnowledge(datasetId, { bookRevisionId, items: concepts });
+        added += Number(result?.saved || 0);
+      }
+      report?.({
+        chapter,
+        done: index + 1,
+        total: batches.length,
+        itemCount: added,
+        status: "running",
+        stage: "concept",
+        dropped,
+      });
+    }
+    const { aliases } = await consolidate(chapter);
+    return { chapter, batches: batches.length, added, dropped, aliases, model: model || provider.model || null };
   }
 
   /** 逐章抽取：某章失败只记录失败，继续处理其他章节。 */
@@ -257,6 +335,7 @@ export function createKnowledgeRuntime({
   return {
     chapters,
     extractChapter,
+    runConceptRound,
     extractAll,
     list,
     review,

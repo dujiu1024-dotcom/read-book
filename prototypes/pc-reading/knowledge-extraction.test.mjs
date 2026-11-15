@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   KNOWLEDGE_BATCH_CHUNKS,
+  consolidateConcepts,
   groupChunksByChapter,
   knowledgeProgressText,
   planKnowledgeBatches,
@@ -23,6 +24,7 @@ function chunk(id, chapter, index, text) {
 const batchChunks = [
   chunk("c1", "卷上", 1, "知行合一，正是对病的药。"),
   chunk("c2", "卷上", 2, "心即理也，天下又有心外之事、心外之理乎？"),
+  chunk("c3", "卷上", 3, "「格物」者，正也。」"),
 ];
 
 test("planKnowledgeBatches keeps chapter order, size and character limits", () => {
@@ -89,6 +91,68 @@ test("validateKnowledgeItems drops anything that cannot be traced back to a prov
   assert.equal(dedupe.dropped, 1);
 });
 
+test("validateKnowledgeItems rejects quotes with stray glyphs and quotes without the term", async () => {
+  const quote = {
+    item_type: "concept",
+    content: "心即理",
+    term: "心即理",
+    definition_quote: "心即理也",
+    source_chunk_ids: ["c2"],
+    confidence: 0.9,
+  };
+  const result = await validateKnowledgeItems([
+    { ...quote, definition_quote: "心即理也\uE123" },
+    { ...quote, term: "心即理也\uFFFD" },
+    { ...quote, definition_quote: "心即理也」" },
+    { ...quote, term: "格物", definition_quote: "「格物」者，正也。」", source_chunk_ids: ["c3"] },
+    { ...quote, term: "知行合一", definition_quote: "知行合一，正是对病的药" , source_chunk_ids: ["c1"] },
+    { ...quote, term: "格物", definition_quote: "正是对病的药", source_chunk_ids: ["c1"] },
+  ], batchChunks, { bookRevisionId: "rev-1", chapter: "卷上", modelVersion: "model-x" });
+  // 第五条（知行合一）的术语确实出现在引文里，保留；其余五条因脏字符、引号残缺或引文不含术语被丢弃。
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].term, "知行合一");
+  assert.equal(result.dropped, 5);
+});
+
+test("consolidateConcepts keeps one canonical concept per term and merges the rest as aliases", () => {
+  const base = {
+    bookRevisionId: "rev-1",
+    chapter: "卷上",
+    itemType: "concept",
+    reviewStatus: "pending",
+    sourceLocator: "卷上 · 第1段",
+    structureNodeId: "unit-1",
+    aliasOf: null,
+  };
+  const items = [
+    { ...base, id: "a", term: "性", definitionQuote: "性即理也", content: "性即理" },
+    { ...base, id: "b", term: "性", definitionQuote: "性者，心之本体，所谓天理也", content: "性" },
+    { ...base, id: "c", term: "性", definitionQuote: "性只是一箇理", content: "性" },
+    { ...base, id: "d", term: "良知", definitionQuote: "良知者，心之本体", content: "良知", reviewStatus: "accepted" },
+    { ...base, id: "e", term: "良知", definitionQuote: "良知即是天理", content: "良知" },
+    { ...base, id: "f", term: "格物", definitionQuote: "格物者，格其心之物也", content: "格物" },
+    // 已经是别名的条目不再参与合并。
+    { ...base, id: "g", term: "致知", definitionQuote: "致知者，致吾心之良知", content: "致知", aliasOf: "someone" },
+  ];
+  const aliases = consolidateConcepts(items);
+  const byId = new Map(aliases.map((alias) => [alias.id, alias.aliasOf]));
+  // 已审核的 k 优先做主条目，另一条 pending 并入。
+  assert.equal(byId.get("e"), "d");
+  assert.equal(byId.has("d"), false);
+  // 「性」取引文最长、最像界定句的 b，其余两条并入。
+  assert.equal(byId.get("a"), "b");
+  assert.equal(byId.get("c"), "b");
+  assert.equal(byId.size, 3);
+
+  // 已接受/已驳回条目即使引文更短也不会被改成别名。
+  const reviewed = consolidateConcepts([
+    { ...base, id: "x", term: "心", definitionQuote: "心即理也", content: "心", reviewStatus: "accepted" },
+    { ...base, id: "y", term: "心", definitionQuote: "心者，身之主宰，即所谓天理也，无所不包者也", content: "心" },
+  ]);
+  // 评分优先已审核条目，所以 x 仍是主条目，y 并入。
+  assert.deepEqual(reviewed, [{ id: "y", aliasOf: "x" }]);
+});
+
 test("selectKnowledgeForPrompt only uses accepted knowledge and caps each layer at two", () => {
   const base = {
     bookRevisionId: "rev-1",
@@ -115,6 +179,8 @@ test("selectKnowledgeForPrompt only uses accepted knowledge and caps each layer 
     { ...base, id: "cross-1", structureNodeId: "unit-9", chapter: "卷中", itemType: "concept", content: "跨章概念", term: "良知", definitionQuote: "良知者，心之本体" },
     { ...base, id: "cross-2", structureNodeId: "unit-10", chapter: "卷下", itemType: "concept", content: "另一跨章", term: "良知", definitionQuote: "良知即是天理" },
     { ...base, id: "pending-1", structureNodeId: "unit-cur", itemType: "thesis", content: "未审核不应进入", reviewStatus: "pending" },
+    // 已合并为别名的概念即使被接受也不进入 prompt。
+    { ...base, id: "alias-1", structureNodeId: "unit-cur", itemType: "concept", content: "同一概念的别名", term: "良知", definitionQuote: "良知即是天理", aliasOf: "cur-2" },
   ];
   const selection = selectKnowledgeForPrompt({ items, currentUnit: { id: "unit-cur", chapter: "卷上" } });
   assert.equal(selection.items.length, 6);

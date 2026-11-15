@@ -178,6 +178,16 @@
                 </select>
               </label>
             </div>
+            <div class="knowledge-filters">
+              <label>概念轮模型
+                <select id="knowledgeModelSelect">
+                  <option value="">默认模型</option>
+                  <option value="glm-5.3">glm-5.3</option>
+                  <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                </select>
+              </label>
+              <button class="soft-button" id="rerunConceptButton" type="button">重跑概念轮</button>
+            </div>
             <p class="panel-empty" id="knowledgeEmpty">还没有知识条目。点“抽取本章”从当前章节的原文切片里抽取。</p>
             <div class="knowledge-list" id="knowledgeList"></div>
           </section>

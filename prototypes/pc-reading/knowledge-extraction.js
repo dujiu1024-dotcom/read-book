@@ -25,6 +25,18 @@ export function normalizeSpace(value) {
   return String(value ?? "").replace(/\s+/g, "");
 }
 
+/** 私用区异体字、替换符与控制字符会破坏引文可读性，抽取与校验都要拦住。 */
+export function hasSuspiciousCharacters(value) {
+  return /[\uE000-\uF8FF\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(String(value ?? ""));
+}
+
+/** 引号不配对通常是被截断的残片（如“格物」者”“所谓「道心惟微”），不放进审核界面。 */
+export function hasUnbalancedBrackets(value) {
+  const text = String(value ?? "");
+  return [["「", "」"], ["『", "』"]].some(([open, close]) =>
+    (text.split(close).length - 1) !== (text.split(open).length - 1));
+}
+
 /** 按章节分组切片，保持书内顺序。 */
 export function groupChunksByChapter(chunks) {
   const groups = new Map();
@@ -121,7 +133,7 @@ export async function validateKnowledgeItems(rawItems, chunks, options = {}) {
     if (!item || typeof item !== "object" || Array.isArray(item)) { dropped += 1; continue; }
     if (!KNOWLEDGE_ITEM_TYPES.includes(item.item_type)) { dropped += 1; continue; }
     const content = typeof item.content === "string" ? item.content.trim() : "";
-    if (!content || content.length > 400) { dropped += 1; continue; }
+    if (!content || content.length > 400 || hasSuspiciousCharacters(content)) { dropped += 1; continue; }
     const sourceChunkIds = Array.isArray(item.source_chunk_ids)
       ? [...new Set(item.source_chunk_ids.filter((id) => typeof id === "string" && id.trim()))]
       : [];
@@ -138,6 +150,8 @@ export async function validateKnowledgeItems(rawItems, chunks, options = {}) {
       const quoted = cited.some((chunk) => normalizeSpace(chunk.text).includes(normalizedQuote));
       // 引文必须真的包含这个术语，避免“术语 + 无关原句”凑成一条概念。
       if (!quoted || !normalizedQuote.includes(normalizeSpace(rawTerm))) { dropped += 1; continue; }
+      if (hasSuspiciousCharacters(rawQuote) || hasSuspiciousCharacters(rawTerm) ||
+          hasUnbalancedBrackets(rawQuote) || hasUnbalancedBrackets(rawTerm)) { dropped += 1; continue; }
       term = rawTerm.slice(0, 80);
       definitionQuote = rawQuote.slice(0, 200);
     }
@@ -159,6 +173,7 @@ export async function validateKnowledgeItems(rawItems, chunks, options = {}) {
       modelVersion,
       confidence,
       reviewStatus: "pending",
+      aliasOf: null,
       contentHash: null,
       createdAt: now,
       updatedAt: now,
@@ -176,6 +191,48 @@ export async function validateKnowledgeItems(rawItems, chunks, options = {}) {
 function truncate(value, limit) {
   const text = String(value ?? "").trim();
   return text.length > limit ? text.slice(0, limit) + "…" : text;
+}
+
+/**
+ * 同一术语的多条概念：保留引文最完整、最贴近书中界定句式的一条，
+ * 其余未审核条目标记为它的别名（aliasOf），界面按术语合并展示。
+ * 已接受/已驳回的条目永远不改成别名。
+ */
+const DEFINITION_MARKERS = ["者", "即", "便是", "只是", "是", "所谓"];
+
+function conceptScore(item) {
+  let score = 0;
+  if (item.reviewStatus && item.reviewStatus !== "pending") score += 1000;
+  const quote = String(item.definitionQuote || "");
+  const term = String(item.term || "");
+  score += Math.min(quote.length, 120);
+  if (term && quote.includes(term)) score += 20;
+  if (term && DEFINITION_MARKERS.some((marker) => quote.includes(term + marker))) score += 40;
+  if (hasSuspiciousCharacters(quote)) score -= 500;
+  return score;
+}
+
+export function consolidateConcepts(items) {
+  const groups = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || item.itemType !== "concept" || !item.term) continue;
+    const key = normalizeSpace(item.term);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  const aliases = [];
+  for (const group of groups.values()) {
+    const live = group.filter((item) => !item.aliasOf);
+    if (live.length < 2) continue;
+    const sorted = [...live].sort((left, right) => conceptScore(right) - conceptScore(left));
+    const canonical = sorted[0];
+    for (const item of sorted.slice(1)) {
+      if (item.reviewStatus !== "pending") continue;
+      aliases.push({ id: item.id, aliasOf: canonical.id });
+    }
+  }
+  return aliases;
 }
 
 export function formatKnowledgeLine(item) {
@@ -203,7 +260,9 @@ export function formatKnowledgeLine(item) {
  */
 export function selectKnowledgeForPrompt({ items, currentUnit, limitPerLayer = 2 }) {
   const accepted = (Array.isArray(items) ? items : []).filter((item) =>
-    item && item.reviewStatus === "accepted" && KNOWLEDGE_ITEM_TYPES.includes(item.itemType));
+    item && item.reviewStatus === "accepted" && KNOWLEDGE_ITEM_TYPES.includes(item.itemType) &&
+    // 被合并为别名的概念不重复进入 prompt。
+    !(item.itemType === "concept" && item.aliasOf));
   const picked = [];
   const seen = new Set();
   const layerOf = new Map();

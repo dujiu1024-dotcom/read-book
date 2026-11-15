@@ -897,9 +897,13 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     searchBook: (question, options) => retriever.search(question, options),
     debugRetrievalChunks: () => retriever.getChunks(),
     knowledgeChapters: () => knowledgeRuntime.chapters(),
-    runKnowledgeExtraction: ({ chapter, force = false, onProgress } = {}) => {
-      if (chapter) return knowledgeRuntime.extractChapter(chapter, { force, onProgress });
+    runKnowledgeExtraction: ({ chapter, force = false, model = null, onProgress } = {}) => {
+      if (chapter) return knowledgeRuntime.extractChapter(chapter, { force, model, onProgress });
       return knowledgeRuntime.extractAll({ onProgress });
+    },
+    rerunConceptRound: ({ chapter, model = null, onProgress } = {}) => {
+      if (!chapter) throw new Error("需要指定要重跑概念轮的章节。");
+      return knowledgeRuntime.runConceptRound(chapter, { model, onProgress });
     },
     loadKnowledge: (query) => knowledgeRuntime.list(query),
     reviewKnowledge: (id, patch) => knowledgeRuntime.review(id, patch),

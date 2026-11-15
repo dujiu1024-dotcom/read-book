@@ -45,7 +45,7 @@ export function createKnowledgeProxyProvider({ baseUrl, getAccessToken, fetchImp
 
   return {
     model: "knowledge-proxy",
-    async extract({ bookRevisionId, chapter, chunks, focus }) {
+    async extract({ bookRevisionId, chapter, chunks, focus, model }) {
       let lastError;
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
         try {
@@ -54,6 +54,7 @@ export function createKnowledgeProxyProvider({ baseUrl, getAccessToken, fetchImp
             chapter,
             chunks,
             ...(focus ? { focus } : {}),
+            ...(model ? { model } : {}),
           });
         } catch (error) {
           lastError = error;
