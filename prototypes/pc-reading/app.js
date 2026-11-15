@@ -1159,6 +1159,7 @@ import { KNOWLEDGE_TYPE_LABELS, knowledgeProgressText } from "./knowledge-extrac
   let knowledgeStates = [];
   let knowledgeAliases = new Map();
   let knowledgeBusy = false;
+  let knowledgeRefreshSeq = 0;
 
   function knowledgeTypeLabel(type) {
     return KNOWLEDGE_TYPE_LABELS[type] || type || "知识";
@@ -1173,6 +1174,7 @@ import { KNOWLEDGE_TYPE_LABELS, knowledgeProgressText } from "./knowledge-extrac
   async function refreshKnowledge() {
     if (!productionRuntime || typeof productionRuntime.loadKnowledge !== "function") return;
     const statusEl = $("knowledgeStatus");
+    const seq = ++knowledgeRefreshSeq;
     try {
       const reviewStatus = $("knowledgeStatusFilter")?.value || "pending";
       const itemType = $("knowledgeTypeFilter")?.value || "all";
@@ -1185,6 +1187,8 @@ import { KNOWLEDGE_TYPE_LABELS, knowledgeProgressText } from "./knowledge-extrac
         productionRuntime.loadKnowledge({ reviewStatus: "pending" }),
         productionRuntime.loadKnowledge({ itemType: "concept", limit: 500 }),
       ]);
+      // 切换筛选会连续触发刷新；只让最后一次结果落地，避免旧查询覆盖新筛选。
+      if (seq !== knowledgeRefreshSeq) return;
       // 别名条目统一挂在主条目下展示，待审核列表里不再出现同术语的多张卡片。
       knowledgeItems = (items || []).filter((item) => !(item.itemType === "concept" && item.aliasOf));
       knowledgeAliases = new Map();
