@@ -156,8 +156,9 @@ test('六本指定书籍可一次批量导入并分别识别，不合并书目',
     ['传习录.txt', 'chuanxilu'],
     ...[1, 2, 3, 4, 5].map((volume) => ['毛泽东选集-第' + volume + '卷.txt', 'maoxuan-' + volume])
   ];
-  await page.locator('#file').setInputFiles(titles.map(([name]) => ({
-    name, mimeType: 'text/plain', buffer: Buffer.from('第一段原文内容\\n\\n第二段原文内容，包含足够的书籍文本。')
+  // 书库主键是文件内容的 SHA-256；六本真实书籍内容不同，测试数据也必须各不相同，否则会被内容寻址去重成一条记录。
+  await page.locator('#file').setInputFiles(titles.map(([name, corpusKey]) => ({
+    name, mimeType: 'text/plain', buffer: Buffer.from('《' + corpusKey + '》第一段原文内容\\n\\n第二段原文内容，包含足够的书籍文本。')
   })));
   await expect(page.locator('#batch-status')).toContainText('成功 6 本', { timeout: 20_000 });
   const report = JSON.parse(await page.locator('#output').textContent());

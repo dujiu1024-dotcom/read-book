@@ -5,7 +5,7 @@ const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("S
   .map((value) => value.toString(16).padStart(2, "0")).join("");
 
 function requiredText(value, field) {
-  if (typeof value !== "string" || !value.trim()) throw new Error(field + " 不能为空；不会自动编造书籍元数据。");
+  if (typeof value !== "string" || !value.trim()) throw new Error(field + "不能为空；不会自动编造书籍元数据。");
   return value.trim();
 }
 

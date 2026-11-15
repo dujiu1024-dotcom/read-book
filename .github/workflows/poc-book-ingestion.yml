@@ -7,6 +7,7 @@ on:
       - ".github/workflows/poc-book-ingestion.yml"
   push:
     branches:
+      - main
       - "poc/issue-3-book-ingestion"
     paths:
       - "poc/book-ingestion/**"
@@ -27,4 +28,5 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: npm run build
+      - run: npm run test:package-export
       - run: npm test

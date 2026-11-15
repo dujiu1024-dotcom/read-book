@@ -84,7 +84,8 @@ async function importFile(file, sourceMetadata = null) {
     id, name: file.name, size: bytes.length, format: parsed.format,
     title: metadata.title, author: metadata.author, corpusKey: metadata.corpusKey,
     unitCount: parsed.chapters?.length || parsed.pages?.length || parsed.paragraphs?.length || 0,
-    citationCount: citations.length
+    citationCount: citations.length,
+    parsed
   });
   $('status').textContent = '导入成功，文件与解析结果已保存到 IndexedDB。';
   return book;
@@ -178,6 +179,8 @@ $('file').addEventListener('change', async (event) => {
         characters: parsed.characterCount || null
       });
     } catch (error) {
+      // 批量导入时状态栏停在「正在解析 …」会让用户以为还在处理；与单本导入一致，落明确的失败态。
+      $('status').textContent = '导入失败：' + error.message;
       outcomes.push({ file: file.name, status: 'failed', error: error.message });
     }
     await renderSaved();

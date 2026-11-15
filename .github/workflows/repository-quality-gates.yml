@@ -48,6 +48,9 @@ jobs:
       - name: Run encrypted backup PoC tests
         working-directory: poc/encrypted-backup
         run: node --test
+      - name: Run answer quote verification tests
+        working-directory: services/local-host
+        run: node --test answer-quotes.test.mjs
       - name: Verify dependency lockfiles exist
         run: |
           for package in packages/*/package.json poc/*/package.json prototypes/pc-reading/package.json; do
