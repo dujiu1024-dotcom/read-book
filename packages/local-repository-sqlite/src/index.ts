@@ -42,6 +42,7 @@ export interface RetrievalChunkRecord extends RetrievalChunkWrite {
 export interface RetrievalEmbeddingRecord {
   chunkId: string;
   dimensions: number;
+  model: string;
   vector: Uint8Array;
 }
 
@@ -69,6 +70,39 @@ export interface RetrievalIndexWrite {
   state: Omit<RetrievalIndexStateRecord, "updatedAt">;
 }
 
+export type RetrievalScope = "book" | "current" | "none";
+
+export interface RetrievalPassageSummary {
+  chunk: {
+    id: string;
+    structureNodeId: string;
+    locator: string;
+    chapter: string;
+    title: string;
+  };
+  excerpt: string;
+  truncated: boolean;
+  score: number;
+}
+
+export interface MessageRetrievalRecord {
+  messageId: string;
+  threadId: string;
+  query: string;
+  scope: RetrievalScope;
+  hasEvidence: boolean;
+  hitCount: number;
+  includedCount: number;
+  keywordCount: number;
+  vectorTopScore: number;
+  omitted: number;
+  notice: string | null;
+  budgetNotices: string[];
+  passages: RetrievalPassageSummary[];
+}
+
+export type MessageRetrievalSummary = Omit<MessageRetrievalRecord, "threadId" | "query">;
+
 export function mapWorkerError(payload: { message: string; code?: string }): Error {
   switch (payload.code) {
     case "DATASET_NOT_FOUND":
@@ -90,7 +124,7 @@ export function mapWorkerError(payload: { message: string; code?: string }): Err
 
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
-  readonly schemaVersion = 9;
+  readonly schemaVersion = 10;
   private worker: Worker;
   private nextId = 0;
   private pending = new Map<number, Pending>();
@@ -155,6 +189,7 @@ export class SqliteOpfsRepository implements LocalRepository {
         replaceRetrievalIndex: (input: { index: RetrievalIndexWrite }) => call("replaceRetrievalIndex", input),
         saveRetrievalEmbeddings: (input: { bookRevisionId: string; model: string; dimensions: number; embeddings: Array<{ chunkId: string; vector: Uint8Array }> }) =>
           call("saveRetrievalEmbeddings", input),
+        saveMessageRetrieval: (input: { record: MessageRetrievalRecord }) => call("saveMessageRetrieval", input),
         getThreadByRevision: (bookRevisionId) => call("getThreadByRevision", { bookRevisionId }),
         createThread: (thread) => call("createThread", { thread }),
         appendUserMessage: (message: NewUserMessage) => call("appendUserMessage", { message }),
@@ -299,6 +334,15 @@ export class SqliteOpfsRepository implements LocalRepository {
     return this.transaction(datasetId, (tx) => (tx as unknown as {
       saveRetrievalEmbeddings(value: typeof input): Promise<{ embedded: number; status: RetrievalIndexStateRecord["status"] }>;
     }).saveRetrievalEmbeddings(input));
+  }
+  async saveMessageRetrieval(datasetId: string, record: MessageRetrievalRecord): Promise<null> {
+    return this.transaction(datasetId, (tx) => (tx as unknown as {
+      saveMessageRetrieval(input: { record: MessageRetrievalRecord }): Promise<null>;
+    }).saveMessageRetrieval({ record }));
+  }
+  async listMessageRetrieval(datasetId: string, threadId: string): Promise<MessageRetrievalSummary[]> {
+    await this.ensureReady();
+    return this.request("listMessageRetrieval", { datasetId, threadId });
   }
   async close(): Promise<void> {
     if (this.closed) return;

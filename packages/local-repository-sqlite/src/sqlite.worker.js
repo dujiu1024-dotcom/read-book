@@ -29,7 +29,7 @@ function parseJson(value, fallback = []) {
 function ensureDataset(datasetId) {
   if (typeof datasetId !== "string" || !datasetId.trim()) throw new Error("datasetId 非法");
   execute(
-    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,9,?,?,0,0,'active')",
+    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,10,?,?,0,0,'active')",
     [datasetId, new Date().toISOString(), new Date().toISOString()],
   );
   const dataset = first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
@@ -164,7 +164,7 @@ async function initialize() {
   // Existing installations have the v1 schema and no PRAGMA user_version marker.
   // Treat version 0 as the shipped v1 baseline, then migrate atomically to v2.
   const storedVersion = Number(first("PRAGMA user_version")?.user_version ?? 0);
-  if (storedVersion > 9) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
+  if (storedVersion > 10) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
   if (storedVersion < 2) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -406,6 +406,38 @@ async function initialize() {
     } catch (error) {
       db.exec({ sql: "ROLLBACK" });
       throw new Error("数据库 Schema v9 迁移失败，已回滚", { cause: error });
+    }
+  }
+  if (storedVersion < 10) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      // 检索摘要随消息保存：刷新后仍能重现“命中 N 段 / 带入 M 段”的卡片。
+      db.exec({ sql: `
+        CREATE TABLE IF NOT EXISTS message_retrieval (
+          message_id TEXT PRIMARY KEY REFERENCES message(id) ON DELETE CASCADE,
+          dataset_id TEXT NOT NULL REFERENCES local_dataset(id),
+          thread_id TEXT NOT NULL,
+          query TEXT NOT NULL,
+          scope TEXT NOT NULL CHECK(scope IN ('book','current','none')),
+          has_evidence INTEGER NOT NULL CHECK(has_evidence IN (0,1)),
+          hit_count INTEGER NOT NULL,
+          included_count INTEGER NOT NULL,
+          keyword_count INTEGER NOT NULL,
+          vector_top_score REAL NOT NULL,
+          omitted INTEGER NOT NULL,
+          notice TEXT,
+          budget_notices TEXT NOT NULL,
+          passages TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_retrieval_thread ON message_retrieval(dataset_id,thread_id,created_at);
+        UPDATE local_dataset SET schema_version=10;
+        PRAGMA user_version=10;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v10 迁移失败，已回滚", { cause: error });
     }
   }
   assertDatabaseIntegrity();
@@ -880,7 +912,6 @@ function txOperation(datasetId, operation, input) {
       const revisionId=index.bookRevisionId;
       execute("DELETE FROM retrieval_chunk_fts WHERE dataset_id=? AND book_revision_id=?", [datasetId,revisionId]);
       execute("DELETE FROM retrieval_chunk WHERE dataset_id=? AND book_revision_id=?", [datasetId,revisionId]);
-      execute("DELETE FROM retrieval_embedding WHERE dataset_id=? AND book_revision_id=?", [datasetId,revisionId]);
       const now=new Date().toISOString();
       for (const c of index.chunks) {
         if (!c || typeof c.id!=="string" || !c.id.trim() ||
@@ -898,6 +929,9 @@ function txOperation(datasetId, operation, input) {
         execute("INSERT INTO retrieval_chunk_fts(text,chunk_id,dataset_id,book_revision_id) VALUES(?,?,?,?)",
           [c.text,c.id,datasetId,revisionId]);
       }
+      // 增量：保留仍然存在的切片向量，只清掉本轮被移除切片的孤儿向量。
+      execute("DELETE FROM retrieval_embedding WHERE dataset_id=? AND book_revision_id=? AND chunk_id NOT IN (SELECT id FROM retrieval_chunk WHERE dataset_id=? AND book_revision_id=?)",
+        [datasetId,revisionId,datasetId,revisionId]);
       const state=index.state;
       if (!state || !["ready","keyword_only","stale"].includes(state.status) ||
           typeof state.model!=="string" || !state.model.trim() ||
@@ -932,6 +966,29 @@ function txOperation(datasetId, operation, input) {
       execute("UPDATE retrieval_index_state SET model=?,dimensions=?,status=?,updated_at=? WHERE dataset_id=? AND book_revision_id=?",
         [input.model,input.dimensions,status,now,datasetId,revisionId]);
       return {embedded:Number(counts.total), status};
+    }
+    case "saveMessageRetrieval": {
+      const record=input.record;
+      if (!record || typeof record.messageId!=="string" || !record.messageId.trim() ||
+          typeof record.threadId!=="string" || !record.threadId.trim() ||
+          typeof record.query!=="string" ||
+          !["book","current","none"].includes(record.scope) ||
+          typeof record.hasEvidence!=="boolean" ||
+          !Number.isSafeInteger(record.hitCount) || record.hitCount<0 ||
+          !Number.isSafeInteger(record.includedCount) || record.includedCount<0 ||
+          !Number.isSafeInteger(record.keywordCount) || record.keywordCount<0 ||
+          typeof record.vectorTopScore!=="number" || !Number.isFinite(record.vectorTopScore) ||
+          !Number.isSafeInteger(record.omitted) || record.omitted<0 ||
+          !Array.isArray(record.budgetNotices) || record.budgetNotices.some((item)=>typeof item!=="string") ||
+          !Array.isArray(record.passages) || record.passages.length>20) {
+        throw new Error("检索摘要字段非法");
+      }
+      const message=first("SELECT id,thread_id FROM message WHERE id=? AND dataset_id=?",[record.messageId,datasetId]);
+      if (!message || message.thread_id!==record.threadId) throw new Error("检索摘要必须绑定当前数据集的消息");
+      execute("INSERT INTO message_retrieval(message_id,dataset_id,thread_id,query,scope,has_evidence,hit_count,included_count,keyword_count,vector_top_score,omitted,notice,budget_notices,passages,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(message_id) DO UPDATE SET query=excluded.query,scope=excluded.scope,has_evidence=excluded.has_evidence,hit_count=excluded.hit_count,included_count=excluded.included_count,keyword_count=excluded.keyword_count,vector_top_score=excluded.vector_top_score,omitted=excluded.omitted,notice=excluded.notice,budget_notices=excluded.budget_notices,passages=excluded.passages,created_at=excluded.created_at",
+        [record.messageId,datasetId,record.threadId,record.query,record.scope,record.hasEvidence?1:0,record.hitCount,record.includedCount,record.keywordCount,record.vectorTopScore,record.omitted,record.notice??null,JSON.stringify(record.budgetNotices),JSON.stringify(record.passages),new Date().toISOString()]);
+      // 检索摘要只服务于界面重现，和索引一样属于可重建数据，不写 backup_journal。
+      return null;
     }
     case "acknowledgeBackup": {
       const sequence = input.snapshotSequence;
@@ -1032,7 +1089,7 @@ function handle(message) {
     const datasetId=message.datasetId;
     const snapshot=message.snapshot;
     if (!snapshot || snapshot.datasetId!==datasetId || !Number.isSafeInteger(snapshot.schemaVersion) ||
-        snapshot.schemaVersion<1 || snapshot.schemaVersion>9 || !Number.isSafeInteger(snapshot.dirtySequence) ||
+        snapshot.schemaVersion<1 || snapshot.schemaVersion>10 || !Number.isSafeInteger(snapshot.dirtySequence) ||
         snapshot.dirtySequence<1 || typeof message.backupId!=="string" || !message.backupId.trim() ||
         !Number.isFinite(Date.parse(message.restoredAt))) {
       throw new Error("Backup snapshot metadata is invalid");
@@ -1047,6 +1104,8 @@ function handle(message) {
       if (existingThreads!==0 || dataset.dirty_sequence!==0) {
         throw new Error("Backup restore is allowed only into an empty local dataset");
       }
+      // 检索摘要不进入备份快照；恢复时清掉同数据集的孤立记录，避免消息 id 复用后串卡。
+      execute("DELETE FROM message_retrieval WHERE dataset_id=?", [datasetId]);
       for (const thread of snapshot.threads || []) {
         if (thread.datasetId!==datasetId) throw new Error("Restored Thread belongs to a different dataset");
         txOperation(datasetId,"createThread",{thread});
@@ -1087,7 +1146,7 @@ function handle(message) {
       }
       journalSequence=null;
       transactionDirty=false;
-      execute("UPDATE local_dataset SET schema_version=9,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
+      execute("UPDATE local_dataset SET schema_version=10,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
         [snapshot.dirtySequence,snapshot.dirtySequence,message.backupId,message.restoredAt,message.restoredAt,datasetId]);
       db.exec({sql:"COMMIT"});
       activeDatasetId=null;
@@ -1145,10 +1204,26 @@ function handle(message) {
     return execute("SELECT * FROM retrieval_chunk WHERE dataset_id=? AND book_revision_id=? ORDER BY chunk_index", [message.datasetId,message.bookRevisionId]).map(rowToRetrievalChunk);
   }
   if (type === "getRetrievalEmbeddings") {
-    return execute("SELECT chunk_id AS chunkId,dimensions,vector FROM retrieval_embedding WHERE dataset_id=? AND book_revision_id=?", [message.datasetId,message.bookRevisionId]).map((row)=>({
+    return execute("SELECT chunk_id AS chunkId,dimensions,model,vector FROM retrieval_embedding WHERE dataset_id=? AND book_revision_id=?", [message.datasetId,message.bookRevisionId]).map((row)=>({
       chunkId:row.chunkId,
       dimensions:row.dimensions,
+      model:row.model,
       vector:row.vector,
+    }));
+  }
+  if (type === "listMessageRetrieval") {
+    return execute("SELECT * FROM message_retrieval WHERE dataset_id=? AND thread_id=? ORDER BY created_at,message_id", [message.datasetId,message.threadId]).map((row)=>({
+      messageId:row.message_id,
+      scope:row.scope,
+      hasEvidence:Boolean(row.has_evidence),
+      hitCount:row.hit_count,
+      includedCount:row.included_count,
+      keywordCount:row.keyword_count,
+      vectorTopScore:row.vector_top_score,
+      omitted:row.omitted,
+      notice:row.notice,
+      budgetNotices:parseJson(row.budget_notices,[]),
+      passages:parseJson(row.passages,[]),
     }));
   }
   if (type === "searchRetrievalKeyword") {

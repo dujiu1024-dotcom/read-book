@@ -217,7 +217,7 @@ test("schema v1 to v6 migration preserves legacy dataset cursors and creates can
     return { dataset, candidates };
   });
   expect(migrated.dataset.id).toBe("legacy-v1-dataset");
-  expect(migrated.dataset.schemaVersion).toBe(9);
+  expect(migrated.dataset.schemaVersion).toBe(10);
   expect(migrated.dataset.dirtySequence).toBe(7);
   expect(migrated.dataset.lastAckedSequence).toBe(2);
   expect(migrated.candidates).toEqual([]);
@@ -243,7 +243,7 @@ test("schema v5 to current migration keeps chunk-less citations in the legacy ta
     await repository.close();
     return { dataset, messageCount: messages.length };
   });
-  expect(migrated.dataset.schemaVersion).toBe(9);
+  expect(migrated.dataset.schemaVersion).toBe(10);
   // Citations are not cascaded into message deletion; only the chunk-level citation table is rebuilt.
   expect(migrated.messageCount).toBe(2);
 
@@ -256,7 +256,7 @@ test("schema v5 to current migration keeps chunk-less citations in the legacy ta
     });
   });
   expect(inspected.ok, inspected.error).toBe(true);
-  expect(inspected.userVersion).toBe(9);
+  expect(inspected.userVersion).toBe(10);
   expect(inspected.newCitationColumns).toEqual(expect.arrayContaining(["chunk_id", "source_hash"]));
   // The rebuilt chunk-level table starts empty: v5 rows carry no chunk_id/source_hash, so no fabricated backfill.
   expect(inspected.newCitationCount).toBe(0);
@@ -788,7 +788,7 @@ test("backup journal records content mutations at the committed dirty sequence a
     datasetA, revision, threadId,
     messageId: "cccccccc-3333-4333-8333-cccccccccccc",
   });
-  expect(result.first.schemaVersion).toBe(9);
+  expect(result.first.schemaVersion).toBe(10);
   expect(result.first.dirtySequence).toBe(1);
   expect(result.first.backupJournal.map((entry) => entry.entityType).sort()).toEqual(["message", "thread"]);
   expect(new Set(result.first.backupJournal.map((entry) => entry.sequence))).toEqual(new Set([1]));
@@ -834,10 +834,31 @@ test("retrieval index stays a rebuildable cache outside the backup journal", asy
       },
     });
     const keyword = await repository.searchRetrievalKeyword(ids.datasetA, ids.revision, ["知行", "知行合"], 5);
+    await repository.saveMessageRetrieval(ids.datasetA, {
+      messageId: ids.messageId,
+      threadId: ids.threadId,
+      query: "知行合一",
+      scope: "book",
+      hasEvidence: true,
+      hitCount: 3,
+      includedCount: 1,
+      keywordCount: 2,
+      vectorTopScore: 0.7,
+      omitted: 0,
+      notice: null,
+      budgetNotices: [],
+      passages: [{
+        chunk: { id: "11111111-1111-4111-8111-111111111111", structureNodeId: "node-1", locator: "txt#line-1", chapter: "卷上", title: "卷上 · 第1段" },
+        excerpt: "知行合一，致良知。",
+        truncated: false,
+        score: 0.7,
+      }],
+    });
+    const summaries = await repository.listMessageRetrieval(ids.datasetA, ids.threadId);
     const after = await repository.createConsistentSnapshot(ids.datasetA);
     const state = await repository.getRetrievalIndexState(ids.datasetA, ids.revision);
     await repository.close();
-    return { before, after, keyword, state };
+    return { before, after, keyword, state, summaries };
   }, {
     datasetA, revision, threadId,
     messageId: "cccccccc-3333-4333-8333-cccccccccccc",
@@ -846,7 +867,10 @@ test("retrieval index stays a rebuildable cache outside the backup journal", asy
   expect(result.keyword[0].chunk.id).toBe("11111111-1111-4111-8111-111111111111");
   expect(result.state.status).toBe("keyword_only");
   expect(result.state.chunkCount).toBe(1);
-  // 索引写入是缓存维护，不得推进 dirty_sequence，也不得进入备份 journal。
+  expect(result.summaries).toHaveLength(1);
+  expect(result.summaries[0]).toMatchObject({ scope: "book", hitCount: 3, includedCount: 1 });
+  expect(result.summaries[0].passages[0].chunk.id).toBe("11111111-1111-4111-8111-111111111111");
+  // 索引与检索摘要都是缓存维护，不得推进 dirty_sequence，也不得进入备份 journal。
   expect(result.after.dirtySequence).toBe(result.before.dirtySequence);
   expect(result.after.backupJournal).toEqual(result.before.backupJournal);
 });

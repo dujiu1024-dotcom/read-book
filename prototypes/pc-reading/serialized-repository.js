@@ -33,6 +33,7 @@ const SERIALIZED_METHODS = new Set([
   "acknowledgeBackup",
   "replaceRetrievalIndex",
   "saveRetrievalEmbeddings",
+  "saveMessageRetrieval",
   "close",
 ]);
 
