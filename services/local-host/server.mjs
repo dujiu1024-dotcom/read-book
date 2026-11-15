@@ -28,6 +28,12 @@ const BASE_URL = (process.env.SENSENOVA_BASE_URL || "https://token.sensenova.cn/
 const MODEL = process.env.SENSENOVA_MODEL || "sensenova-6.8-flash";
 const THINKING = process.env.SENSENOVA_THINKING === "enabled" ? "enabled" : "disabled";
 const LOCAL_AUTH_TOKEN = process.env.LOCAL_AUTH_TOKEN || "local-dev-token";
+// 向量通道：浏览器访问不到 11434，统一由本地宿主代理到 Ollama。
+const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/+$/, "");
+const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || "bge-m3";
+const EMBED_TIMEOUT_MS = Number(process.env.OLLAMA_EMBED_TIMEOUT_MS || 120_000);
+const MAX_EMBED_INPUTS = 64;
+const MAX_EMBED_CHARACTERS = 4000;
 const CORS_ORIGINS = new Set((process.env.CORS_ORIGINS || "http://127.0.0.1:5178,http://localhost:5178").split(",").map((item) => item.trim()).filter(Boolean));
 const TASK_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_ATTEMPTS = 4;
@@ -107,6 +113,12 @@ const SYSTEM_PROMPT = [
   "回答保持简洁、具体，使用中文；可以先回应问题，再引述原文中的关键句（用引号）。",
 ].join("\n");
 
+const BOOK_SCOPE_NOTE = [
+  "本轮问题按“全书检索”处理：下面列出的原文片段是全书中与问题最相关的若干段，已按相关度排序。",
+  "只能依据这些片段回答；片段不足以支撑时，必须明确说“提供的原文片段没有覆盖这个问题”，不要用常识或先验知识补答。",
+  "引用原文时说明它来自第几段片段（例如“原文 2”）。",
+].join("\n");
+
 function normalizeSpace(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
@@ -116,15 +128,21 @@ function buildMessages(request) {
   const sourceText = sources.map((source, index) =>
     `【原文 ${index + 1}｜${source.locator}】\n${String(source.excerpt || "").slice(0, 12000)}`,
   ).join("\n\n");
+  const bookScope = context.retrieval?.mode === "book";
+  const memory = Array.isArray(context.relevant_memory) ? context.relevant_memory : [];
+  const memoryText = memory.map((item, index) =>
+    `【记忆 ${index + 1}｜${item.title || "长期认知"}｜${item.change_kind || "new"}】\n${String(item.content || "").slice(0, 4000)}`,
+  ).join("\n\n");
   const history = (request.context.recent_messages || []).slice(-12)
     .map((message) => `${message.role === "user" ? "用户" : "Agent"}：${String(message.content || "").slice(0, 4000)}`)
     .join("\n");
   return [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: SYSTEM_PROMPT + (bookScope ? "\n" + BOOK_SCOPE_NOTE : "") },
     { role: "user", content: [
-      "本轮阅读到的原文：",
+      bookScope ? "以下是全书检索命中的原文片段（按相关度排序）：" : "本轮阅读到的原文：",
       sourceText,
       "",
+      ...(memoryText ? ["与当前讨论相关的长期认知：\n" + memoryText, ""] : []),
       history ? "之前的讨论：\n" + history : "之前没有讨论。",
       "",
       "用户现在的问题：" + request.user_message.content,
@@ -153,12 +171,15 @@ function buildCitations(request) {
     citations.push({
       book_revision_id: request.book_revision_id,
       structure_node_id: source.structure_node_id,
-      chunk_id: uuidFromHash([request.book_revision_id, source.structure_node_id, source.locator].join("|")),
+      // 客户端随来源一起送来真实切片 ID；只有缺失或非法时才退回按来源派生的哈希。
+      chunk_id: isUuid(source.chunk_id)
+        ? source.chunk_id
+        : uuidFromHash([request.book_revision_id, source.structure_node_id, source.locator].join("|")),
       source_hash: createHash("sha256").update(normalized, "utf8").digest("hex"),
       locator: source.locator,
       excerpt: normalized.slice(0, 160),
     });
-    if (citations.length >= 3) break;
+    if (citations.length >= 8) break;
   }
   return citations;
 }
@@ -397,6 +418,53 @@ async function handleMemoryPlan(req, res) {
   }
 }
 
+async function handleEmbeddings(req, res) {
+  let body;
+  try { body = await readBody(req, 2_000_000); } catch { return apiError(res, 422, "INVALID_REQUEST", "请求体不是合法 JSON。"); }
+  let inputs;
+  try {
+    inputs = Array.isArray(body.input) ? body.input : typeof body.input === "string" ? [body.input] : null;
+    if (!inputs || !inputs.length) throw new Error("input 必须是非空字符串或字符串数组。");
+    if (inputs.length > MAX_EMBED_INPUTS) throw new Error("单次最多向量化 " + MAX_EMBED_INPUTS + " 段文本。");
+    inputs = inputs.map((value) => {
+      if (typeof value !== "string" || !value.trim()) throw new Error("input 中的文本必须是非空字符串。");
+      if (value.length > MAX_EMBED_CHARACTERS) throw new Error("单段文本不能超过 " + MAX_EMBED_CHARACTERS + " 字符。");
+      return value;
+    });
+  } catch (error) {
+    return apiError(res, 422, "INVALID_REQUEST", error.message);
+  }
+  let response;
+  try {
+    response = await fetch(OLLAMA_BASE_URL + "/api/embed", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: EMBED_MODEL, input: inputs }),
+      signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
+    });
+  } catch (error) {
+    log("embedding_unreachable", { code: error?.name || "fetch_error" });
+    return apiError(res, 503, "EMBEDDING_UNAVAILABLE", "本机向量服务不可用（" + (error?.name === "TimeoutError" ? "请求超时" : "无法连接 Ollama") + "）。可继续使用关键词检索。", true);
+  }
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => "")).slice(0, 300);
+    log("embedding_error", { status: response.status });
+    return apiError(res, 502, "EMBEDDING_FAILED", "向量服务返回 HTTP " + response.status + "。" + (detail ? " " + detail : ""), response.status >= 500);
+  }
+  let payload;
+  try { payload = await response.json(); } catch { return apiError(res, 502, "EMBEDDING_FAILED", "向量服务返回了非 JSON 响应。", true); }
+  const embeddings = payload?.embeddings;
+  if (!Array.isArray(embeddings) || embeddings.length !== inputs.length ||
+      embeddings.some((vector) => !Array.isArray(vector) || !vector.length || vector.some((value) => typeof value !== "number" || !Number.isFinite(value)))) {
+    return apiError(res, 502, "EMBEDDING_FAILED", "向量服务返回的向量格式不合法。", true);
+  }
+  const dimensions = embeddings[0].length;
+  if (embeddings.some((vector) => vector.length !== dimensions)) {
+    return apiError(res, 502, "EMBEDDING_FAILED", "向量服务返回了维度不一致的向量。", true);
+  }
+  json(res, 200, { model: typeof payload.model === "string" && payload.model ? payload.model : EMBED_MODEL, dimensions, embeddings });
+}
+
 async function handleCreate(req, res) {
   let body;
   try { body = validateRequest(await readBody(req)); } catch (error) { return apiError(res, 422, "INVALID_REQUEST", error.message); }
@@ -481,8 +549,12 @@ const server = http.createServer(async (req, res) => {
   cors(req, res);
   const url = new URL(req.url, "http://127.0.0.1:" + PORT);
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
-  if (url.pathname === "/health") { json(res, 200, { status: "ok", model: MODEL, thinking: THINKING }); return; }
+  if (url.pathname === "/health") { json(res, 200, { status: "ok", model: MODEL, thinking: THINKING, embedding: { model: EMBED_MODEL } }); return; }
   if (!authorized(req)) return apiError(res, 401, "UNAUTHORIZED", "缺少有效的本地访问令牌。");
+  if (url.pathname === "/v1/embeddings") {
+    if (req.method !== "POST") return apiError(res, 405, "METHOD_NOT_ALLOWED", "仅支持 POST。");
+    return handleEmbeddings(req, res);
+  }
   if (url.pathname === "/v1/memory/extract") {
     if (req.method !== "POST") return apiError(res, 405, "METHOD_NOT_ALLOWED", "仅支持 POST。");
     return handleMemoryExtract(req, res);
