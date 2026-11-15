@@ -4,12 +4,15 @@ import { createAgentGenerationTurnRepository } from "../../packages/local-reposi
 import {
   createGenerationClient,
   createGenerationTurnController,
+  withRelevantMemory,
 } from "../../packages/agent-adapter/src/index.ts";
 import { createHttpGenerationTransport } from "../../packages/agent-adapter/src/http-transport.ts";
 import { createHttpEncryptedBackupPort } from "../../poc/encrypted-backup/src/http-backup-port.js";
 import { runMemoryExtraction, persistAcceptedMemoryCandidates } from "../../packages/agent-adapter/src/memory-extraction.ts";
 import { selectThreadMemoryState } from "./memory-thread-scope.js";
 import { hasEncryptedBackupService } from "./reader-capabilities.js";
+import { analyzeQuestion, planPromptBudget } from "./book-retrieval.js";
+import { createBookRetriever, createEmbeddingClient } from "./retrieval-runtime.js";
 
 function uuid() {
   return crypto.randomUUID();
@@ -142,6 +145,37 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     const client = createGenerationClient(transport);
     const turnRepository = createAgentGenerationTurnRepository(repository, datasetId);
     controller = createGenerationTurnController(turnRepository, client, datasetId);
+  }
+
+  // 全书检索：向量服务经本地宿主代理，浏览器不直连 Ollama。
+  const embeddingBaseUrl = config.embeddingApiBaseUrl || generationApiBaseUrl || config.memoryProxyUrl || "";
+  const embeddingClient = config.embeddingClient || (
+    typeof getAccessToken === "function" && embeddingBaseUrl
+      ? createEmbeddingClient({
+          baseUrl: embeddingBaseUrl,
+          getAccessToken,
+          model: config.embeddingModel || "bge-m3",
+        })
+      : null
+  );
+  const retriever = createBookRetriever({
+    repository,
+    datasetId,
+    bookRevision,
+    embeddingClient,
+    onStatus: (status) => config.onRetrievalStatus?.(status),
+  });
+  // 老库没有索引时惰性补齐；向量化在后台进行，不阻塞阅读。
+  if (controller) {
+    void retriever.ensureIndex().catch((error) => {
+      console.warn("[retrieval] ensureIndex failed", error);
+      config.onRetrievalStatus?.({
+        ready: false,
+        phase: "error",
+        chunkCount: 0,
+        error: String(error?.message || error),
+      });
+    });
   }
 
   async function loadMessages() {
@@ -305,33 +339,80 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     }));
   }
 
-  function createSourceBundle(currentUnit, additionalUnits = []) {
+  function chunkIdForUnit(unitId, excerpt = "") {
+    const candidates = (retriever.getChunks() || []).filter((chunk) => chunk.structureNodeId === unitId);
+    if (!candidates.length) return null;
+    if (!excerpt) return candidates[0].id;
+    // 只有切片内容确实落在本次引用的原文里，才把该切片 id 挂上去，避免“真实 id + 不相干切片”。
+    const normalizedExcerpt = String(excerpt).replace(/\s+/g, "");
+    const matched = candidates.find((chunk) =>
+      normalizedExcerpt.includes(chunk.text.replace(/\s+/g, "").slice(0, 60)));
+    return (matched || candidates[0]).id;
+  }
+
+  /**
+   * 组织一次性生成的原文来源。
+   * - currentExcerpt 允许预算层按句末截断当前段；
+   * - passages 是全书检索命中的真实切片，chunk_id 必须随请求发给服务端，
+   *   这样落库的引用才是真实切片 id，而不是服务端临时派生的哈希。
+   */
+  function createSourceBundle(currentUnit, options = {}) {
     const canonicalCurrent = bookRevision.units.find((item) => item.id === currentUnit?.id);
     if (!canonicalCurrent) throw new Error("当前原文不属于已加载的 BookRevision。");
-    const selected = [canonicalCurrent];
-    const seen = new Set([canonicalCurrent.id]);
-    for (const candidate of Array.isArray(additionalUnits) ? additionalUnits : []) {
-      if (selected.length >= 8) break;
-      const unit = bookRevision.units.find((item) => item.id === candidate?.id);
-      if (!unit || seen.has(unit.id) || !unit.locator || typeof unit.text !== "string") continue;
-      seen.add(unit.id);
-      selected.push(unit);
-    }
-    let remainingCharacters = 120000;
-    const sources = selected.map((item, index) => {
-      const excerpt = item.text.slice(0, Math.min(30000, remainingCharacters));
-      remainingCharacters -= excerpt.length;
-      return {
-        unit: item,
+    const seen = new Set([canonicalCurrent.id + ":" + canonicalCurrent.locator]);
+    const currentExcerpt = typeof options.currentExcerpt === "string" && options.currentExcerpt.trim()
+      ? options.currentExcerpt
+      : canonicalCurrent.text;
+    const currentChunkId = chunkIdForUnit(canonicalCurrent.id, currentExcerpt);
+    const sources = [{
+      unit: canonicalCurrent,
+      source: {
+        structure_node_id: canonicalCurrent.id,
+        locator: canonicalCurrent.locator,
+        excerpt: currentExcerpt.slice(0, 30000),
+        ...(currentChunkId ? { chunk_id: currentChunkId } : {}),
+      },
+    }];
+    for (const passage of Array.isArray(options.passages) ? options.passages : []) {
+      if (sources.length >= 8) break;
+      const chunk = passage?.chunk;
+      if (!chunk || typeof chunk.structureNodeId !== "string") continue;
+      const key = chunk.structureNodeId + ":" + chunk.locator;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const unit = bookRevision.units.find((item) => item.id === chunk.structureNodeId);
+      const excerpt = String(passage.excerpt || chunk.text || "").trim();
+      if (!excerpt) continue;
+      sources.push({
+        unit: unit || { id: chunk.structureNodeId, locator: chunk.locator, text: chunk.text, chapter: chunk.chapter },
         source: {
-          structure_node_id: item.id,
-          locator: item.locator,
-          excerpt,
+          structure_node_id: chunk.structureNodeId,
+          locator: chunk.locator,
+          excerpt: excerpt.slice(0, 30000),
+          chunk_id: chunk.id,
         },
-      };
-    }).filter((item) => item.source.excerpt.trim());
+      });
+    }
+    for (const candidate of Array.isArray(options.additionalUnits) ? options.additionalUnits : []) {
+      if (sources.length >= 8) break;
+      const unit = bookRevision.units.find((item) => item.id === candidate?.id);
+      if (!unit || !unit.locator || typeof unit.text !== "string") continue;
+      const key = unit.id + ":" + unit.locator;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const chunkId = chunkIdForUnit(unit.id, unit.text);
+      sources.push({
+        unit,
+        source: {
+          structure_node_id: unit.id,
+          locator: unit.locator,
+          excerpt: unit.text.slice(0, 30000),
+          ...(chunkId ? { chunk_id: chunkId } : {}),
+        },
+      });
+    }
     const current = sources[0];
-    if (!current) throw new Error("当前原文没有可用于引用核验的内容。");
+    if (!current || !current.source.excerpt.trim()) throw new Error("当前原文没有可用于引用核验的内容。");
     return {
       units: sources.map((item) => item.unit),
       current_source: current.source,
@@ -353,7 +434,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       return bookRevision.units.find((item) =>
         item.id === reference.structureNodeId && item.locator === reference.locator) || null;
     }).filter(Boolean);
-    return createSourceBundle(currentUnit, additionalUnits);
+    return createSourceBundle(currentUnit, { additionalUnits });
   }
 
   async function loadCitations() {
@@ -361,25 +442,130 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     return snapshot.citations.filter((item) => item.threadId === thread.id);
   }
 
+  /**
+   * 记忆召回接到真实请求上：优先按当前段召回，不足 5 条时用最近认知补齐。
+   * 只发送有效的当前版本，并按预算截断，绝不把整份记忆档案塞进 prompt。
+   */
+  async function recallRelevantMemories(unitId) {
+    if (typeof repository.recallMemoryVersions !== "function") return [];
+    const seen = new Set();
+    const versions = [];
+    const collect = async (query) => {
+      let records = [];
+      try { records = await repository.recallMemoryVersions(datasetId, query); } catch { records = []; }
+      for (const record of records) {
+        if (!record?.id || seen.has(record.id)) continue;
+        seen.add(record.id);
+        versions.push(record);
+        if (versions.length >= 5) break;
+      }
+    };
+    if (unitId) await collect({ threadId: thread.id, structureNodeId: unitId, limit: 5 });
+    if (versions.length < 5) await collect({ threadId: thread.id, limit: 5 - versions.length });
+    return versions.map((version) => ({
+      memory_id: version.memoryId,
+      version_id: version.id,
+      title: version.title || "长期认知",
+      viewpoint: version.viewpoint || "user",
+      content: version.content,
+      change_kind: version.changeKind || "new",
+    }));
+  }
+
+  function attachMemory(request, memories) {
+    if (!memories.length) return request;
+    try {
+      return withRelevantMemory(request, memories);
+    } catch {
+      // 记忆只是辅助证据，格式不合法时宁可不带，也不阻断本轮回答。
+      return request;
+    }
+  }
+
+  /**
+   * 全书检索无命中时，不调用模型：直接落一条“书里没找到”的明确回答。
+   * 这样不会让模型用先验知识硬答。
+   */
+  async function persistNoEvidenceAnswer(content, unit, retrieval) {
+    const userId = uuid();
+    const assistantId = uuid();
+    const now = new Date().toISOString();
+    const references = unit
+      ? [{ bookRevisionId: bookRevision.bookRevisionId, structureNodeId: unit.id, locator: unit.locator }]
+      : [];
+    const notice = retrieval.notice ? "（" + retrieval.notice + "）" : "";
+    const answer = "我在《" + bookRevision.title + "》全书中没有检索到与这个问题相关的原文段落。" +
+      "为避免脱离原文作答，本轮不给出推测性回答。可以换一个更贴近书中概念的关键词，或先在当前段确认讨论范围。" + notice;
+    await repository.transaction(datasetId, async (tx) => {
+      await tx.appendUserMessage({
+        id: userId,
+        threadId: thread.id,
+        content,
+        createdAt: now,
+        sourceReferences: references,
+        idempotencyKey: uuid() + "-" + uuid(),
+      });
+      await tx.appendAssistantMessage({
+        id: assistantId,
+        threadId: thread.id,
+        content: answer,
+        status: "completed",
+        createdAt: new Date().toISOString(),
+        sourceReferences: [],
+      });
+    });
+    return {
+      assistantMessageId: assistantId,
+      snapshot: { status: "completed", result: { content: answer, citations: [] } },
+      retrieval: { ...retrieval, noEvidence: true },
+    };
+  }
+
   async function send(content, unit, callbacks = {}) {
     if (!controller) throw new Error("真实 Agent 服务尚未配置；当前仅支持本地阅读与历史查看。");
     if (!unit) throw new Error("当前没有可关联的原文单元。");
     const messages = await loadMessages();
+    const scope = analyzeQuestion(content);
+    let retrieval = null;
+    if (scope.mode === "book") {
+      retrieval = await retriever.search(content, { limit: 8 });
+      callbacks.onRetrieval?.(retrieval);
+      if (!retrieval.hasEvidence) {
+        const result = await persistNoEvidenceAnswer(content, unit, retrieval);
+        callbacks.onPersisted?.();
+        return result;
+      }
+    }
     const recentMessages = messages.slice(-12).map(({ message }) => ({
       role: message.role,
       content: message.content,
     }));
+    const memories = await recallRelevantMemories(unit.id);
+    const budget = planPromptBudget({
+      currentUnit: unit,
+      passages: retrieval?.passages || [],
+      messages: recentMessages,
+      memories,
+    });
+    if (retrieval) {
+      retrieval = { ...retrieval, budgetNotices: budget.notices };
+      callbacks.onRetrieval?.(retrieval);
+    }
     const userMessageId = uuid();
     const assistantMessageId = uuid();
     const clientGenerationId = uuid();
     const idempotencyKey = uuid() + "-" + uuid();
-    const sourceBundle = createSourceBundle(unit, callbacks.additionalUnits);
+    const sourceBundle = createSourceBundle(unit, {
+      passages: budget.passages,
+      additionalUnits: retrieval ? [] : callbacks.additionalUnits,
+      currentExcerpt: budget.currentExcerpt.text,
+    });
     const sourceReferences = sourceBundle.units.map((sourceUnit) => ({
       bookRevisionId: bookRevision.bookRevisionId,
       structureNodeId: sourceUnit.id,
       locator: sourceUnit.locator,
     }));
-    const request = {
+    const request = attachMemory({
       client_generation_id: clientGenerationId,
       thread_id: thread.id,
       book_revision_id: bookRevision.bookRevisionId,
@@ -387,10 +573,19 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       context: {
         current_source: sourceBundle.current_source,
         ...(sourceBundle.additional_sources.length ? { additional_sources: sourceBundle.additional_sources } : {}),
-        recent_messages: recentMessages,
+        recent_messages: budget.messages,
         response_preferences: { language: "zh-CN" },
+        ...(retrieval ? {
+          retrieval: {
+            mode: "book",
+            scope: scope.reason,
+            hit_count: retrieval.hits.length,
+            keyword_hits: retrieval.keywordCount,
+            vector_top_score: Number(retrieval.vectorTopScore.toFixed(4)),
+          },
+        } : {}),
       },
-    };
+    }, budget.memories);
     const result = await controller.send({
       datasetId,
       userMessage: { id: userMessageId, threadId: thread.id, content },
@@ -404,7 +599,7 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     if (config.memoryExtractionProvider && config.memoryCandidatePolicy) {
       void extractMemories().then((memoryState) => callbacks.onMemoryUpdate?.(memoryState)).catch((error) => callbacks.onMemoryError?.(error));
     }
-    return result;
+    return { ...result, retrieval };
   }
 
   async function retryFailedGeneration(assistantMessageId, callbacks = {}) {
@@ -440,7 +635,14 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     const userMessageId = user.id;
     const clientGenerationId = uuid();
     const idempotencyKey = uuid() + "-" + uuid();
-    const request = {
+    const memories = await recallRelevantMemories(unit.id);
+    const budget = planPromptBudget({
+      currentUnit: unit,
+      passages: [],
+      messages: priorMessages,
+      memories,
+    });
+    const request = attachMemory({
       client_generation_id: clientGenerationId,
       thread_id: thread.id,
       book_revision_id: bookRevision.bookRevisionId,
@@ -448,10 +650,10 @@ export async function createProductionReaderRuntime(config, bookRevision) {
       context: {
         current_source: sourceBundle.current_source,
         ...(sourceBundle.additional_sources.length ? { additional_sources: sourceBundle.additional_sources } : {}),
-        recent_messages: priorMessages,
+        recent_messages: budget.messages,
         response_preferences: { language: "zh-CN" },
       },
-    };
+    }, budget.memories);
     const result = await controller.send({
       datasetId,
       userMessage: { id: user.id, threadId: thread.id, content: user.content },
@@ -491,7 +693,14 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         .filter((item) => item.message.sequence < user.sequence)
         .slice(-12)
         .map(({ message }) => ({ role: message.role, content: message.content }));
-      return {
+      const memories = await recallRelevantMemories(sourceBundle.units[0]?.id);
+      const budget = planPromptBudget({
+        currentUnit: sourceBundle.units[0],
+        passages: [],
+        messages: priorMessages,
+        memories,
+      });
+      return attachMemory({
         client_generation_id: delivery.clientGenerationId,
         thread_id: delivery.threadId,
         book_revision_id: bookRevision.bookRevisionId,
@@ -499,10 +708,10 @@ export async function createProductionReaderRuntime(config, bookRevision) {
         context: {
           current_source: sourceBundle.current_source,
           ...(sourceBundle.additional_sources.length ? { additional_sources: sourceBundle.additional_sources } : {}),
-          recent_messages: priorMessages,
+          recent_messages: budget.messages,
           response_preferences: { language: "zh-CN" },
         },
-      };
+      }, budget.memories);
     }, {
       threadId: thread.id,
       onDelta: callbacks.onDelta,
@@ -617,6 +826,11 @@ export async function createProductionReaderRuntime(config, bookRevision) {
     send,
     retryFailedGeneration,
     getRevisionActivity,
+    retrievalStatus: () => retriever.status(),
+    ensureRetrievalIndex: () => retriever.ensureIndex(),
+    rebuildRetrievalIndex: () => retriever.rebuild(),
+    searchBook: (question, options) => retriever.search(question, options),
+    debugRetrievalChunks: () => retriever.getChunks(),
     stop: () => controller?.stop(),
     resumePending,
     close: () => repository.close(),

@@ -64,6 +64,8 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
   let lastSendAt = 0;
   let stopArmedAt = 0;
   let stopRequested = false;
+  // 检索结果只用于本次会话的“它在书里找了哪几段”；持久化后仍可从引用卡片回看。
+  const retrievalByMessage = new Map();
 
   /** 把底层错误转成可读中文，并去掉重复句号。 */
   function errorText(error) {
@@ -108,6 +110,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
     const config = { ...baseConfig };
     const getAccessToken = accessTokenProvider(baseConfig);
     if (typeof getAccessToken === "function" && !config.getAccessToken) config.getAccessToken = getAccessToken;
+    config.onRetrievalStatus = (status) => updateRetrievalBar(status);
     if (readerConfig.memoryProxyUrl && typeof getAccessToken === "function") {
       const provider = createMemoryProxyProvider({ baseUrl: readerConfig.memoryProxyUrl, getAccessToken });
       config.memoryExtractionProvider = provider;
@@ -124,6 +127,82 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
     el.classList.add("visible");
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.remove("visible"), 2200);
+  }
+
+  /** 全书索引属于可重建缓存：界面必须让用户看见它是否就绪、是否只剩关键词通道。 */
+  function updateRetrievalBar(status) {
+    const bar = $("retrievalBar");
+    const text = $("retrievalStatusText");
+    const rebuild = $("rebuildIndexButton");
+    if (!bar || !text) return;
+    bar.hidden = false;
+    const phase = status?.phase || "missing";
+    if (status?.modelMismatch) {
+      text.textContent = "全书索引与当前向量模型不一致，已回退关键词检索；请重建索引。";
+    } else if (phase === "error") {
+      text.textContent = "全书索引不可用：" + (status?.error || "未知错误") + "；本轮只用关键词检索。";
+    } else if (phase === "embedding") {
+      text.textContent = "正在建立全书向量索引 " + (status.done || 0) + "/" + (status.total || 0) + " 段，关键词检索已可用…";
+    } else if (phase === "ready") {
+      text.textContent = "全书索引已就绪 · " + status.chunkCount + " 个片段 · " + (status.model || "");
+    } else if (phase === "keyword_only") {
+      text.textContent = "全书索引：仅关键词通道" + (status?.error
+        ? "（向量不可用：" + status.error + "）"
+        : status && status.chunkCount ? "（" + status.chunkCount + " 个片段，向量建立中）" : "");
+    } else {
+      text.textContent = "全书索引尚未建立，首次全书提问会自动建立。";
+    }
+    if (rebuild) rebuild.hidden = !(status?.needsRebuild || phase === "error" || phase === "missing");
+  }
+
+  function createRetrievalCard(retrieval) {
+    const card = document.createElement("div");
+    card.className = "retrieval-card";
+    const head = document.createElement("div");
+    head.className = "retrieval-card-head";
+    const title = document.createElement("strong");
+    title.textContent = "全书检索";
+    const count = document.createElement("span");
+    count.textContent = retrieval.hasEvidence
+      ? "命中 " + retrieval.hits.length + " 段，带入 " + (retrieval.passages?.length || 0) + " 段"
+      : "没有命中原文";
+    head.append(title, count);
+    card.append(head);
+    const passages = Array.isArray(retrieval.passages) ? retrieval.passages : [];
+    if (passages.length) {
+      const list = document.createElement("ul");
+      for (const passage of passages) {
+        const chunk = passage.chunk;
+        if (!chunk) continue;
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        const locator = document.createElement("span");
+        locator.className = "retrieval-locator";
+        locator.textContent = chunk.title || ((chunk.chapter || "全书") + " · " + chunk.locator);
+        const excerpt = document.createElement("span");
+        excerpt.className = "retrieval-excerpt";
+        const text = String(passage.excerpt || chunk.text || "");
+        excerpt.textContent = text.slice(0, 90) + (text.length > 90 ? "…" : "") + (passage.truncated ? "（已截断）" : "");
+        button.append(locator, excerpt);
+        button.addEventListener("click", () => showCitation(chunk.structureNodeId));
+        item.append(button);
+        list.append(item);
+      }
+      card.append(list);
+    }
+    const notices = [
+      ...(retrieval.notice ? [retrieval.notice] : []),
+      ...(Array.isArray(retrieval.budgetNotices) ? retrieval.budgetNotices : []),
+      ...(retrieval.hasEvidence ? [] : ["没有可引用的原文片段，本轮不会让模型凭先验知识作答。"]),
+    ];
+    for (const noticeText of notices) {
+      const notice = document.createElement("div");
+      notice.className = "retrieval-notice";
+      notice.textContent = noticeText;
+      card.append(notice);
+    }
+    return card;
   }
 
   function renderSource() {
@@ -265,6 +344,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
       citation.append(label, quote, link);
       content.append(citation);
     }
+    if (message.retrieval) content.append(createRetrievalCard(message.retrieval));
     if (message.failed) {
       const retry = document.createElement("button");
       retry.type = "button";
@@ -381,16 +461,29 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
       const assistantText = assistantArticle.querySelector(".message-content > p");
       setGenerating(true);
       setGenerationStatus("正在将消息保存到本地…");
+      let retrievalForThisTurn = null;
       try {
         const additionalUnits = sourceRetriever?.retrieve(value, state.displayedUnit?.id, 7) || [];
         const result = await productionRuntime.send(value, state.displayedUnit, {
           additionalUnits,
+          onRetrieval(retrieval) {
+            retrievalForThisTurn = retrieval;
+            if (retrieval.hasEvidence) {
+              setGenerationStatus("全书检索命中 " + retrieval.hits.length + " 段"
+                + (retrieval.notice ? "；" + retrieval.notice : "")
+                + "，正在按相关度组织回答…");
+            } else {
+              setGenerationStatus("全书中没有检索到相关原文；本轮不会让模型凭先验作答。");
+            }
+          },
           onPersisted() {
             userBubble.saving = false;
             userBubble.saved = true;
             const label = userArticle.querySelector(".saved-label");
             if (label) label.textContent = "本地已保存";
-            setGenerationStatus("本地已保存 · 已附带 " + additionalUnits.length + " 条关联原文证据 · Agent 正在生成");
+            if (!retrievalForThisTurn) {
+              setGenerationStatus("本地已保存 · 已附带 " + additionalUnits.length + " 条关联原文证据 · Agent 正在生成");
+            }
           },
           onDelta(text) {
             assistantText.textContent += text;
@@ -400,6 +493,9 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
           onMemoryError(error) { setGenerationStatus("回复已保存，但自动认知抽取失败：" + errorText(error) + "。"); },
         });
         assistantText.textContent = result.snapshot.result?.content || assistantText.textContent;
+        if (retrievalForThisTurn && result.assistantMessageId) {
+          retrievalByMessage.set(result.assistantMessageId, retrievalForThisTurn);
+        }
         await refreshPersistedMessages({ forceScroll: sentWhileNearBottom });
         // Do not infer an Assistant citation from the user's current reading position.
         // Only persisted, service-verified sourceReferences may render a citation card.
@@ -407,6 +503,10 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
         const terminalStatus = result.snapshot?.status;
         if (stopRequested || terminalStatus === "cancelled" || terminalStatus === "cancel_requested") {
           setGenerationStatus("已取消，可重试：原始输入已保存，可对这条回复点“重试”重新生成。");
+        } else if (retrievalForThisTurn && !retrievalForThisTurn.hasEvidence) {
+          setGenerationStatus("全书检索未命中：已明确说明找不到，没有让模型凭先验回答。");
+        } else if (retrievalForThisTurn) {
+          setGenerationStatus("回复已完成并保存 · 全书检索命中 " + retrievalForThisTurn.hits.length + " 段，来源已标注。");
         } else {
           setGenerationStatus("回复已完成并保存。");
         }
@@ -548,6 +648,24 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
   });
 
   $("backupButton").addEventListener("click", () => toast(productionRuntime ? productionRuntime.backupStatus.detail : "演示状态：启动备份检查已完成，没有真实上传。"));
+  $("rebuildIndexButton").addEventListener("click", async () => {
+    if (!productionRuntime || typeof productionRuntime.rebuildRetrievalIndex !== "function") {
+      toast("当前阅读模式没有可重建的全书索引。");
+      return;
+    }
+    const button = $("rebuildIndexButton");
+    button.disabled = true;
+    try {
+      const status = await productionRuntime.rebuildRetrievalIndex();
+      updateRetrievalBar(status);
+      toast(status.phase === "ready" ? "全书索引已重建。" : "索引已重建，但向量通道仍不可用，当前只使用关键词检索。");
+    } catch (error) {
+      updateRetrievalBar({ phase: "error", error: errorText(error) });
+      toast("重建全书索引失败：" + errorText(error) + "。");
+    } finally {
+      button.disabled = false;
+    }
+  });
   $("menuButton").addEventListener("click", () => {
     state.discussed = !state.discussed;
     toast(state.discussed ? "演示状态：当前单元标记为已讨论。" : "演示状态：当前单元标记为未讨论，可测试继续前确认。");
@@ -845,6 +963,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
           locator: item.locator,
           excerpt: item.excerpt,
         })),
+        retrieval: retrievalByMessage.get(message.id) || null,
       });
     }
     scrollIfFollowing(forceScroll);
@@ -1332,6 +1451,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
             getAccessToken,
             localOnly: readerConfig.localOnly === true || !hasAgentService,
           }), bookRevision);
+          if (queryParams.has("debugRetrieval")) window.__rbRuntime = productionRuntime;
           const position = productionRuntime.readingPosition;
           if (position) {
             const index = units.findIndex((unit) => unit.id === position.mainlineNodeId);
@@ -1351,6 +1471,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
           await refreshPersistedMessages({ forceScroll: true });
           await refreshNotes();
           renderMemoryState(await productionRuntime.loadMemoryState());
+          updateRetrievalBar(productionRuntime.retrievalStatus?.() || {});
           renderSource();
           updateCount();
           const cachedCount = bookRevision.sourceMetadata?.cacheFallbackCount || 0;
@@ -1436,6 +1557,7 @@ import { createMemoryProxyProvider, DEFAULT_MEMORY_CANDIDATE_POLICY } from "./me
       await refreshPersistedMessages({ forceScroll: true });
       await refreshNotes();
       renderMemoryState(await productionRuntime.loadMemoryState());
+      updateRetrievalBar(productionRuntime.retrievalStatus?.() || {});
       $("messageInput").disabled = !productionRuntime.generationConfigured;
       $("sendButton").disabled = !productionRuntime.generationConfigured;
       $("simulateFailure").hidden = true;

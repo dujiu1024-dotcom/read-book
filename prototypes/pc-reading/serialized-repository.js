@@ -31,6 +31,8 @@ const SERIALIZED_METHODS = new Set([
   "createConsistentSnapshot",
   "restoreSnapshot",
   "acknowledgeBackup",
+  "replaceRetrievalIndex",
+  "saveRetrievalEmbeddings",
   "close",
 ]);
 

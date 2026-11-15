@@ -152,6 +152,10 @@
         </div>
 
         <section class="composer" id="composerSection" aria-label="发送讨论">
+          <div class="retrieval-bar" id="retrievalBar" hidden>
+            <span id="retrievalStatusText">全书索引准备中…</span>
+            <button class="text-button" id="rebuildIndexButton" type="button" hidden>重建索引</button>
+          </div>
           <label class="sr-only" for="messageInput">输入你的想法</label>
           <textarea id="messageInput" rows="2" placeholder="就这一段提问、写下理解或反驳…"></textarea>
           <div class="composer-footer">
