@@ -133,6 +133,10 @@ function buildMessages(request) {
   const memoryText = memory.map((item, index) =>
     `【记忆 ${index + 1}｜${item.title || "长期认知"}｜${item.change_kind || "new"}】\n${String(item.content || "").slice(0, 4000)}`,
   ).join("\n\n");
+  const knowledge = Array.isArray(context.knowledge)
+    ? context.knowledge.filter((item) => typeof item === "string" && item.trim()).slice(0, 8).map((item) => item.slice(0, 200).trim())
+    : [];
+  const knowledgeText = knowledge.map((item) => "- " + item).join("\n");
   const history = (request.context.recent_messages || []).slice(-12)
     .map((message) => `${message.role === "user" ? "用户" : "Agent"}：${String(message.content || "").slice(0, 4000)}`)
     .join("\n");
@@ -143,6 +147,7 @@ function buildMessages(request) {
       sourceText,
       "",
       ...(memoryText ? ["与当前讨论相关的长期认知：\n" + memoryText, ""] : []),
+      ...(knowledgeText ? ["已审核的书籍知识（只作为理解线索；引用原文时必须依据上面的原文片段）：\n" + knowledgeText, ""] : []),
       history ? "之前的讨论：\n" + history : "之前没有讨论。",
       "",
       "用户现在的问题：" + request.user_message.content,
@@ -418,6 +423,160 @@ async function handleMemoryPlan(req, res) {
   }
 }
 
+const KNOWLEDGE_INSTRUCTION = "你是书籍知识抽取器，只允许抽取三类知识：chapter_intent（章节意图）、thesis（作者主张）、concept（术语 + 书中原句定义）。只依据本次提供的原文切片，不得使用先验知识，也不得补写书名或书中没有的观点。每个条目的 source_chunk_ids 必须从本次提供的 chunk_id 中选择，至少一个；指不回切片的条目不要输出。concept：凡切片中出现对某一术语的界定或解释句式（如“X者，Y也”“X即Y”“所谓X，是Y”“X只是Y”），就要抽取 term（术语本身）与 definition_quote（原文中逐字出现的解释句，不得改写），definition_quote 必须能在所引用的切片原文中找到；每批最多 4 条。thesis 只抽作者明确表达的主张，content 必须是你自己概括的一句话，不得整句照抄原文，不得编造因果，也不要把问句或弟子转述当成作者主张。chapter_intent 只有在这些切片本身足以说明本章要解决的问题时才输出，每批最多 1 条；只能使用切片中出现过的术语，如果只是章中一段，不要概括整章。同一批次重复条目必须合并。每条 content 不超过 120 字。最多输出 12 条；信息不足时宁可不输出，不要凑数。";
+const KNOWLEDGE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      maxItems: 12,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["item_type", "content", "term", "definition_quote", "source_chunk_ids", "confidence"],
+        properties: {
+          item_type: { type: "string", enum: ["chapter_intent", "thesis", "concept"] },
+          content: { type: "string" },
+          term: { type: ["string", "null"] },
+          definition_quote: { type: ["string", "null"] },
+          source_chunk_ids: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 4 },
+          confidence: { type: "number" },
+        },
+      },
+    },
+  },
+};
+const KNOWLEDGE_ITEM_TYPES = new Set(["chapter_intent", "thesis", "concept"]);
+const MAX_KNOWLEDGE_ITEMS = 12;
+
+// 只保留能指回本次切片、且原句确实能在切片中找到的条目；非法条目直接丢弃。
+function filterKnowledgeItems(parsed, chunks) {
+  const chunkIds = new Set(chunks.map((chunk) => chunk.chunk_id));
+  const chunkText = new Map(chunks.map((chunk) => [chunk.chunk_id, normalizeSpace(chunk.text)]));
+  const raw = Array.isArray(parsed?.items) ? parsed.items : [];
+  const items = [];
+  let dropped = 0;
+  for (const item of raw) {
+    if (items.length >= MAX_KNOWLEDGE_ITEMS) { dropped += 1; continue; }
+    if (!item || typeof item !== "object" || Array.isArray(item)) { dropped += 1; continue; }
+    if (!KNOWLEDGE_ITEM_TYPES.has(item.item_type)) { dropped += 1; continue; }
+    const content = typeof item.content === "string" ? item.content.trim() : "";
+    if (!content || content.length > 400) { dropped += 1; continue; }
+    const sourceIds = item.source_chunk_ids;
+    if (!Array.isArray(sourceIds) || !sourceIds.length) { dropped += 1; continue; }
+    if (sourceIds.some((id) => typeof id !== "string" || !chunkIds.has(id))) { dropped += 1; continue; }
+    const confidence = typeof item.confidence === "number" && Number.isFinite(item.confidence)
+      ? Math.min(1, Math.max(0, item.confidence))
+      : 0;
+    let term = null;
+    let definitionQuote = null;
+    if (item.item_type === "concept") {
+      const rawTerm = typeof item.term === "string" ? item.term.trim() : "";
+      const rawQuote = typeof item.definition_quote === "string" ? item.definition_quote.trim() : "";
+      if (!rawTerm || !rawQuote) { dropped += 1; continue; }
+      const stripLeaders = (value) => String(value)
+        .replace(/^[○〇\s]+/, "")
+        .replace(/^(?:先生曰|先生|曰)[，,]?\s*/, "")
+        .replace(/^[「『"]/, "")
+        .replace(/([」』"])([。；])$/, "$2")
+        .replace(/[」』"]$/, "");
+      const cleanedQuote = stripLeaders(rawQuote);
+      let quote = cleanedQuote || rawQuote;
+      let quoted = sourceIds.some((id) => chunkText.get(id).includes(normalizeSpace(quote)));
+      if (!quoted && cleanedQuote !== rawQuote) {
+        quote = rawQuote;
+        quoted = sourceIds.some((id) => chunkText.get(id).includes(normalizeSpace(rawQuote)));
+      }
+      if (!quoted) {
+        // 模型常把定义句改写；只从所引切片里取回“术语 + 界定句式”的原句，避免抓到无关句子。
+        const definitional = (sentence, term) => [
+          term + "者", term + "即", term + "便是", term + "只是", term + "是", "所谓" + term,
+        ].some((pattern) => sentence.includes(pattern));
+        for (const id of sourceIds) {
+          const original = chunks.find((chunk) => chunk.chunk_id === id)?.text || "";
+          const sentence = (original.match(/[^。！？；!?;\n]+[。！？；!?;]?/g) || [])
+            .map((part) => part.trim()
+              .replace(/^[○〇\s]+/, "")
+              .replace(/^(?:先生曰|先生|曰)[，,]?\s*/, "")
+              .replace(/^[「『"]/, "")
+              .replace(/([」』"])([。；])$/, "$2")
+              .replace(/[」』"]$/, ""))
+            .find((part) => !/^[^，,。]{1,4}问[，,]/.test(part) &&
+              part.includes(rawTerm) && part.length >= rawTerm.length + 2 && definitional(part, rawTerm));
+          if (sentence) {
+            quote = sentence.slice(0, 200);
+            quoted = true;
+            break;
+          }
+        }
+      }
+      if (!quoted) { dropped += 1; continue; }
+      // 引文必须包含该术语，否则只是“术语 + 无关原句”。
+      if (!normalizeSpace(quote).includes(normalizeSpace(rawTerm))) { dropped += 1; continue; }
+      term = rawTerm.slice(0, 80);
+      definitionQuote = quote.slice(0, 200);
+    }
+    items.push({ item_type: item.item_type, content, term, definition_quote: definitionQuote, source_chunk_ids: sourceIds, confidence });
+  }
+  return { items, dropped };
+}
+
+function validateKnowledgeRequest(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("请求体必须是 JSON 对象。");
+  if (typeof body.book_revision_id !== "string" || !body.book_revision_id.trim()) throw new Error("book_revision_id 必须是非空字符串。");
+  if (typeof body.chapter !== "string" || !body.chapter.trim()) throw new Error("chapter 必须是非空字符串。");
+  if (!Array.isArray(body.chunks) || body.chunks.length < 1 || body.chunks.length > 12) throw new Error("chunks 必须是长度 1..12 的数组。");
+  if (body.focus !== undefined && body.focus !== "chapter_intent" && body.focus !== "concept") throw new Error("focus 只支持 chapter_intent 或 concept。");
+  const chunks = body.chunks.map((chunk) => {
+    if (!chunk || typeof chunk !== "object" || Array.isArray(chunk)) throw new Error("chunks 中的每一项必须是对象。");
+    for (const field of ["chunk_id", "structure_node_id", "locator"]) {
+      if (typeof chunk[field] !== "string" || !chunk[field].trim()) throw new Error("chunks." + field + " 必须是非空字符串。");
+    }
+    if (typeof chunk.title !== "string") throw new Error("chunks.title 必须是字符串。");
+    if (typeof chunk.text !== "string" || !chunk.text.trim()) throw new Error("chunks.text 必须是非空字符串。");
+    if (chunk.text.length > 4000) throw new Error("chunks.text 不能超过 4000 字符。");
+    return {
+      chunk_id: chunk.chunk_id,
+      structure_node_id: chunk.structure_node_id,
+      locator: chunk.locator,
+      title: chunk.title,
+      text: chunk.text,
+    };
+  });
+  return { book_revision_id: body.book_revision_id, chapter: body.chapter, chunks, focus: body.focus || null };
+}
+
+async function handleKnowledgeExtract(req, res) {
+  let body;
+  try { body = await readBody(req); } catch { return apiError(res, 422, "INVALID_REQUEST", "请求体不是合法 JSON。"); }
+  let request;
+  try { request = validateKnowledgeRequest(body); } catch (error) { return apiError(res, 422, "INVALID_REQUEST", error.message); }
+  let parsed;
+  try {
+    const focusInstruction = request.focus === "chapter_intent"
+      ? " 本次只输出 chapter_intent，最多 1 条；不要输出 thesis 或 concept。"
+      : request.focus === "concept"
+        ? " 本次只输出 concept，最多 4 条；只抽原文中出现逐字解释句的术语，term 与 definition_quote 必须齐全，不要输出 thesis 或 chapter_intent。"
+        : "";
+    parsed = await callModelJson(KNOWLEDGE_INSTRUCTION + focusInstruction, {
+      book_revision_id: request.book_revision_id,
+      chapter: request.chapter,
+      chunks: request.chunks,
+    }, KNOWLEDGE_SCHEMA);
+  } catch (error) {
+    const code = error.code || "provider_error";
+    return apiError(res, code === "rate_limited" ? 429 : 502, code, error.message, code === "rate_limited");
+  }
+  let filtered = filterKnowledgeItems(parsed, request.chunks);
+  if (request.focus) {
+    const onlyFocused = filtered.items.filter((item) => item.item_type === request.focus);
+    filtered = { items: onlyFocused, dropped: filtered.dropped + filtered.items.length - onlyFocused.length };
+  }
+  json(res, 200, { model: MODEL, items: filtered.items, dropped: filtered.dropped });
+}
+
 async function handleEmbeddings(req, res) {
   let body;
   try { body = await readBody(req, 2_000_000); } catch { return apiError(res, 422, "INVALID_REQUEST", "请求体不是合法 JSON。"); }
@@ -549,7 +708,7 @@ const server = http.createServer(async (req, res) => {
   cors(req, res);
   const url = new URL(req.url, "http://127.0.0.1:" + PORT);
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
-  if (url.pathname === "/health") { json(res, 200, { status: "ok", model: MODEL, thinking: THINKING, embedding: { model: EMBED_MODEL } }); return; }
+  if (url.pathname === "/health") { json(res, 200, { status: "ok", model: MODEL, thinking: THINKING, embedding: { model: EMBED_MODEL }, knowledge: { model: MODEL } }); return; }
   if (!authorized(req)) return apiError(res, 401, "UNAUTHORIZED", "缺少有效的本地访问令牌。");
   if (url.pathname === "/v1/embeddings") {
     if (req.method !== "POST") return apiError(res, 405, "METHOD_NOT_ALLOWED", "仅支持 POST。");
@@ -558,6 +717,10 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/v1/memory/extract") {
     if (req.method !== "POST") return apiError(res, 405, "METHOD_NOT_ALLOWED", "仅支持 POST。");
     return handleMemoryExtract(req, res);
+  }
+  if (url.pathname === "/v1/knowledge/extract") {
+    if (req.method !== "POST") return apiError(res, 405, "METHOD_NOT_ALLOWED", "仅支持 POST。");
+    return handleKnowledgeExtract(req, res);
   }
   if (url.pathname === "/v1/memory/plan") {
     if (req.method !== "POST") return apiError(res, 405, "METHOD_NOT_ALLOWED", "仅支持 POST。");
