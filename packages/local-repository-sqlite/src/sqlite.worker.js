@@ -29,7 +29,7 @@ function parseJson(value, fallback = []) {
 function ensureDataset(datasetId) {
   if (typeof datasetId !== "string" || !datasetId.trim()) throw new Error("datasetId 非法");
   execute(
-    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,10,?,?,0,0,'active')",
+    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,11,?,?,0,0,'active')",
     [datasetId, new Date().toISOString(), new Date().toISOString()],
   );
   const dataset = first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
@@ -164,7 +164,7 @@ async function initialize() {
   // Existing installations have the v1 schema and no PRAGMA user_version marker.
   // Treat version 0 as the shipped v1 baseline, then migrate atomically to v2.
   const storedVersion = Number(first("PRAGMA user_version")?.user_version ?? 0);
-  if (storedVersion > 10) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
+  if (storedVersion > 11) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
   if (storedVersion < 2) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -440,6 +440,55 @@ async function initialize() {
       throw new Error("数据库 Schema v10 迁移失败，已回滚", { cause: error });
     }
   }
+  if (storedVersion < 11) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      // 书籍知识库与抽取进度是可重建的公共元数据：不写 backup_journal，也不推进 dirty_sequence。
+      db.exec({ sql: `
+        CREATE TABLE IF NOT EXISTS book_knowledge (
+          id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL,
+          book_revision_id TEXT NOT NULL,
+          chapter TEXT NOT NULL,
+          structure_node_id TEXT NOT NULL,
+          item_type TEXT NOT NULL CHECK(item_type IN ('chapter_intent','thesis','concept')),
+          content TEXT NOT NULL,
+          term TEXT,
+          definition_quote TEXT,
+          source_chunk_ids TEXT NOT NULL,
+          source_locator TEXT NOT NULL,
+          extraction_method TEXT NOT NULL,
+          model_version TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0,
+          review_status TEXT NOT NULL DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected')),
+          content_hash TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          reviewed_at TEXT,
+          UNIQUE(dataset_id, book_revision_id, content_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_book_knowledge_scope ON book_knowledge(dataset_id, book_revision_id, review_status, chapter);
+        CREATE TABLE IF NOT EXISTS knowledge_extraction_state (
+          dataset_id TEXT NOT NULL,
+          book_revision_id TEXT NOT NULL,
+          chapter TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
+          done_batches INTEGER NOT NULL DEFAULT 0,
+          total_batches INTEGER NOT NULL DEFAULT 0,
+          item_count INTEGER NOT NULL DEFAULT 0,
+          error TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(dataset_id, book_revision_id, chapter)
+        );
+        UPDATE local_dataset SET schema_version=11;
+        PRAGMA user_version=11;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v11 迁移失败，已回滚", { cause: error });
+    }
+  }
   assertDatabaseIntegrity();
 }
 
@@ -502,6 +551,28 @@ function rowToRetrievalChunk(row) {
     unitIds: parseJson(row.unit_ids),
     text: row.text,
     charLength: row.char_length,
+  };
+}
+function rowToBookKnowledge(row) {
+  return {
+    id: row.id,
+    bookRevisionId: row.book_revision_id,
+    chapter: row.chapter,
+    structureNodeId: row.structure_node_id,
+    itemType: row.item_type,
+    content: row.content,
+    term: row.term,
+    definitionQuote: row.definition_quote,
+    sourceChunkIds: parseJson(row.source_chunk_ids),
+    sourceLocator: row.source_locator,
+    extractionMethod: row.extraction_method,
+    modelVersion: row.model_version,
+    confidence: row.confidence,
+    reviewStatus: row.review_status,
+    contentHash: row.content_hash,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    reviewedAt: row.reviewed_at,
   };
 }
 function nextSequence(threadId) {
@@ -990,6 +1061,92 @@ function txOperation(datasetId, operation, input) {
       // 检索摘要只服务于界面重现，和索引一样属于可重建数据，不写 backup_journal。
       return null;
     }
+    case "saveBookKnowledge": {
+      const revisionId=input.bookRevisionId;
+      const items=input.items;
+      if (typeof revisionId!=="string" || !revisionId.trim()) throw new Error("知识条目必须绑定 BookRevision");
+      if (!Array.isArray(items)) throw new Error("知识条目必须是数组");
+      let saved=0;
+      for (const item of items) {
+        const confidence=item?.confidence ?? 0;
+        const reviewStatus=item?.reviewStatus ?? "pending";
+        if (!item || typeof item.id!=="string" || !item.id.trim() ||
+            item.bookRevisionId!==revisionId ||
+            typeof item.chapter!=="string" || !item.chapter.trim() ||
+            typeof item.structureNodeId!=="string" || !item.structureNodeId.trim() ||
+            !["chapter_intent","thesis","concept"].includes(item.itemType) ||
+            typeof item.content!=="string" || !item.content.trim() ||
+            (item.term!==undefined && item.term!==null && typeof item.term!=="string") ||
+            (item.definitionQuote!==undefined && item.definitionQuote!==null && typeof item.definitionQuote!=="string") ||
+            !Array.isArray(item.sourceChunkIds) || item.sourceChunkIds.length===0 ||
+            item.sourceChunkIds.some((chunkId)=>typeof chunkId!=="string" || !chunkId.trim()) ||
+            typeof item.sourceLocator!=="string" || !item.sourceLocator.trim() ||
+            typeof item.extractionMethod!=="string" || !item.extractionMethod.trim() ||
+            typeof item.modelVersion!=="string" || !item.modelVersion.trim() ||
+            typeof confidence!=="number" || !Number.isFinite(confidence) || confidence<0 || confidence>1 ||
+            !["pending","accepted","rejected"].includes(reviewStatus) ||
+            typeof item.contentHash!=="string" || !item.contentHash.trim() ||
+            typeof item.createdAt!=="string" || !item.createdAt.trim() ||
+            typeof item.updatedAt!=="string" || !item.updatedAt.trim() ||
+            (item.reviewedAt!==undefined && item.reviewedAt!==null && typeof item.reviewedAt!=="string")) {
+          throw new Error("BookKnowledge 字段非法：" + String(item?.id));
+        }
+        // 重新抽取命中已有 content_hash 时保持原记录，避免覆盖人工审核/编辑结果。
+        execute("INSERT INTO book_knowledge(id,dataset_id,book_revision_id,chapter,structure_node_id,item_type,content,term,definition_quote,source_chunk_ids,source_locator,extraction_method,model_version,confidence,review_status,content_hash,created_at,updated_at,reviewed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dataset_id,book_revision_id,content_hash) DO NOTHING",
+          [item.id,datasetId,revisionId,item.chapter,item.structureNodeId,item.itemType,item.content,item.term??null,item.definitionQuote??null,JSON.stringify(item.sourceChunkIds),item.sourceLocator,item.extractionMethod,item.modelVersion,confidence,reviewStatus,item.contentHash,item.createdAt,item.updatedAt,item.reviewedAt??null]);
+        saved+=db.changes();
+      }
+      // 知识库是公共可重建元数据：不写 backup_journal，也不推进 dirty_sequence。
+      return {saved};
+    }
+    case "updateBookKnowledgeReview": {
+      const id=input.id;
+      const updatedAt=input.updatedAt;
+      if (typeof id!=="string" || !id.trim()) throw new Error("知识条目 ID 非法");
+      if (typeof updatedAt!=="string" || !updatedAt.trim()) throw new Error("知识条目更新时间非法");
+      if (input.reviewStatus!==undefined && !["pending","accepted","rejected"].includes(input.reviewStatus)) throw new Error("知识条目审核状态非法");
+      if (input.content!==undefined && (typeof input.content!=="string" || !input.content.trim())) throw new Error("知识条目内容不能为空");
+      if (input.term!==undefined && input.term!==null && typeof input.term!=="string") throw new Error("知识条目术语非法");
+      if (input.definitionQuote!==undefined && input.definitionQuote!==null && typeof input.definitionQuote!=="string") throw new Error("知识条目定义引文非法");
+      if (!first("SELECT id FROM book_knowledge WHERE id=? AND dataset_id=?", [id,datasetId])) throw new Error("知识条目不属于当前数据集");
+      const sets=["updated_at=?"];
+      const params=[updatedAt];
+      if (input.reviewStatus!==undefined) {
+        sets.push("review_status=?","reviewed_at=?");
+        params.push(input.reviewStatus,updatedAt);
+      }
+      // 人工编辑不改变 content_hash，后续重新抽取仍按原始内容判重。
+      if (input.content!==undefined) {
+        sets.push("content=?");
+        params.push(input.content);
+      }
+      if (input.term!==undefined) {
+        sets.push("term=?");
+        params.push(input.term??null);
+      }
+      if (input.definitionQuote!==undefined) {
+        sets.push("definition_quote=?");
+        params.push(input.definitionQuote??null);
+      }
+      params.push(id,datasetId);
+      execute(`UPDATE book_knowledge SET ${sets.join(",")} WHERE id=? AND dataset_id=?`, params);
+      return null;
+    }
+    case "saveKnowledgeExtractionState": {
+      const r=input.record;
+      if (!r || typeof r.bookRevisionId!=="string" || !r.bookRevisionId.trim() ||
+          typeof r.chapter!=="string" || !r.chapter.trim() ||
+          !["running","completed","failed"].includes(r.status) ||
+          !Number.isSafeInteger(r.doneBatches) || r.doneBatches<0 ||
+          !Number.isSafeInteger(r.totalBatches) || r.totalBatches<0 ||
+          !Number.isSafeInteger(r.itemCount) || r.itemCount<0 ||
+          (r.error!==undefined && r.error!==null && typeof r.error!=="string") ||
+          typeof r.updatedAt!=="string" || !r.updatedAt.trim()) throw new Error("KnowledgeExtractionState 字段非法");
+      execute("INSERT INTO knowledge_extraction_state(dataset_id,book_revision_id,chapter,status,done_batches,total_batches,item_count,error,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(dataset_id,book_revision_id,chapter) DO UPDATE SET status=excluded.status,done_batches=excluded.done_batches,total_batches=excluded.total_batches,item_count=excluded.item_count,error=excluded.error,updated_at=excluded.updated_at",
+        [datasetId,r.bookRevisionId,r.chapter,r.status,r.doneBatches,r.totalBatches,r.itemCount,r.error??null,r.updatedAt]);
+      // 抽取进度同样属于可重建元数据，不写 backup_journal。
+      return r;
+    }
     case "acknowledgeBackup": {
       const sequence = input.snapshotSequence;
       const backupId = input.backupId;
@@ -1089,7 +1246,7 @@ function handle(message) {
     const datasetId=message.datasetId;
     const snapshot=message.snapshot;
     if (!snapshot || snapshot.datasetId!==datasetId || !Number.isSafeInteger(snapshot.schemaVersion) ||
-        snapshot.schemaVersion<1 || snapshot.schemaVersion>10 || !Number.isSafeInteger(snapshot.dirtySequence) ||
+        snapshot.schemaVersion<1 || snapshot.schemaVersion>11 || !Number.isSafeInteger(snapshot.dirtySequence) ||
         snapshot.dirtySequence<1 || typeof message.backupId!=="string" || !message.backupId.trim() ||
         !Number.isFinite(Date.parse(message.restoredAt))) {
       throw new Error("Backup snapshot metadata is invalid");
@@ -1146,7 +1303,7 @@ function handle(message) {
       }
       journalSequence=null;
       transactionDirty=false;
-      execute("UPDATE local_dataset SET schema_version=10,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
+      execute("UPDATE local_dataset SET schema_version=11,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
         [snapshot.dirtySequence,snapshot.dirtySequence,message.backupId,message.restoredAt,message.restoredAt,datasetId]);
       db.exec({sql:"COMMIT"});
       activeDatasetId=null;
@@ -1224,6 +1381,34 @@ function handle(message) {
       notice:row.notice,
       budgetNotices:parseJson(row.budget_notices,[]),
       passages:parseJson(row.passages,[]),
+    }));
+  }
+  if (type === "listBookKnowledge") {
+    if (typeof message.bookRevisionId!=="string" || !message.bookRevisionId.trim()) throw new Error("知识条目查询必须指定 BookRevision");
+    if (message.reviewStatus!==undefined && !["pending","accepted","rejected"].includes(message.reviewStatus)) throw new Error("知识条目审核状态非法");
+    if (message.itemType!==undefined && !["chapter_intent","thesis","concept"].includes(message.itemType)) throw new Error("知识条目类型非法");
+    if (message.chapter!==undefined && (typeof message.chapter!=="string" || !message.chapter.trim())) throw new Error("知识条目章节非法");
+    const limit=Number.isSafeInteger(message.limit) && message.limit>0 ? message.limit : 500;
+    const params=[message.datasetId,message.bookRevisionId];
+    let sql="SELECT * FROM book_knowledge WHERE dataset_id=? AND book_revision_id=?";
+    if (message.reviewStatus!==undefined) { sql+=" AND review_status=?"; params.push(message.reviewStatus); }
+    if (message.itemType!==undefined) { sql+=" AND item_type=?"; params.push(message.itemType); }
+    if (message.chapter!==undefined) { sql+=" AND chapter=?"; params.push(message.chapter); }
+    sql+=" ORDER BY chapter,item_type,created_at,id LIMIT ?";
+    params.push(limit);
+    return execute(sql, params).map(rowToBookKnowledge);
+  }
+  if (type === "listKnowledgeExtractionState") {
+    if (typeof message.bookRevisionId!=="string" || !message.bookRevisionId.trim()) throw new Error("抽取进度查询必须指定 BookRevision");
+    return execute("SELECT * FROM knowledge_extraction_state WHERE dataset_id=? AND book_revision_id=? ORDER BY chapter", [message.datasetId,message.bookRevisionId]).map((row)=>({
+      bookRevisionId:row.book_revision_id,
+      chapter:row.chapter,
+      status:row.status,
+      doneBatches:row.done_batches,
+      totalBatches:row.total_batches,
+      itemCount:row.item_count,
+      error:row.error,
+      updatedAt:row.updated_at,
     }));
   }
   if (type === "searchRetrievalKeyword") {

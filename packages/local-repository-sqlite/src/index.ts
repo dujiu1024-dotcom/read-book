@@ -103,6 +103,41 @@ export interface MessageRetrievalRecord {
 
 export type MessageRetrievalSummary = Omit<MessageRetrievalRecord, "threadId" | "query">;
 
+export type KnowledgeItemType = "chapter_intent" | "thesis" | "concept";
+export type KnowledgeReviewStatus = "pending" | "accepted" | "rejected";
+
+export interface BookKnowledgeRecord {
+  id: string;
+  bookRevisionId: string;
+  chapter: string;
+  structureNodeId: string;
+  itemType: KnowledgeItemType;
+  content: string;
+  term: string | null;
+  definitionQuote: string | null;
+  sourceChunkIds: string[];
+  sourceLocator: string;
+  extractionMethod: string;
+  modelVersion: string;
+  confidence: number;
+  reviewStatus: KnowledgeReviewStatus;
+  contentHash: string;
+  createdAt: string;
+  updatedAt: string;
+  reviewedAt: string | null;
+}
+
+export interface KnowledgeExtractionStateRecord {
+  bookRevisionId: string;
+  chapter: string;
+  status: "running" | "completed" | "failed";
+  doneBatches: number;
+  totalBatches: number;
+  itemCount: number;
+  error: string | null;
+  updatedAt: string;
+}
+
 export function mapWorkerError(payload: { message: string; code?: string }): Error {
   switch (payload.code) {
     case "DATASET_NOT_FOUND":
@@ -124,7 +159,7 @@ export function mapWorkerError(payload: { message: string; code?: string }): Err
 
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
-  readonly schemaVersion = 10;
+  readonly schemaVersion = 11;
   private worker: Worker;
   private nextId = 0;
   private pending = new Map<number, Pending>();
@@ -190,6 +225,16 @@ export class SqliteOpfsRepository implements LocalRepository {
         saveRetrievalEmbeddings: (input: { bookRevisionId: string; model: string; dimensions: number; embeddings: Array<{ chunkId: string; vector: Uint8Array }> }) =>
           call("saveRetrievalEmbeddings", input),
         saveMessageRetrieval: (input: { record: MessageRetrievalRecord }) => call("saveMessageRetrieval", input),
+        saveBookKnowledge: (input: { bookRevisionId: string; items: BookKnowledgeRecord[] }) => call("saveBookKnowledge", input),
+        updateBookKnowledgeReview: (input: {
+          id: string;
+          reviewStatus?: KnowledgeReviewStatus;
+          content?: string;
+          term?: string | null;
+          definitionQuote?: string | null;
+          updatedAt: string;
+        }) => call("updateBookKnowledgeReview", input),
+        saveKnowledgeExtractionState: (record: KnowledgeExtractionStateRecord) => call("saveKnowledgeExtractionState", { record }),
         getThreadByRevision: (bookRevisionId) => call("getThreadByRevision", { bookRevisionId }),
         createThread: (thread) => call("createThread", { thread }),
         appendUserMessage: (message: NewUserMessage) => call("appendUserMessage", { message }),
@@ -343,6 +388,61 @@ export class SqliteOpfsRepository implements LocalRepository {
   async listMessageRetrieval(datasetId: string, threadId: string): Promise<MessageRetrievalSummary[]> {
     await this.ensureReady();
     return this.request("listMessageRetrieval", { datasetId, threadId });
+  }
+
+  /**
+   * 书籍知识库与抽取进度同样是可重建的公共元数据，不属于备份快照，也不写 backup journal。
+   */
+  async saveBookKnowledge(
+    datasetId: string,
+    input: { bookRevisionId: string; items: BookKnowledgeRecord[] },
+  ): Promise<{ saved: number }> {
+    return this.transaction(datasetId, (tx) => (tx as unknown as {
+      saveBookKnowledge(value: typeof input): Promise<{ saved: number }>;
+    }).saveBookKnowledge(input));
+  }
+  async listBookKnowledge(
+    datasetId: string,
+    query: {
+      bookRevisionId: string;
+      reviewStatus?: KnowledgeReviewStatus;
+      itemType?: KnowledgeItemType;
+      chapter?: string;
+      limit?: number;
+    },
+  ): Promise<BookKnowledgeRecord[]> {
+    await this.ensureReady();
+    return this.request("listBookKnowledge", { datasetId, ...query });
+  }
+  async updateBookKnowledgeReview(
+    datasetId: string,
+    input: {
+      id: string;
+      reviewStatus?: KnowledgeReviewStatus;
+      content?: string;
+      term?: string | null;
+      definitionQuote?: string | null;
+      updatedAt: string;
+    },
+  ): Promise<null> {
+    return this.transaction(datasetId, (tx) => (tx as unknown as {
+      updateBookKnowledgeReview(value: typeof input): Promise<null>;
+    }).updateBookKnowledgeReview(input));
+  }
+  async listKnowledgeExtractionState(
+    datasetId: string,
+    bookRevisionId: string,
+  ): Promise<KnowledgeExtractionStateRecord[]> {
+    await this.ensureReady();
+    return this.request("listKnowledgeExtractionState", { datasetId, bookRevisionId });
+  }
+  async saveKnowledgeExtractionState(
+    datasetId: string,
+    record: KnowledgeExtractionStateRecord,
+  ): Promise<KnowledgeExtractionStateRecord> {
+    return this.transaction(datasetId, (tx) => (tx as unknown as {
+      saveKnowledgeExtractionState(value: KnowledgeExtractionStateRecord): Promise<KnowledgeExtractionStateRecord>;
+    }).saveKnowledgeExtractionState(record));
   }
   async close(): Promise<void> {
     if (this.closed) return;

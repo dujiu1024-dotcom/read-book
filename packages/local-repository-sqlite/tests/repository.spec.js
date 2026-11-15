@@ -217,7 +217,7 @@ test("schema v1 to v6 migration preserves legacy dataset cursors and creates can
     return { dataset, candidates };
   });
   expect(migrated.dataset.id).toBe("legacy-v1-dataset");
-  expect(migrated.dataset.schemaVersion).toBe(10);
+  expect(migrated.dataset.schemaVersion).toBe(11);
   expect(migrated.dataset.dirtySequence).toBe(7);
   expect(migrated.dataset.lastAckedSequence).toBe(2);
   expect(migrated.candidates).toEqual([]);
@@ -243,7 +243,7 @@ test("schema v5 to current migration keeps chunk-less citations in the legacy ta
     await repository.close();
     return { dataset, messageCount: messages.length };
   });
-  expect(migrated.dataset.schemaVersion).toBe(10);
+  expect(migrated.dataset.schemaVersion).toBe(11);
   // Citations are not cascaded into message deletion; only the chunk-level citation table is rebuilt.
   expect(migrated.messageCount).toBe(2);
 
@@ -256,7 +256,7 @@ test("schema v5 to current migration keeps chunk-less citations in the legacy ta
     });
   });
   expect(inspected.ok, inspected.error).toBe(true);
-  expect(inspected.userVersion).toBe(10);
+  expect(inspected.userVersion).toBe(11);
   expect(inspected.newCitationColumns).toEqual(expect.arrayContaining(["chunk_id", "source_hash"]));
   // The rebuilt chunk-level table starts empty: v5 rows carry no chunk_id/source_hash, so no fabricated backfill.
   expect(inspected.newCitationCount).toBe(0);
@@ -788,7 +788,7 @@ test("backup journal records content mutations at the committed dirty sequence a
     datasetA, revision, threadId,
     messageId: "cccccccc-3333-4333-8333-cccccccccccc",
   });
-  expect(result.first.schemaVersion).toBe(10);
+  expect(result.first.schemaVersion).toBe(11);
   expect(result.first.dirtySequence).toBe(1);
   expect(result.first.backupJournal.map((entry) => entry.entityType).sort()).toEqual(["message", "thread"]);
   expect(new Set(result.first.backupJournal.map((entry) => entry.sequence))).toEqual(new Set([1]));
@@ -871,6 +871,122 @@ test("retrieval index stays a rebuildable cache outside the backup journal", asy
   expect(result.summaries[0]).toMatchObject({ scope: "book", hitCount: 3, includedCount: 1 });
   expect(result.summaries[0].passages[0].chunk.id).toBe("11111111-1111-4111-8111-111111111111");
   // 索引与检索摘要都是缓存维护，不得推进 dirty_sequence，也不得进入备份 journal。
+  expect(result.after.dirtySequence).toBe(result.before.dirtySequence);
+  expect(result.after.backupJournal).toEqual(result.before.backupJournal);
+});
+
+test("book knowledge persists review state outside the backup journal", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async (ids) => {
+    const { SqliteOpfsRepository } = await import("/src/index.ts");
+    const repository = new SqliteOpfsRepository();
+    // 空数据集：这个事务只负责创建数据集，不写任何内容。
+    await repository.transaction(ids.datasetA, async () => {});
+    const before = await repository.createConsistentSnapshot(ids.datasetA);
+    const base = {
+      bookRevisionId: ids.revision,
+      chapter: "第一章",
+      structureNodeId: "node-01",
+      itemType: "thesis",
+      term: null,
+      definitionQuote: null,
+      sourceChunkIds: ["chunk-01"],
+      sourceLocator: "txt#line-1",
+      extractionMethod: "llm",
+      modelVersion: "model-v1",
+      confidence: 0.8,
+      reviewStatus: "pending",
+      reviewedAt: null,
+      createdAt: "2026-11-14T00:00:01.000Z",
+      updatedAt: "2026-11-14T00:00:01.000Z",
+    };
+    const itemA = { ...base, id: ids.itemA, itemType: "chapter_intent", content: "致良知是全书主线", contentHash: "hash-a" };
+    const itemB = { ...base, id: ids.itemB, chapter: "第二章", content: "知行合一", contentHash: "hash-b" };
+    const itemC = {
+      ...base, id: ids.itemC, itemType: "concept", content: "格物致知", contentHash: "hash-c",
+      term: "格物", definitionQuote: "格物者，格其心之物也。",
+    };
+    const firstSave = await repository.saveBookKnowledge(ids.datasetA, {
+      bookRevisionId: ids.revision,
+      items: [itemA, itemB, itemC],
+    });
+    // 第二次保存包含两个 contentHash 相同的条目：命中 UNIQUE 的一律跳过，不覆盖已存记录。
+    const duplicateSave = await repository.saveBookKnowledge(ids.datasetA, {
+      bookRevisionId: ids.revision,
+      items: [itemA, { ...itemA, id: ids.duplicateId }],
+    });
+    const all = await repository.listBookKnowledge(ids.datasetA, { bookRevisionId: ids.revision });
+    const pending = await repository.listBookKnowledge(ids.datasetA, {
+      bookRevisionId: ids.revision, reviewStatus: "pending",
+    });
+    await repository.updateBookKnowledgeReview(ids.datasetA, {
+      id: ids.itemA,
+      reviewStatus: "accepted",
+      content: "致良知是全书主线（人工修订）",
+      updatedAt: "2026-11-14T00:00:02.000Z",
+    });
+    await repository.updateBookKnowledgeReview(ids.datasetA, {
+      id: ids.itemB,
+      reviewStatus: "rejected",
+      updatedAt: "2026-11-14T00:00:03.000Z",
+    });
+    const accepted = await repository.listBookKnowledge(ids.datasetA, {
+      bookRevisionId: ids.revision, reviewStatus: "accepted",
+    });
+    await repository.saveKnowledgeExtractionState(ids.datasetA, {
+      bookRevisionId: ids.revision,
+      chapter: "第二章",
+      status: "completed",
+      doneBatches: 3,
+      totalBatches: 3,
+      itemCount: 2,
+      error: null,
+      updatedAt: "2026-11-14T00:00:04.000Z",
+    });
+    await repository.saveKnowledgeExtractionState(ids.datasetA, {
+      bookRevisionId: ids.revision,
+      chapter: "第一章",
+      status: "failed",
+      doneBatches: 1,
+      totalBatches: 2,
+      itemCount: 0,
+      error: "批次超时",
+      updatedAt: "2026-11-14T00:00:05.000Z",
+    });
+    const states = await repository.listKnowledgeExtractionState(ids.datasetA, ids.revision);
+    const after = await repository.createConsistentSnapshot(ids.datasetA);
+    await repository.close();
+    return { firstSave, duplicateSave, all, pending, accepted, states, before, after };
+  }, {
+    datasetA, revision,
+    itemA: "11111111-aaaa-4aaa-8aaa-111111111111",
+    itemB: "22222222-bbbb-4bbb-8bbb-222222222222",
+    itemC: "33333333-cccc-4ccc-8ccc-333333333333",
+    duplicateId: "44444444-dddd-4ddd-8ddd-444444444444",
+  });
+  expect(result.firstSave.saved).toBe(3);
+  expect(result.duplicateSave.saved).toBe(0);
+  expect(result.all).toHaveLength(3);
+  expect(result.all.map((item) => item.contentHash).sort()).toEqual(["hash-a", "hash-b", "hash-c"]);
+  expect(result.pending).toHaveLength(3);
+  expect(result.accepted).toHaveLength(1);
+  expect(result.accepted[0].id).toBe("11111111-aaaa-4aaa-8aaa-111111111111");
+  expect(result.accepted[0].content).toBe("致良知是全书主线（人工修订）");
+  expect(result.accepted[0].contentHash).toBe("hash-a");
+  expect(result.accepted[0].reviewedAt).toBe("2026-11-14T00:00:02.000Z");
+  expect(result.states).toEqual([
+    {
+      bookRevisionId: revision, chapter: "第一章", status: "failed",
+      doneBatches: 1, totalBatches: 2, itemCount: 0, error: "批次超时",
+      updatedAt: "2026-11-14T00:00:05.000Z",
+    },
+    {
+      bookRevisionId: revision, chapter: "第二章", status: "completed",
+      doneBatches: 3, totalBatches: 3, itemCount: 2, error: null,
+      updatedAt: "2026-11-14T00:00:04.000Z",
+    },
+  ]);
+  // 知识库是公共可重建元数据，不得推进 dirty_sequence，也不得进入备份 journal。
   expect(result.after.dirtySequence).toBe(result.before.dirtySequence);
   expect(result.after.backupJournal).toEqual(result.before.backupJournal);
 });

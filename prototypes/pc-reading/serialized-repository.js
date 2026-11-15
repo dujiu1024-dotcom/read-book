@@ -34,6 +34,9 @@ const SERIALIZED_METHODS = new Set([
   "replaceRetrievalIndex",
   "saveRetrievalEmbeddings",
   "saveMessageRetrieval",
+  "saveBookKnowledge",
+  "updateBookKnowledgeReview",
+  "saveKnowledgeExtractionState",
   "close",
 ]);
 
