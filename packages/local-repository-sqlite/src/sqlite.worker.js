@@ -29,7 +29,7 @@ function parseJson(value, fallback = []) {
 function ensureDataset(datasetId) {
   if (typeof datasetId !== "string" || !datasetId.trim()) throw new Error("datasetId 非法");
   execute(
-    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,11,?,?,0,0,'active')",
+    "INSERT OR IGNORE INTO local_dataset(id,schema_version,created_at,updated_at,dirty_sequence,last_acked_sequence,lifecycle_status) VALUES(?,12,?,?,0,0,'active')",
     [datasetId, new Date().toISOString(), new Date().toISOString()],
   );
   const dataset = first("SELECT * FROM local_dataset WHERE id=?", [datasetId]);
@@ -164,7 +164,7 @@ async function initialize() {
   // Existing installations have the v1 schema and no PRAGMA user_version marker.
   // Treat version 0 as the shipped v1 baseline, then migrate atomically to v2.
   const storedVersion = Number(first("PRAGMA user_version")?.user_version ?? 0);
-  if (storedVersion > 11) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
+  if (storedVersion > 12) throw new Error("数据库版本高于当前客户端，已阻止降级写入");
   if (storedVersion < 2) {
     db.exec({ sql: "BEGIN IMMEDIATE" });
     try {
@@ -489,6 +489,21 @@ async function initialize() {
       throw new Error("数据库 Schema v11 迁移失败，已回滚", { cause: error });
     }
   }
+  if (storedVersion < 12) {
+    db.exec({ sql: "BEGIN IMMEDIATE" });
+    try {
+      // alias_of 指向同一 BookRevision 内的知识条目，用于概念别名关联；为空表示无别名。
+      db.exec({ sql: `
+        ALTER TABLE book_knowledge ADD COLUMN alias_of TEXT;
+        UPDATE local_dataset SET schema_version=12;
+        PRAGMA user_version=12;
+      ` });
+      db.exec({ sql: "COMMIT" });
+    } catch (error) {
+      db.exec({ sql: "ROLLBACK" });
+      throw new Error("数据库 Schema v12 迁移失败，已回滚", { cause: error });
+    }
+  }
   assertDatabaseIntegrity();
 }
 
@@ -563,6 +578,7 @@ function rowToBookKnowledge(row) {
     content: row.content,
     term: row.term,
     definitionQuote: row.definition_quote,
+    aliasOf: row.alias_of ?? null,
     sourceChunkIds: parseJson(row.source_chunk_ids),
     sourceLocator: row.source_locator,
     extractionMethod: row.extraction_method,
@@ -1078,6 +1094,7 @@ function txOperation(datasetId, operation, input) {
             typeof item.content!=="string" || !item.content.trim() ||
             (item.term!==undefined && item.term!==null && typeof item.term!=="string") ||
             (item.definitionQuote!==undefined && item.definitionQuote!==null && typeof item.definitionQuote!=="string") ||
+            (item.aliasOf!==undefined && item.aliasOf!==null && (typeof item.aliasOf!=="string" || !item.aliasOf.trim())) ||
             !Array.isArray(item.sourceChunkIds) || item.sourceChunkIds.length===0 ||
             item.sourceChunkIds.some((chunkId)=>typeof chunkId!=="string" || !chunkId.trim()) ||
             typeof item.sourceLocator!=="string" || !item.sourceLocator.trim() ||
@@ -1092,8 +1109,8 @@ function txOperation(datasetId, operation, input) {
           throw new Error("BookKnowledge 字段非法：" + String(item?.id));
         }
         // 重新抽取命中已有 content_hash 时保持原记录，避免覆盖人工审核/编辑结果。
-        execute("INSERT INTO book_knowledge(id,dataset_id,book_revision_id,chapter,structure_node_id,item_type,content,term,definition_quote,source_chunk_ids,source_locator,extraction_method,model_version,confidence,review_status,content_hash,created_at,updated_at,reviewed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dataset_id,book_revision_id,content_hash) DO NOTHING",
-          [item.id,datasetId,revisionId,item.chapter,item.structureNodeId,item.itemType,item.content,item.term??null,item.definitionQuote??null,JSON.stringify(item.sourceChunkIds),item.sourceLocator,item.extractionMethod,item.modelVersion,confidence,reviewStatus,item.contentHash,item.createdAt,item.updatedAt,item.reviewedAt??null]);
+        execute("INSERT INTO book_knowledge(id,dataset_id,book_revision_id,chapter,structure_node_id,item_type,content,term,definition_quote,alias_of,source_chunk_ids,source_locator,extraction_method,model_version,confidence,review_status,content_hash,created_at,updated_at,reviewed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dataset_id,book_revision_id,content_hash) DO NOTHING",
+          [item.id,datasetId,revisionId,item.chapter,item.structureNodeId,item.itemType,item.content,item.term??null,item.definitionQuote??null,item.aliasOf??null,JSON.stringify(item.sourceChunkIds),item.sourceLocator,item.extractionMethod,item.modelVersion,confidence,reviewStatus,item.contentHash,item.createdAt,item.updatedAt,item.reviewedAt??null]);
         saved+=db.changes();
       }
       // 知识库是公共可重建元数据：不写 backup_journal，也不推进 dirty_sequence。
@@ -1108,6 +1125,7 @@ function txOperation(datasetId, operation, input) {
       if (input.content!==undefined && (typeof input.content!=="string" || !input.content.trim())) throw new Error("知识条目内容不能为空");
       if (input.term!==undefined && input.term!==null && typeof input.term!=="string") throw new Error("知识条目术语非法");
       if (input.definitionQuote!==undefined && input.definitionQuote!==null && typeof input.definitionQuote!=="string") throw new Error("知识条目定义引文非法");
+      if (input.aliasOf!==undefined && input.aliasOf!==null && (typeof input.aliasOf!=="string" || !input.aliasOf.trim())) throw new Error("知识条目别名非法");
       if (!first("SELECT id FROM book_knowledge WHERE id=? AND dataset_id=?", [id,datasetId])) throw new Error("知识条目不属于当前数据集");
       const sets=["updated_at=?"];
       const params=[updatedAt];
@@ -1127,6 +1145,10 @@ function txOperation(datasetId, operation, input) {
       if (input.definitionQuote!==undefined) {
         sets.push("definition_quote=?");
         params.push(input.definitionQuote??null);
+      }
+      if (Object.prototype.hasOwnProperty.call(input,"aliasOf")) {
+        sets.push("alias_of=?");
+        params.push(input.aliasOf??null);
       }
       params.push(id,datasetId);
       execute(`UPDATE book_knowledge SET ${sets.join(",")} WHERE id=? AND dataset_id=?`, params);
@@ -1246,7 +1268,7 @@ function handle(message) {
     const datasetId=message.datasetId;
     const snapshot=message.snapshot;
     if (!snapshot || snapshot.datasetId!==datasetId || !Number.isSafeInteger(snapshot.schemaVersion) ||
-        snapshot.schemaVersion<1 || snapshot.schemaVersion>11 || !Number.isSafeInteger(snapshot.dirtySequence) ||
+        snapshot.schemaVersion<1 || snapshot.schemaVersion>12 || !Number.isSafeInteger(snapshot.dirtySequence) ||
         snapshot.dirtySequence<1 || typeof message.backupId!=="string" || !message.backupId.trim() ||
         !Number.isFinite(Date.parse(message.restoredAt))) {
       throw new Error("Backup snapshot metadata is invalid");
@@ -1303,7 +1325,7 @@ function handle(message) {
       }
       journalSequence=null;
       transactionDirty=false;
-      execute("UPDATE local_dataset SET schema_version=11,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
+      execute("UPDATE local_dataset SET schema_version=12,dirty_sequence=?,last_acked_sequence=?,last_backup_id=?,last_backup_at=?,updated_at=?,lifecycle_status='active' WHERE id=?",
         [snapshot.dirtySequence,snapshot.dirtySequence,message.backupId,message.restoredAt,message.restoredAt,datasetId]);
       db.exec({sql:"COMMIT"});
       activeDatasetId=null;

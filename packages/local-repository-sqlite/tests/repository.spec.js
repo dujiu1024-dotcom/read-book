@@ -217,7 +217,7 @@ test("schema v1 to v6 migration preserves legacy dataset cursors and creates can
     return { dataset, candidates };
   });
   expect(migrated.dataset.id).toBe("legacy-v1-dataset");
-  expect(migrated.dataset.schemaVersion).toBe(11);
+  expect(migrated.dataset.schemaVersion).toBe(12);
   expect(migrated.dataset.dirtySequence).toBe(7);
   expect(migrated.dataset.lastAckedSequence).toBe(2);
   expect(migrated.candidates).toEqual([]);
@@ -243,7 +243,7 @@ test("schema v5 to current migration keeps chunk-less citations in the legacy ta
     await repository.close();
     return { dataset, messageCount: messages.length };
   });
-  expect(migrated.dataset.schemaVersion).toBe(11);
+  expect(migrated.dataset.schemaVersion).toBe(12);
   // Citations are not cascaded into message deletion; only the chunk-level citation table is rebuilt.
   expect(migrated.messageCount).toBe(2);
 
@@ -256,7 +256,7 @@ test("schema v5 to current migration keeps chunk-less citations in the legacy ta
     });
   });
   expect(inspected.ok, inspected.error).toBe(true);
-  expect(inspected.userVersion).toBe(11);
+  expect(inspected.userVersion).toBe(12);
   expect(inspected.newCitationColumns).toEqual(expect.arrayContaining(["chunk_id", "source_hash"]));
   // The rebuilt chunk-level table starts empty: v5 rows carry no chunk_id/source_hash, so no fabricated backfill.
   expect(inspected.newCitationCount).toBe(0);
@@ -788,7 +788,7 @@ test("backup journal records content mutations at the committed dirty sequence a
     datasetA, revision, threadId,
     messageId: "cccccccc-3333-4333-8333-cccccccccccc",
   });
-  expect(result.first.schemaVersion).toBe(11);
+  expect(result.first.schemaVersion).toBe(12);
   expect(result.first.dirtySequence).toBe(1);
   expect(result.first.backupJournal.map((entry) => entry.entityType).sort()).toEqual(["message", "thread"]);
   expect(new Set(result.first.backupJournal.map((entry) => entry.sequence))).toEqual(new Set([1]));
@@ -890,6 +890,7 @@ test("book knowledge persists review state outside the backup journal", async ({
       itemType: "thesis",
       term: null,
       definitionQuote: null,
+      aliasOf: null,
       sourceChunkIds: ["chunk-01"],
       sourceLocator: "txt#line-1",
       extractionMethod: "llm",
@@ -901,7 +902,7 @@ test("book knowledge persists review state outside the backup journal", async ({
       updatedAt: "2026-11-14T00:00:01.000Z",
     };
     const itemA = { ...base, id: ids.itemA, itemType: "chapter_intent", content: "致良知是全书主线", contentHash: "hash-a" };
-    const itemB = { ...base, id: ids.itemB, chapter: "第二章", content: "知行合一", contentHash: "hash-b" };
+    const itemB = { ...base, id: ids.itemB, chapter: "第二章", content: "知行合一", contentHash: "hash-b", aliasOf: ids.itemA };
     const itemC = {
       ...base, id: ids.itemC, itemType: "concept", content: "格物致知", contentHash: "hash-c",
       term: "格物", definitionQuote: "格物者，格其心之物也。",
@@ -930,6 +931,15 @@ test("book knowledge persists review state outside the backup journal", async ({
       reviewStatus: "rejected",
       updatedAt: "2026-11-14T00:00:03.000Z",
     });
+    // 仅为待审条目补充别名：只写 alias_of，不得改动审核状态、reviewed_at 与 content_hash。
+    await repository.updateBookKnowledgeReview(ids.datasetA, {
+      id: ids.itemC,
+      aliasOf: ids.itemB,
+      updatedAt: "2026-11-14T00:00:03.500Z",
+    });
+    const pendingAfterAlias = await repository.listBookKnowledge(ids.datasetA, {
+      bookRevisionId: ids.revision, reviewStatus: "pending", itemType: "concept",
+    });
     const accepted = await repository.listBookKnowledge(ids.datasetA, {
       bookRevisionId: ids.revision, reviewStatus: "accepted",
     });
@@ -956,7 +966,7 @@ test("book knowledge persists review state outside the backup journal", async ({
     const states = await repository.listKnowledgeExtractionState(ids.datasetA, ids.revision);
     const after = await repository.createConsistentSnapshot(ids.datasetA);
     await repository.close();
-    return { firstSave, duplicateSave, all, pending, accepted, states, before, after };
+    return { firstSave, duplicateSave, all, pending, pendingAfterAlias, accepted, states, before, after };
   }, {
     datasetA, revision,
     itemA: "11111111-aaaa-4aaa-8aaa-111111111111",
@@ -968,7 +978,18 @@ test("book knowledge persists review state outside the backup journal", async ({
   expect(result.duplicateSave.saved).toBe(0);
   expect(result.all).toHaveLength(3);
   expect(result.all.map((item) => item.contentHash).sort()).toEqual(["hash-a", "hash-b", "hash-c"]);
+  expect(result.all.find((item) => item.id === "33333333-cccc-4ccc-8ccc-333333333333").aliasOf).toBeNull();
+  expect(result.all.find((item) => item.id === "22222222-bbbb-4bbb-8bbb-222222222222").aliasOf)
+    .toBe("11111111-aaaa-4aaa-8aaa-111111111111");
   expect(result.pending).toHaveLength(3);
+  // 只更新 alias_of 的待审概念保持 pending，reviewedAt/contentHash 不变。
+  expect(result.pendingAfterAlias).toHaveLength(1);
+  expect(result.pendingAfterAlias[0].id).toBe("33333333-cccc-4ccc-8ccc-333333333333");
+  expect(result.pendingAfterAlias[0].aliasOf).toBe("22222222-bbbb-4bbb-8bbb-222222222222");
+  expect(result.pendingAfterAlias[0].reviewStatus).toBe("pending");
+  expect(result.pendingAfterAlias[0].reviewedAt).toBeNull();
+  expect(result.pendingAfterAlias[0].contentHash).toBe("hash-c");
+  expect(result.pendingAfterAlias[0].content).toBe("格物致知");
   expect(result.accepted).toHaveLength(1);
   expect(result.accepted[0].id).toBe("11111111-aaaa-4aaa-8aaa-111111111111");
   expect(result.accepted[0].content).toBe("致良知是全书主线（人工修订）");

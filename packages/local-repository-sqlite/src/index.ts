@@ -115,6 +115,7 @@ export interface BookKnowledgeRecord {
   content: string;
   term: string | null;
   definitionQuote: string | null;
+  aliasOf: string | null;
   sourceChunkIds: string[];
   sourceLocator: string;
   extractionMethod: string;
@@ -159,7 +160,7 @@ export function mapWorkerError(payload: { message: string; code?: string }): Err
 
 export class SqliteOpfsRepository implements LocalRepository {
   readonly adapterName = "SQLite WASM + OPFS";
-  readonly schemaVersion = 11;
+  readonly schemaVersion = 12;
   private worker: Worker;
   private nextId = 0;
   private pending = new Map<number, Pending>();
@@ -225,13 +226,14 @@ export class SqliteOpfsRepository implements LocalRepository {
         saveRetrievalEmbeddings: (input: { bookRevisionId: string; model: string; dimensions: number; embeddings: Array<{ chunkId: string; vector: Uint8Array }> }) =>
           call("saveRetrievalEmbeddings", input),
         saveMessageRetrieval: (input: { record: MessageRetrievalRecord }) => call("saveMessageRetrieval", input),
-        saveBookKnowledge: (input: { bookRevisionId: string; items: BookKnowledgeRecord[] }) => call("saveBookKnowledge", input),
+        saveBookKnowledge: (input: { bookRevisionId: string; items: Array<Omit<BookKnowledgeRecord, "aliasOf"> & { aliasOf?: string | null }> }) => call("saveBookKnowledge", input),
         updateBookKnowledgeReview: (input: {
           id: string;
           reviewStatus?: KnowledgeReviewStatus;
           content?: string;
           term?: string | null;
           definitionQuote?: string | null;
+          aliasOf?: string | null;
           updatedAt: string;
         }) => call("updateBookKnowledgeReview", input),
         saveKnowledgeExtractionState: (record: KnowledgeExtractionStateRecord) => call("saveKnowledgeExtractionState", { record }),
@@ -395,7 +397,7 @@ export class SqliteOpfsRepository implements LocalRepository {
    */
   async saveBookKnowledge(
     datasetId: string,
-    input: { bookRevisionId: string; items: BookKnowledgeRecord[] },
+    input: { bookRevisionId: string; items: Array<Omit<BookKnowledgeRecord, "aliasOf"> & { aliasOf?: string | null }> },
   ): Promise<{ saved: number }> {
     return this.transaction(datasetId, (tx) => (tx as unknown as {
       saveBookKnowledge(value: typeof input): Promise<{ saved: number }>;
@@ -422,6 +424,7 @@ export class SqliteOpfsRepository implements LocalRepository {
       content?: string;
       term?: string | null;
       definitionQuote?: string | null;
+      aliasOf?: string | null;
       updatedAt: string;
     },
   ): Promise<null> {
