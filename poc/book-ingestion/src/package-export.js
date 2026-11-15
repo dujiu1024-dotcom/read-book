@@ -17,15 +17,47 @@ function sourceExtension(fileName, format) {
   return extension;
 }
 
+// 单个单元超过 1 万字会把阅读器的 current source 预算挤满，检索片段只能分到很小一块；
+// 超过阈值时按段落再切成约 6000 字的分段，标题带（1/2）以便定位回同一回。
+const MAX_UNIT_CHARACTERS = 10_000;
+const UNIT_SPLIT_CHARACTERS = 6_000;
+
+export function splitLongChapter(chapter, maxCharacters = MAX_UNIT_CHARACTERS, partCharacters = UNIT_SPLIT_CHARACTERS) {
+  const text = String(chapter?.text || "");
+  if (text.length <= maxCharacters) return [chapter];
+  const paragraphs = text.split("\n").filter((line) => line.trim());
+  const parts = [];
+  let buffer = [];
+  let length = 0;
+  const flush = () => {
+    if (!buffer.length) return;
+    parts.push(buffer.join("\n"));
+    buffer = [];
+    length = 0;
+  };
+  for (const paragraph of paragraphs) {
+    if (length + paragraph.length > partCharacters && buffer.length) flush();
+    buffer.push(paragraph);
+    length += paragraph.length;
+  }
+  flush();
+  if (parts.length < 2) return [chapter];
+  return parts.map((part, index) => ({
+    ...chapter,
+    title: String(chapter.title || "未命名章节") + "（" + (index + 1) + "/" + parts.length + "）",
+    text: part,
+  }));
+}
+
 function toRecords(parsed) {
   if (parsed.format === "EPUB") {
     const chapters = [];
     const chunks = [];
-    parsed.chapters.forEach((item, index) => {
+    parsed.chapters.flatMap((item) => splitLongChapter(item)).forEach((item, index) => {
       const content = String(item.text || "").trim();
       if (!content) return;
       const chapterId = "chapter-" + String(index + 1).padStart(5, "0");
-      const locator = item.sampleCfi || item.href;
+      const locator = item.sampleCfi || item.locator || item.href;
       chapters.push({
         chapter_id: chapterId,
         parent_chapter_id: null,

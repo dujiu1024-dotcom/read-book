@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { unzipSync, strFromU8 } from "fflate";
-import { buildBookPackage } from "../src/package-export.js";
+import { buildBookPackage, splitLongChapter } from "../src/package-export.js";
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 
@@ -67,4 +67,20 @@ test("missing author and empty extracted text fail closed", async () => {
     fileName: "sample.pdf", sourceBytes, metadata,
     parsed: { format: "PDF", pages: [{ physicalPage: 1, text: " " }] }
   }), /未提取到可打包/);
+});
+
+test("超长章节按段落二次切分，短章节保持一个单元", () => {
+  const paragraph = "這是一段用於驗證超長章節二次切分的原文。".repeat(40);
+  const long = { href: "c1.xhtml", title: "第一回 測試", text: Array.from({ length: 40 }, () => paragraph).join("\n") };
+  assert.ok(long.text.length > 10_000);
+  const parts = splitLongChapter(long);
+  assert.ok(parts.length >= 2);
+  parts.forEach((part, index) => {
+    assert.ok(part.text.length <= 6_000 + paragraph.length);
+    assert.equal(part.title, "第一回 測試（" + (index + 1) + "/" + parts.length + "）");
+    assert.equal(part.href, "c1.xhtml");
+  });
+  const short = { href: "c2.xhtml", title: "第二回 測試", text: paragraph.repeat(20) };
+  assert.equal(splitLongChapter(short).length, 1);
+  assert.equal(splitLongChapter(short)[0].title, "第二回 測試");
 });
