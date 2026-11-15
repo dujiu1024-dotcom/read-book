@@ -26,6 +26,11 @@ const PORT = Number(process.env.PORT || 8787);
 const API_KEY = process.env.SENSENOVA_API_KEY || "";
 const BASE_URL = (process.env.SENSENOVA_BASE_URL || "https://token.sensenova.cn/v1").replace(/\/+$/, "");
 const MODEL = process.env.SENSENOVA_MODEL || "sensenova-6.8-flash";
+// 知识抽取可按请求切换模型做对照，但仍只允许服务端配置过的模型名。
+const KNOWLEDGE_MODELS = new Set(
+  (process.env.KNOWLEDGE_MODELS || [MODEL, "glm-5.3", "deepseek-v4-flash"].join(","))
+    .split(",").map((item) => item.trim()).filter(Boolean),
+);
 const THINKING = process.env.SENSENOVA_THINKING === "enabled" ? "enabled" : "disabled";
 const LOCAL_AUTH_TOKEN = process.env.LOCAL_AUTH_TOKEN || "local-dev-token";
 // 向量通道：浏览器访问不到 11434，统一由本地宿主代理到 Ollama。
@@ -318,7 +323,9 @@ async function streamModel(task) {
   nextEvent(task, "failed", { code: task.error.code });
 }
 
-async function callModelJson(instruction, payload, schema) {
+async function callModelJson(instruction, payload, schema, options = {}) {
+  const model = options.model || MODEL;
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 90_000;
   let lastError = null;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
@@ -326,7 +333,7 @@ async function callModelJson(instruction, payload, schema) {
         method: "POST",
         headers: { Authorization: "Bearer " + API_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: MODEL,
+          model,
           temperature: 0,
           stream: false,
           messages: [
@@ -334,9 +341,10 @@ async function callModelJson(instruction, payload, schema) {
             { role: "user", content: JSON.stringify(payload) },
           ],
           response_format: { type: "json_object" },
-          thinking: { type: THINKING },
+          // 只有默认模型接受 thinking 开关；对照模型（如 glm-5.3）不接受 disabled。
+          ...(model === MODEL ? { thinking: { type: THINKING } } : {}),
         }),
-        signal: AbortSignal.timeout(90_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.status === 429) {
         const delay = retryDelayMs(response, attempt);
@@ -458,12 +466,42 @@ function filterKnowledgeItems(parsed, chunks) {
   const raw = Array.isArray(parsed?.items) ? parsed.items : [];
   const items = [];
   let dropped = 0;
+  // 引文常带“○先生曰，”“爱曰：”这类说话人前缀和成对引号，抽取时先清掉再看是否逐字命中。
+  // 语料里还有「」『』错位（如“格物」者”），只删右引号多于左引号的残片。
+  const balanceBrackets = (value) => {
+    let text = String(value ?? "");
+    for (const [open, close] of [["「", "」"], ["『", "』"]]) {
+      const count = (source, mark) => (source.split(mark).length - 1);
+      if (count(text, close) <= count(text, open)) continue;
+      text = text.replace(new RegExp("^([^" + open + close + "]{1,24})" + close), "$1");
+      let extra = count(text, close) - count(text, open);
+      while (extra > 0) {
+        text = text.replace(close, "");
+        extra -= 1;
+      }
+    }
+    return text.trim();
+  };
+  const isBalanced = (value) => {
+    const text = String(value ?? "");
+    return [["「", "」"], ["『", "』"]].every(([open, close]) =>
+      (text.split(close).length - 1) === (text.split(open).length - 1));
+  };
+  const trimLeaders = (value) => String(value ?? "")
+    .replace(/^[○〇●\s]+/, "")
+    .replace(/^[\u4e00-\u9fa5]{0,3}曰[，,：:]?\s*/, "")
+    .replace(/^[「『"]/, "")
+    .replace(/([」』"])([。；])$/, "$2")
+    .replace(/[」』"]$/, "")
+    .trim();
   for (const item of raw) {
     if (items.length >= MAX_KNOWLEDGE_ITEMS) { dropped += 1; continue; }
     if (!item || typeof item !== "object" || Array.isArray(item)) { dropped += 1; continue; }
     if (!KNOWLEDGE_ITEM_TYPES.has(item.item_type)) { dropped += 1; continue; }
     const content = typeof item.content === "string" ? item.content.trim() : "";
     if (!content || content.length > 400) { dropped += 1; continue; }
+    // 私用区异体字、替换符与夹字会破坏“可点回原文”的可读性，直接丢弃。
+    if (/[\uE000-\uF8FF\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(content)) { dropped += 1; continue; }
     const sourceIds = item.source_chunk_ids;
     if (!Array.isArray(sourceIds) || !sourceIds.length) { dropped += 1; continue; }
     if (sourceIds.some((id) => typeof id !== "string" || !chunkIds.has(id))) { dropped += 1; continue; }
@@ -473,23 +511,19 @@ function filterKnowledgeItems(parsed, chunks) {
     let term = null;
     let definitionQuote = null;
     if (item.item_type === "concept") {
-      const rawTerm = typeof item.term === "string" ? item.term.trim() : "";
+      const rawTerm = balanceBrackets(typeof item.term === "string" ? item.term.trim() : "")
+        .replace(/[「」『』]/g, "").trim();
       const rawQuote = typeof item.definition_quote === "string" ? item.definition_quote.trim() : "";
       if (!rawTerm || !rawQuote) { dropped += 1; continue; }
-      const stripLeaders = (value) => String(value)
-        .replace(/^[○〇\s]+/, "")
-        .replace(/^(?:先生曰|先生|曰)[，,]?\s*/, "")
-        .replace(/^[「『"]/, "")
-        .replace(/([」』"])([。；])$/, "$2")
-        .replace(/[」』"]$/, "");
-      const cleanedQuote = stripLeaders(rawQuote);
-      let quote = cleanedQuote || rawQuote;
-      let quoted = sourceIds.some((id) => chunkText.get(id).includes(normalizeSpace(quote)));
-      if (!quoted && cleanedQuote !== rawQuote) {
+      const cleanedQuote = trimLeaders(rawQuote);
+      const matchesChunk = (value) => sourceIds.some((id) => chunkText.get(id).includes(normalizeSpace(value)));
+      // 引号不配对多半是模型截断或语料错位，宁可回原文重新取句，也不把残片写进审核界面。
+      let quote = "";
+      if (cleanedQuote && isBalanced(cleanedQuote) && matchesChunk(cleanedQuote)) {
+        quote = cleanedQuote;
+      } else if (isBalanced(rawQuote) && matchesChunk(rawQuote)) {
         quote = rawQuote;
-        quoted = sourceIds.some((id) => chunkText.get(id).includes(normalizeSpace(rawQuote)));
-      }
-      if (!quoted) {
+      } else {
         // 模型常把定义句改写；只从所引切片里取回“术语 + 界定句式”的原句，避免抓到无关句子。
         const definitional = (sentence, term) => [
           term + "者", term + "即", term + "便是", term + "只是", term + "是", "所谓" + term,
@@ -497,22 +531,22 @@ function filterKnowledgeItems(parsed, chunks) {
         for (const id of sourceIds) {
           const original = chunks.find((chunk) => chunk.chunk_id === id)?.text || "";
           const sentence = (original.match(/[^。！？；!?;\n]+[。！？；!?;]?/g) || [])
-            .map((part) => part.trim()
-              .replace(/^[○〇\s]+/, "")
-              .replace(/^(?:先生曰|先生|曰)[，,]?\s*/, "")
-              .replace(/^[「『"]/, "")
-              .replace(/([」』"])([。；])$/, "$2")
-              .replace(/[」』"]$/, ""))
-            .find((part) => !/^[^，,。]{1,4}问[，,]/.test(part) &&
+            .map((part) => trimLeaders(part))
+            .find((part) => part && isBalanced(part) &&
+              !/^[^，,。]{1,4}问[，,]/.test(part) &&
               part.includes(rawTerm) && part.length >= rawTerm.length + 2 && definitional(part, rawTerm));
           if (sentence) {
             quote = sentence.slice(0, 200);
-            quoted = true;
             break;
           }
         }
       }
-      if (!quoted) { dropped += 1; continue; }
+      if (!quote) { dropped += 1; continue; }
+      quote = balanceBrackets(quote);
+      // 截断到 200 字后仍可能留下半个引号，宁可丢掉也不要脏引文。
+      if (!isBalanced(quote)) { dropped += 1; continue; }
+      // 引文里混入异体/私用区字符时丢弃，避免脏数据流到审核界面。
+      if (/[\uE000-\uF8FF\uFFFD]/.test(quote)) { dropped += 1; continue; }
       // 引文必须包含该术语，否则只是“术语 + 无关原句”。
       if (!normalizeSpace(quote).includes(normalizeSpace(rawTerm))) { dropped += 1; continue; }
       term = rawTerm.slice(0, 80);
@@ -529,6 +563,7 @@ function validateKnowledgeRequest(body) {
   if (typeof body.chapter !== "string" || !body.chapter.trim()) throw new Error("chapter 必须是非空字符串。");
   if (!Array.isArray(body.chunks) || body.chunks.length < 1 || body.chunks.length > 12) throw new Error("chunks 必须是长度 1..12 的数组。");
   if (body.focus !== undefined && body.focus !== "chapter_intent" && body.focus !== "concept") throw new Error("focus 只支持 chapter_intent 或 concept。");
+  if (body.model !== undefined && !KNOWLEDGE_MODELS.has(body.model)) throw new Error("model 不在允许列表中。");
   const chunks = body.chunks.map((chunk) => {
     if (!chunk || typeof chunk !== "object" || Array.isArray(chunk)) throw new Error("chunks 中的每一项必须是对象。");
     for (const field of ["chunk_id", "structure_node_id", "locator"]) {
@@ -545,7 +580,7 @@ function validateKnowledgeRequest(body) {
       text: chunk.text,
     };
   });
-  return { book_revision_id: body.book_revision_id, chapter: body.chapter, chunks, focus: body.focus || null };
+  return { book_revision_id: body.book_revision_id, chapter: body.chapter, chunks, focus: body.focus || null, model: body.model || null };
 }
 
 async function handleKnowledgeExtract(req, res) {
@@ -564,7 +599,7 @@ async function handleKnowledgeExtract(req, res) {
       book_revision_id: request.book_revision_id,
       chapter: request.chapter,
       chunks: request.chunks,
-    }, KNOWLEDGE_SCHEMA);
+    }, KNOWLEDGE_SCHEMA, { model: request.model || MODEL, timeoutMs: 240_000 });
   } catch (error) {
     const code = error.code || "provider_error";
     return apiError(res, code === "rate_limited" ? 429 : 502, code, error.message, code === "rate_limited");
@@ -574,7 +609,7 @@ async function handleKnowledgeExtract(req, res) {
     const onlyFocused = filtered.items.filter((item) => item.item_type === request.focus);
     filtered = { items: onlyFocused, dropped: filtered.dropped + filtered.items.length - onlyFocused.length };
   }
-  json(res, 200, { model: MODEL, items: filtered.items, dropped: filtered.dropped });
+  json(res, 200, { model: request.model || MODEL, items: filtered.items, dropped: filtered.dropped });
 }
 
 async function handleEmbeddings(req, res) {
@@ -747,6 +782,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== "GET") return apiError(res, 405, "METHOD_NOT_ALLOWED", "仅支持 GET。");
   return handleStatus(res, task);
 });
+
+// 知识抽取用对照模型时单批可能超过 90 秒，给足超时并放宽 Node 默认 5 分钟请求上限。
+server.requestTimeout = 10 * 60 * 1000;
 
 server.listen(PORT, "127.0.0.1", () => {
   log("listening", { url: "http://127.0.0.1:" + PORT, model: MODEL, thinking: THINKING });
