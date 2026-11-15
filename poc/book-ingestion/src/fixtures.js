@@ -15,7 +15,8 @@ function epubFixture(title, chapters) {
     files[`OEBPS/chapter${i+1}.xhtml`] = strToU8(`<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>第${i+1}章</title></head><body><h1 id="chapter-${i+1}">第${i+1}章</h1><p>${body}${image}</p><aside epub:type="footnote" id="fn1"><p>脚注示例 ${i+1}</p></aside></body></html>`);
   });
   if (title === 'epub-3') files['OEBPS/images/diagram.svg'] = strToU8('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><title>fixture</title><circle cx="10" cy="10" r="8"/></svg>');
-  return zipSync(files, { mtime: new Date('1980-01-01T00:00:00Z') });
+  // fflate 用本地时间分量写 ZIP 的 DOS 时间；用 UTC 瞬间会让哈希随时区变化，这里固定成本地 1980-01-01 00:00。
+  return zipSync(files, { mtime: new Date(1980, 0, 1) });
 }
 
 function pdfFixture(pages) {
