@@ -1,0 +1,66 @@
+name: Import verified open-access book originals
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/import-open-access-books.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: import-open-access-book-originals
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download and verify publisher files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p library/originals/book-reality-lost-2019
+          mkdir -p library/originals/book-media-propaganda-disinformation-2025
+
+          curl --fail --location --retry 3 --retry-delay 2 \
+            'https://link.springer.com/content/pdf/10.1007/978-3-030-00813-0.pdf' \
+            --output library/originals/book-reality-lost-2019/Reality-Lost-2019.pdf
+          curl --fail --location --retry 3 --retry-delay 2 \
+            'https://link.springer.com/download/epub/10.1007/978-3-030-00813-0.epub' \
+            --output library/originals/book-reality-lost-2019/Reality-Lost-2019.epub
+          curl --fail --location --retry 3 --retry-delay 2 \
+            'https://static1.squarespace.com/static/5b7ea2794cde7a79e7c00582/t/68627c942cc5d75e2ff8b025/1751284893254/9781040319192.pdf' \
+            --output library/originals/book-media-propaganda-disinformation-2025/Media-and-Propaganda-2025.pdf
+
+          file library/originals/book-reality-lost-2019/Reality-Lost-2019.pdf
+          file library/originals/book-reality-lost-2019/Reality-Lost-2019.epub
+          file library/originals/book-media-propaganda-disinformation-2025/Media-and-Propaganda-2025.pdf
+          head -c 5 library/originals/book-reality-lost-2019/Reality-Lost-2019.pdf | grep -q '%PDF-'
+          head -c 5 library/originals/book-media-propaganda-disinformation-2025/Media-and-Propaganda-2025.pdf | grep -q '%PDF-'
+          head -c 4 library/originals/book-reality-lost-2019/Reality-Lost-2019.epub | grep -q 'PK'
+          sha256sum library/originals/book-reality-lost-2019/Reality-Lost-2019.pdf \
+                    library/originals/book-reality-lost-2019/Reality-Lost-2019.epub \
+                    library/originals/book-media-propaganda-disinformation-2025/Media-and-Propaganda-2025.pdf \
+            > library/originals/SHA256SUMS.txt
+
+      - name: Commit original files and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add library/originals/book-reality-lost-2019/Reality-Lost-2019.pdf
+          git add library/originals/book-reality-lost-2019/Reality-Lost-2019.epub
+          git add library/originals/book-media-propaganda-disinformation-2025/Media-and-Propaganda-2025.pdf
+          git add library/originals/SHA256SUMS.txt
+          git commit -m "library(originals): import verified open-access book files"
+          git push origin HEAD:main
